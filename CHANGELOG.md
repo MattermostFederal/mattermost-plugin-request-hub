@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.1...v0.6.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **ci:** bump Node to 20.18 and run Playwright on PRs ([692c85c](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/692c85c53ef54afded01c902aac7365da2a8a953))
+* **ci:** bump Node to 20.18 and run Playwright on PRs ([58ac949](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/58ac9496bfa915d8d18c4df3c3699eec0da3d6ca))
+* **ci:** bump Node to 20.19 for rolldown native bindings ([145dca7](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/145dca791695033ce4f873e98b57c159b9ea8b7a))
+
+## [0.6.1](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.0...v0.6.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **webapp:** clear eslint and tsc so release check-style passes ([5ea2c2b](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/5ea2c2b32005fd8c05582d465c90d2cb5eac9a4b))
+* **webapp:** clear eslint/tsc and gate PRs on webapp lint ([1154d55](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/1154d55e6854580709c7f471b07b1c44924f6117))
+
 ## [0.6.0](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.5.2...v0.6.0) (2026-10-21)
 
 

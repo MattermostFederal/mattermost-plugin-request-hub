@@ -34,7 +34,11 @@ function isSystemAdmin(store: Store): boolean {
 }
 
 function resolveSameOriginPath(href: string): string | null {
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+    if (!href || href.startsWith('#')) {
+        return null;
+    }
+    // eslint-disable-next-line no-script-url -- reject javascript: hrefs before URL parse
+    if (href.toLowerCase().startsWith('javascript:')) {
         return null;
     }
     try {
@@ -73,22 +77,21 @@ function shouldIntercept(kind: IntegrationKind, enabled: EnabledRequestTypes): b
 
 function isIntegrationsLandingPath(pathname: string): boolean {
     // /{team}/integrations with optional trailing slash — not a sub-page.
-    return /\/integrations\/?$/.test(pathname);
+    return (/\/integrations\/?$/).test(pathname);
 }
 
 function nativeTilePresent(kind: IntegrationKind): boolean {
     const body = document.body?.innerText ?? '';
     switch (kind) {
     case 'incoming':
-        return /Incoming Webhooks/i.test(body);
+        return (/Incoming Webhooks/i).test(body);
     case 'outgoing':
-        return /Outgoing Webhooks/i.test(body);
+        return (/Outgoing Webhooks/i).test(body);
     case 'bot':
-        return /Bot Accounts/i.test(body);
+        return (/Bot Accounts/i).test(body);
     default: {
-        const _exhaustive: never = kind;
-        void _exhaustive;
-        return false;
+        const exhaustiveCheck: never = kind;
+        return exhaustiveCheck;
     }
     }
 }
@@ -173,6 +176,7 @@ function injectRequestCards(store: Store, enabled: EnabledRequestTypes): void {
         row = document.createElement('div');
         row.setAttribute(INJECT_MARKER, 'row');
         row.style.cssText = 'display:flex;flex-wrap:wrap;margin:16px 0 8px;';
+
         // Place after the Integrations heading / intro when possible.
         const heading = host.querySelector('h1, h2');
         if (heading?.parentElement === host) {
@@ -232,7 +236,7 @@ export function installIntegrationsPageOverride(store: Store): () => void {
     let scheduled = false;
 
     const refreshEnabled = () => {
-        void fetchEnabledRequestTypes().then((enabled) => {
+        fetchEnabledRequestTypes().then((enabled) => {
             if (!disposed) {
                 cachedEnabled = enabled;
                 scheduleInject();
@@ -295,9 +299,9 @@ export function installIntegrationsPageOverride(store: Store): () => void {
 
     document.addEventListener('click', onClick, true);
 
-    const observer = typeof MutationObserver !== 'undefined' ?
-        new MutationObserver(() => scheduleInject()) :
-        null;
+    const observer = typeof MutationObserver === 'undefined' ?
+        null :
+        new MutationObserver(() => scheduleInject());
     observer?.observe(document.documentElement, {childList: true, subtree: true});
 
     // Re-run on SPA navigations.

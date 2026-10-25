@@ -81,7 +81,7 @@ test.describe('teamMenuOverride helpers', () => {
     });
 
     test('replaceTextNode replaces matching text node in tree', async ({page}) => {
-        await page.setContent(`<a id="item"><span>Create a team</span></a>`);
+        await page.setContent('<a id="item"><span>Create a team</span></a>');
         const changed = await page.evaluate(({createLabel, requestLabel}) => {
             const root = document.getElementById('item') as HTMLElement;
             const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

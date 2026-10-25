@@ -37,9 +37,9 @@ export function useDialogFocusTrap(onClose: () => void, isOpen: boolean) {
         if (!root) {
             return undefined;
         }
-        previouslyFocused.current = document.activeElement instanceof HTMLElement
-            ? document.activeElement
-            : null;
+        previouslyFocused.current = document.activeElement instanceof HTMLElement ?
+            document.activeElement :
+            null;
 
         const timer = window.setTimeout(() => {
             firstFocusable(root).focus();

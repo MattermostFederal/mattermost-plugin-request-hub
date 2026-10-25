@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {submitBotRequest} from './client';
+import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeBotRequestModal,
     getCurrentChannelId,
@@ -10,16 +11,26 @@ import {
     isBotRequestModalOpen,
 } from './store';
 import type {GlobalState} from './store';
-import {useDialogFocusTrap} from './dialogA11y';
 
 const overlayStyle: React.CSSProperties = {
-    position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050,
+    position: 'fixed',
+inset: 0,
+background: 'rgba(0, 0, 0, 0.5)',
+    display: 'flex',
+alignItems: 'center',
+justifyContent: 'center',
+zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
-    background: 'var(--center-channel-bg, #fff)', color: 'var(--center-channel-color, #3d3c40)',
-    borderRadius: 8, width: 540, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto',
-    padding: 24, boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    background: 'var(--center-channel-bg, #fff)',
+color: 'var(--center-channel-color, #3d3c40)',
+    borderRadius: 8,
+width: 540,
+maxWidth: '90vw',
+maxHeight: '90vh',
+overflowY: 'auto',
+    padding: 24,
+boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 const sectionStyle: React.CSSProperties = {
@@ -62,14 +73,25 @@ export const RequestBotModal = () => {
     const [success, setSuccess] = useState('');
 
     const reset = () => {
-        setUsername(''); setDisplayName(''); setDescription('');
+        setUsername('');
+        setDisplayName('');
+        setDescription('');
         setRequestToken(true);
-        setRequestIncomingWebhook(false); setIncomingWebhookName('');
-        setRequestOutgoingWebhook(false); setOutgoingWebhookName(''); setOutgoingCallbackURL('');
-        setError(''); setSuccess(''); setSubmitting(false);
+        setRequestIncomingWebhook(false);
+        setIncomingWebhookName('');
+        setRequestOutgoingWebhook(false);
+        setOutgoingWebhookName('');
+        setOutgoingCallbackURL('');
+        setError('');
+        setSuccess('');
+        setSubmitting(false);
     };
 
-    const close = () => { reset(); dispatch(closeBotRequestModal()); };
+    const close = () => {
+        reset();
+        dispatch(closeBotRequestModal());
+    };
+
     // Must run unconditionally — never after `if (!isOpen) return null`.
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
@@ -93,19 +115,31 @@ export const RequestBotModal = () => {
 
     const submit = async () => {
         const u = username.trim().toLowerCase();
-        if (!u) { setError('A bot username is required.'); return; }
-        if (u.length < 3 || u.length > 22) { setError('Bot username must be 3-22 characters.'); return; }
-        if (!displayName.trim()) { setError('A display name is required.'); return; }
+        if (!u) {
+            setError('A bot username is required.');
+            return;
+        }
+        if (u.length < 3 || u.length > 22) {
+            setError('Bot username must be 3-22 characters.');
+            return;
+        }
+        if (!displayName.trim()) {
+            setError('A display name is required.');
+            return;
+        }
         if (requestOutgoingWebhook) {
             if (!outgoingCallbackURL.trim()) {
-                setError('A callback URL is required for the outgoing webhook.'); return;
+                setError('A callback URL is required for the outgoing webhook.');
+                return;
             }
             if (!outgoingCallbackURL.trim().startsWith('http://') && !outgoingCallbackURL.trim().startsWith('https://')) {
-                setError('Callback URL must start with http:// or https://.'); return;
+                setError('Callback URL must start with http:// or https://.');
+                return;
             }
         }
 
-        setSubmitting(true); setError('');
+        setSubmitting(true);
+        setError('');
         try {
             const result = await submitBotRequest({
                 username: username.trim(),
@@ -118,7 +152,10 @@ export const RequestBotModal = () => {
                 outgoing_webhook_display_name: requestOutgoingWebhook ? outgoingWebhookName.trim() : undefined,
                 outgoing_webhook_callback_url: requestOutgoingWebhook ? outgoingCallbackURL.trim() : undefined,
             });
-            if (result.error) { setError(result.error); return; }
+            if (result.error) {
+                setError(result.error);
+                return;
+            }
             setSuccess(result.message || 'Your bot account request has been submitted.');
         } catch {
             setError('Could not reach the server. Please check your connection and try again.');
@@ -128,7 +165,10 @@ export const RequestBotModal = () => {
     };
 
     return (
-        <div style={overlayStyle} onClick={close}>
+        <div
+            style={overlayStyle}
+            onClick={close}
+        >
             <div
                 ref={dialogRef}
                 style={dialogStyle}
@@ -139,14 +179,23 @@ export const RequestBotModal = () => {
                 onKeyDown={onDialogKeyDown}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 id='rb-title' style={{marginTop: 0}}>{'Request a Bot Account'}</h3>
+                <h3
+                    id='rb-title'
+                    style={{marginTop: 0}}
+                >{'Request a Bot Account'}</h3>
                 <p style={{opacity: 0.72}}>{'Bot account requests need a security approval and a system approval.'}</p>
 
                 {success ? (
                     <div>
-                        <div className='alert alert-success' style={{marginBottom: 16}}>{success}</div>
+                        <div
+                            className='alert alert-success'
+                            style={{marginBottom: 16}}
+                        >{success}</div>
                         <div style={{textAlign: 'right'}}>
-                            <button className='btn btn-primary' onClick={close}>{'Close'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={close}
+                            >{'Close'}</button>
                         </div>
                     </div>
                 ) : (
@@ -294,11 +343,23 @@ export const RequestBotModal = () => {
                             )}
                         </div>
 
-                        {error ? <div className='alert alert-danger'
-                                role='alert' style={{marginBottom: 16}}>{error}</div> : null}
+                        {error ? <div
+                            className='alert alert-danger'
+                            role='alert'
+                            style={{marginBottom: 16}}
+                                 >{error}</div> : null}
                         <div style={{textAlign: 'right'}}>
-                            <button className='btn btn-tertiary' style={{marginRight: 8}} onClick={close} disabled={submitting}>{'Cancel'}</button>
-                            <button className='btn btn-primary' onClick={submit} disabled={submitting}>
+                            <button
+                                className='btn btn-tertiary'
+                                style={{marginRight: 8}}
+                                onClick={close}
+                                disabled={submitting}
+                            >{'Cancel'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={submit}
+                                disabled={submitting}
+                            >
                                 {submitting ? 'Submitting…' : 'Submit request'}
                             </button>
                         </div>

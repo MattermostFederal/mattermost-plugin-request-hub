@@ -181,6 +181,7 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
             setCandidates([]);
             return undefined;
         }
+
         // Need exactly one scope — otherwise the API returns [].
         if ((teamId && notInTeamId) || (!teamId && !notInTeamId)) {
             debug('missing or conflicting scope', {teamId, notInTeamId});

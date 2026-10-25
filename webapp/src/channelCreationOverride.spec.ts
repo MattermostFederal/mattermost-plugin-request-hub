@@ -74,7 +74,7 @@ test.describe('channelCreationOverride helpers', () => {
     });
 
     test('replaceLabel replaces text node content', async ({page}) => {
-        await page.setContent(`<div id="item">Create new channel</div>`);
+        await page.setContent('<div id="item">Create new channel</div>');
         const result = await page.evaluate(({nativeLabel, requestLabel}) => {
             const root = document.getElementById('item') as HTMLElement;
             const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

@@ -2,10 +2,10 @@ import React, {useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {submitAdminRequest} from './client';
+import {useDialogFocusTrap} from './dialogA11y';
 import {MemberPicker} from './MemberPicker';
 import {closeAdminRequestModal, getAdminModalChannelId, getChannelDisplayName, getCurrentTeamId} from './store';
 import type {GlobalState} from './store';
-import {useDialogFocusTrap} from './dialogA11y';
 
 const overlayStyle: React.CSSProperties = {
     position: 'fixed',
@@ -57,6 +57,7 @@ export const RequestChannelAdminModal = () => {
         reset();
         dispatch(closeAdminRequestModal());
     };
+
     // Must run unconditionally — never after `if (!channelId) return null`.
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, Boolean(channelId));
 
@@ -108,7 +109,10 @@ export const RequestChannelAdminModal = () => {
                 onKeyDown={onDialogKeyDown}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 id='rca-title' style={{marginTop: 0}}>{'Request a Channel Admin'}</h3>
+                <h3
+                    id='rca-title'
+                    style={{marginTop: 0}}
+                >{'Request a Channel Admin'}</h3>
                 <p style={{opacity: 0.72}}>
                     {'Request that someone be made a Channel Admin'}
                     {channelName ? <>{' for '}<strong>{channelName}</strong></> : null}

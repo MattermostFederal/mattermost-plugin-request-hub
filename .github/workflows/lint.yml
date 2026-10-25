@@ -1,7 +1,6 @@
-# Runs golangci-lint with the project's .golangci.yml config.
-# Lint failures gate merges — keeps the codebase consistent across
-# contributors and catches the unused-import / dead-code / fmt-arity
-# class of bugs that compile but break downstream.
+# Runs Go and webapp style gates that `make check-style` / `make release`
+# enforce. Lint failures gate merges so release publish does not discover
+# eslint/tsc breakage only after the tag exists.
 name: Lint
 
 on:
@@ -13,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+  lint-go:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,3 +38,39 @@ jobs:
         with:
           version: v2.14.0
           args: --timeout=5m
+
+  # Mirrors the webapp half of `make check-style` (eslint + tsc). Release
+  # publish runs the same commands before building the plugin bundle.
+  lint-webapp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # webapp/src/manifest.ts is generated and gitignored; tsc imports it.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate manifest
+        run: go run ./build/manifest apply
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      # --ignore-scripts: postinstall installs Playwright browsers, which
+      # eslint/tsc do not need. Keeps the gate fast and offline-friendly.
+      - name: Install webapp dependencies
+        run: cd webapp && npm ci --ignore-scripts
+
+      - name: eslint
+        run: cd webapp && npm run lint
+
+      - name: TypeScript check
+        run: cd webapp && npm run check-types

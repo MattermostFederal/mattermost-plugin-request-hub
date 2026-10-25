@@ -316,6 +316,7 @@ export function installChannelCreationOverride(store: Store): () => void {
             cancelAnimationFrame(rafId);
             rafId = 0;
         }
+
         // Remove injected menu items (and their click listeners) so a disabled
         // plugin cannot leave a stale "Request new channel" entry that still
         // dispatches into an unmounted modal.

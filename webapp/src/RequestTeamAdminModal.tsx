@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {submitTeamAdminRequest} from './client';
+import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeTeamAdminRequestModal,
     getCurrentTeamDisplayName,
@@ -9,7 +10,6 @@ import {
     isTeamAdminRequestModalOpen,
 } from './store';
 import type {GlobalState} from './store';
-import {useDialogFocusTrap} from './dialogA11y';
 
 const overlayStyle: React.CSSProperties = {
     position: 'fixed',
@@ -51,6 +51,7 @@ export const RequestTeamAdminModal = () => {
         reset();
         dispatch(closeTeamAdminRequestModal());
     };
+
     // Must run unconditionally — never after `if (!isOpen) return null`.
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
@@ -98,7 +99,10 @@ export const RequestTeamAdminModal = () => {
                 onKeyDown={onDialogKeyDown}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 id='rta-title' style={{marginTop: 0}}>{'Request Team Admin'}</h3>
+                <h3
+                    id='rta-title'
+                    style={{marginTop: 0}}
+                >{'Request Team Admin'}</h3>
 
                 {success ? (
                     <div>

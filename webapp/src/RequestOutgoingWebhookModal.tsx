@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {submitOutgoingWebhookRequest} from './client';
+import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeOutgoingWebhookModal,
     getChannelType,
@@ -11,16 +12,26 @@ import {
     isOutgoingWebhookModalOpen,
 } from './store';
 import type {GlobalState} from './store';
-import {useDialogFocusTrap} from './dialogA11y';
 
 const overlayStyle: React.CSSProperties = {
-    position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050,
+    position: 'fixed',
+inset: 0,
+background: 'rgba(0, 0, 0, 0.5)',
+    display: 'flex',
+alignItems: 'center',
+justifyContent: 'center',
+zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
-    background: 'var(--center-channel-bg, #fff)', color: 'var(--center-channel-color, #3d3c40)',
-    borderRadius: 8, width: 512, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto',
-    padding: 24, boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    background: 'var(--center-channel-bg, #fff)',
+color: 'var(--center-channel-color, #3d3c40)',
+    borderRadius: 8,
+width: 512,
+maxWidth: '90vw',
+maxHeight: '90vh',
+overflowY: 'auto',
+    padding: 24,
+boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 
@@ -41,10 +52,18 @@ export const RequestOutgoingWebhookModal = () => {
     const [success, setSuccess] = useState('');
 
     const reset = () => {
-        setDisplayName(''); setCallbackUrl(''); setDescription('');
-        setError(''); setSuccess(''); setSubmitting(false);
+        setDisplayName('');
+        setCallbackUrl('');
+        setDescription('');
+        setError('');
+        setSuccess('');
+        setSubmitting(false);
     };
-    const close = () => { reset(); dispatch(closeOutgoingWebhookModal()); };
+    const close = () => {
+        reset();
+        dispatch(closeOutgoingWebhookModal());
+    };
+
     // Must run unconditionally — never after `if (!isOpen) return null`.
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
@@ -53,8 +72,14 @@ export const RequestOutgoingWebhookModal = () => {
     }
 
     const submit = async () => {
-        if (!displayName.trim()) { setError('A display name is required.'); return; }
-        if (!callbackUrl.trim()) { setError('A callback URL is required.'); return; }
+        if (!displayName.trim()) {
+            setError('A display name is required.');
+            return;
+        }
+        if (!callbackUrl.trim()) {
+            setError('A callback URL is required.');
+            return;
+        }
         if (!callbackUrl.trim().startsWith('http://') && !callbackUrl.trim().startsWith('https://')) {
             setError('Callback URL must start with http:// or https://');
             return;
@@ -64,7 +89,8 @@ export const RequestOutgoingWebhookModal = () => {
             return;
         }
 
-        setSubmitting(true); setError('');
+        setSubmitting(true);
+        setError('');
         try {
             const result = await submitOutgoingWebhookRequest({
                 channel_id: channelId,
@@ -72,7 +98,10 @@ export const RequestOutgoingWebhookModal = () => {
                 callback_url: callbackUrl.trim(),
                 description: description.trim() || undefined,
             });
-            if (result.error) { setError(result.error); return; }
+            if (result.error) {
+                setError(result.error);
+                return;
+            }
             setSuccess(result.message || 'Your outgoing webhook request has been submitted.');
         } catch {
             setError('Could not reach the server. Please check your connection and try again.');
@@ -82,7 +111,10 @@ export const RequestOutgoingWebhookModal = () => {
     };
 
     return (
-        <div style={overlayStyle} onClick={close}>
+        <div
+            style={overlayStyle}
+            onClick={close}
+        >
             <div
                 ref={dialogRef}
                 style={dialogStyle}
@@ -93,14 +125,23 @@ export const RequestOutgoingWebhookModal = () => {
                 onKeyDown={onDialogKeyDown}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 id='row-title' style={{marginTop: 0}}>{'Request an Outgoing Webhook'}</h3>
+                <h3
+                    id='row-title'
+                    style={{marginTop: 0}}
+                >{'Request an Outgoing Webhook'}</h3>
                 <p style={{opacity: 0.72}}>{'Outgoing webhook requests are reviewed by System Admins.'}</p>
 
                 {success ? (
                     <div>
-                        <div className='alert alert-success' style={{marginBottom: 16}}>{success}</div>
+                        <div
+                            className='alert alert-success'
+                            style={{marginBottom: 16}}
+                        >{success}</div>
                         <div style={{textAlign: 'right'}}>
-                            <button className='btn btn-primary' onClick={close}>{'Close'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={close}
+                            >{'Close'}</button>
                         </div>
                     </div>
                 ) : (
@@ -160,11 +201,23 @@ export const RequestOutgoingWebhookModal = () => {
                                 onChange={(e) => setDescription(e.target.value)}
                             />
                         </div>
-                        {error ? <div className='alert alert-danger'
-                                role='alert' style={{marginBottom: 16}}>{error}</div> : null}
+                        {error ? <div
+                            className='alert alert-danger'
+                            role='alert'
+                            style={{marginBottom: 16}}
+                                 >{error}</div> : null}
                         <div style={{textAlign: 'right'}}>
-                            <button className='btn btn-tertiary' style={{marginRight: 8}} onClick={close} disabled={submitting}>{'Cancel'}</button>
-                            <button className='btn btn-primary' onClick={submit} disabled={submitting}>
+                            <button
+                                className='btn btn-tertiary'
+                                style={{marginRight: 8}}
+                                onClick={close}
+                                disabled={submitting}
+                            >{'Cancel'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={submit}
+                                disabled={submitting}
+                            >
                                 {submitting ? 'Submitting…' : 'Submit request'}
                             </button>
                         </div>

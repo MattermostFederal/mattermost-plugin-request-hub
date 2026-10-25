@@ -1,3 +1,4 @@
+import manifest from 'manifest';
 import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import type {Action} from 'redux';
@@ -5,7 +6,6 @@ import type {Action} from 'redux';
 import {fetchEnabledRequestTypes} from './client';
 import type {EnabledRequestTypes} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
-import manifest from 'manifest';
 import {
     closeHubModal,
     getChannelType,
@@ -28,13 +28,24 @@ import type {GlobalState} from './store';
 const DOCS_URL = `/plugins/${manifest.id}/public/help/docs.html`;
 
 const overlayStyle: React.CSSProperties = {
-    position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1050,
+    position: 'fixed',
+inset: 0,
+background: 'rgba(0, 0, 0, 0.5)',
+    display: 'flex',
+alignItems: 'center',
+justifyContent: 'center',
+zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
-    background: 'var(--center-channel-bg, #fff)', color: 'var(--center-channel-color, #3d3c40)',
-    borderRadius: 8, width: 600, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto',
-    padding: 24, boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    background: 'var(--center-channel-bg, #fff)',
+color: 'var(--center-channel-color, #3d3c40)',
+    borderRadius: 8,
+width: 600,
+maxWidth: '92vw',
+maxHeight: '90vh',
+overflowY: 'auto',
+    padding: 24,
+boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const gridStyle: React.CSSProperties = {
     display: 'grid',
@@ -43,7 +54,9 @@ const gridStyle: React.CSSProperties = {
     marginTop: 16,
 };
 const cardStyle: React.CSSProperties = {
-    display: 'flex', flexDirection: 'column', gap: 6,
+    display: 'flex',
+flexDirection: 'column',
+gap: 6,
     padding: '16px 18px',
     border: '1px solid var(--center-channel-color-16, rgba(61,60,64,0.16))',
     borderRadius: 6,
@@ -75,10 +88,13 @@ type RequestItem = {
     action: () => Action;
     enabled: boolean;
     hidden?: boolean;
+
     /** When true, only show in public/private channels (not DM/GM). */
     requiresTeamChannel?: boolean;
+
     /** When true, only show when a team is selected (any team — not just the approval team). */
     requiresTeam?: boolean;
+
     /** Override emoji font-size inside the 24×24 box (large glyphs like 🤖). */
     iconFontSize?: number;
 };
@@ -109,7 +125,7 @@ export const RequestHubModal = () => {
 
     useEffect(() => {
         if (!isOpen) {
-            return;
+            return undefined;
         }
         let cancelled = false;
         fetchEnabledRequestTypes().then((types) => {
@@ -188,6 +204,7 @@ export const RequestHubModal = () => {
             description: 'Request a bot account, access token, or webhook.',
             action: openBotRequestModal,
             enabled: enabled.bot,
+
             // Robot glyph paints larger than tray/building emojis at the same em.
             iconFontSize: 16,
         },
@@ -197,6 +214,7 @@ export const RequestHubModal = () => {
             description: 'Post messages into a channel from an external system.',
             action: openIncomingWebhookModal,
             enabled: enabled.webhook,
+
             // Any team the user is on — not tied to the approval/primary team.
             // Forms still need an O/P channel; they validate that on submit.
             requiresTeam: true,
@@ -219,7 +237,10 @@ export const RequestHubModal = () => {
     );
 
     return (
-        <div style={overlayStyle} onClick={close}>
+        <div
+            style={overlayStyle}
+            onClick={close}
+        >
             <div
                 ref={dialogRef}
                 style={dialogStyle}
@@ -232,7 +253,10 @@ export const RequestHubModal = () => {
             >
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
                     <div>
-                        <h3 id='hub-title' style={{marginTop: 0, marginBottom: 4}}>{'Mattermost Request Hub'}</h3>
+                        <h3
+                            id='hub-title'
+                            style={{marginTop: 0, marginBottom: 4}}
+                        >{'Mattermost Request Hub'}</h3>
                         <p style={{margin: 0, opacity: 0.72, fontSize: 14}}>
                             {'Choose a request type. Each request is reviewed by the appropriate admins.'}
                         </p>
@@ -299,7 +323,10 @@ export const RequestHubModal = () => {
                         (e.currentTarget as HTMLAnchorElement).style.background = 'transparent';
                     }}
                 >
-                    <span style={iconBoxStyle} aria-hidden={true}>{'📖'}</span>
+                    <span
+                        style={iconBoxStyle}
+                        aria-hidden={true}
+                    >{'📖'}</span>
                     <span style={{display: 'flex', flexDirection: 'column', gap: 4}}>
                         <span style={{fontWeight: 600, fontSize: 14}}>{'Documentation'}</span>
                         <span style={{fontSize: 13, opacity: 0.7, lineHeight: 1.4}}>

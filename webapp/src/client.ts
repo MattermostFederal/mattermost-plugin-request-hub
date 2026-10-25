@@ -166,8 +166,8 @@ export async function submitChannelRequest(payload: ChannelRequestPayload): Prom
 
 export type TeamCreationPayload = {
     display_name: string;
-    name?: string;       // optional URL slug — server generates from display_name if blank
-    type: string;        // 'O' (open) or 'I' (invite-only)
+    name?: string; // optional URL slug — server generates from display_name if blank
+    type: string; // 'O' (open) or 'I' (invite-only)
     description?: string;
     request_team_admin?: boolean;
 };
@@ -307,7 +307,9 @@ export async function submitBotRequest(payload: BotRequestPayload): Promise<Chan
         body: JSON.stringify(payload),
     });
     let body: ChannelRequestResult = {};
-    try { body = await response.json(); } catch { /* fall through */ }
+    try {
+ body = await response.json();
+} catch { /* fall through */ }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }
@@ -326,7 +328,9 @@ export async function submitIncomingWebhookRequest(payload: IncomingWebhookPaylo
         body: JSON.stringify(payload),
     });
     let body: ChannelRequestResult = {};
-    try { body = await response.json(); } catch { /* fall through */ }
+    try {
+ body = await response.json();
+} catch { /* fall through */ }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }
@@ -345,7 +349,9 @@ export async function submitOutgoingWebhookRequest(payload: OutgoingWebhookPaylo
         body: JSON.stringify(payload),
     });
     let body: ChannelRequestResult = {};
-    try { body = await response.json(); } catch { /* fall through */ }
+    try {
+ body = await response.json();
+} catch { /* fall through */ }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }

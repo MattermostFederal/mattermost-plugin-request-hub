@@ -1,11 +1,7 @@
-# Runs `go test ./...` on every push to main and every pull request.
-# Acts as the primary regression gate — any contributor change that
-# breaks the configuration parser, the AM-URL dedup logic, or any of
-# the runbook/template helpers will fail this check before merge.
-#
-# Go version is pinned to the toolchain declared in go.mod. setup-go
-# honors the go-version-file field, so a future Go bump in go.mod
-# propagates to CI automatically without editing this workflow.
+# Runs Go unit tests and the same webapp Playwright suite that
+# `make test` / `make release` run. PR CI previously only covered Go,
+# so Playwright CT breakage (Node API requirements, etc.) only showed
+# up on the release publish job after the tag existed.
 name: Test
 
 on:
@@ -17,6 +13,7 @@ permissions:
   contents: read
 
 jobs:
+  # Job id stays "test" — the main ruleset requires that check name.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -37,3 +34,36 @@ jobs:
 
       - name: Run unit tests
         run: go test -race -count=1 ./...
+
+  # Mirrors the webapp half of `make test` (playwright + playwright-ct).
+  test-webapp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # webapp/src/manifest.ts is gitignored; tests and webpack resolve it.
+      - name: Generate manifest
+        run: go run ./build/manifest apply
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install webapp dependencies
+        run: cd webapp && npm ci
+
+      - name: Install Playwright browsers
+        run: cd webapp && npx playwright install --with-deps chromium
+
+      - name: Playwright unit + component tests
+        run: cd webapp && npm run test

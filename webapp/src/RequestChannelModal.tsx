@@ -4,10 +4,10 @@ import {useDispatch, useSelector} from 'react-redux';
 
 import {fetchPrefixes, fetchSidebarCategories, submitChannelRequest} from './client';
 import type {ChannelPrefix, SidebarCategory} from './client';
+import {useDialogFocusTrap} from './dialogA11y';
 import {MemberPicker, parseUsernames} from './MemberPicker';
 import {closeRequestModal, getCurrentTeamId, isRequestModalOpen} from './store';
 import type {GlobalState} from './store';
-import {useDialogFocusTrap} from './dialogA11y';
 
 // Slugify mirrors the server-side slugify() so the live preview shows
 // the exact URL the server will produce. Keep in sync with
@@ -106,6 +106,7 @@ export const RequestChannelModal = () => {
             return;
         }
         loadPrefixes();
+
         // Load sidebar categories alongside prefixes. Failures are silent —
         // the dropdown just won't appear (feature degrades gracefully).
         fetchSidebarCategories(teamId).then(setCategories).catch(() => setCategories([]));
@@ -146,6 +147,7 @@ export const RequestChannelModal = () => {
         reset();
         dispatch(closeRequestModal());
     };
+
     // Must run unconditionally — never after `if (!isOpen) return null`.
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
@@ -208,7 +210,10 @@ export const RequestChannelModal = () => {
                 onKeyDown={onDialogKeyDown}
                 onClick={(e) => e.stopPropagation()}
             >
-                <h3 id='rc-title' style={{marginTop: 0}}>{'Request a Channel'}</h3>
+                <h3
+                    id='rc-title'
+                    style={{marginTop: 0}}
+                >{'Request a Channel'}</h3>
                 <p style={{opacity: 0.72}}>
                     {'Your request will be sent to an admin for approval. '}
                     <a
@@ -249,7 +254,7 @@ export const RequestChannelModal = () => {
                             <div>
                                 <div
                                     className='alert alert-danger'
-                                role='alert'
+                                    role='alert'
                                     style={{marginBottom: 16}}
                                 >
                                     {'Could not load channel request settings. Please try again.'}
@@ -279,7 +284,7 @@ export const RequestChannelModal = () => {
                                     className='alert alert-warning'
                                     style={{marginBottom: 16}}
                                 >
-                                    {"Channel creation requests aren’t configured yet — no channel prefixes have been defined. Ask a System Admin to add at least one prefix in System Console → Plugins → Mattermost Request Hub, then try again."}
+                                    {'Channel creation requests aren’t configured yet — no channel prefixes have been defined. Ask a System Admin to add at least one prefix in System Console → Plugins → Mattermost Request Hub, then try again.'}
                                 </div>
                                 <div style={{textAlign: 'right'}}>
                                     <button
@@ -442,35 +447,35 @@ export const RequestChannelModal = () => {
                             );
                         })()}
 
-                        <div style={fieldStyle}>
-                            <label htmlFor='cr-category'>{'Sidebar category (optional)'}</label>
-                            <input
-                                id='cr-category'
-                                className='form-control'
-                                list='cr-category-suggestions'
-                                value={selectedCategory}
-                                onChange={(e) => setSelectedCategory(e.target.value)}
-                                placeholder='Pick an existing category or type a new name'
-                                maxLength={64}
-                                autoComplete='off'
-                            />
-                            <datalist id='cr-category-suggestions'>
-                                {categories.map((c) => (
-                                    <option
-                                        key={c.id}
-                                        value={c.display_name}
-                                    />
+                            <div style={fieldStyle}>
+                                <label htmlFor='cr-category'>{'Sidebar category (optional)'}</label>
+                                <input
+                                    id='cr-category'
+                                    className='form-control'
+                                    list='cr-category-suggestions'
+                                    value={selectedCategory}
+                                    onChange={(e) => setSelectedCategory(e.target.value)}
+                                    placeholder='Pick an existing category or type a new name'
+                                    maxLength={64}
+                                    autoComplete='off'
+                                />
+                                <datalist id='cr-category-suggestions'>
+                                    {categories.map((c) => (
+                                        <option
+                                            key={c.id}
+                                            value={c.display_name}
+                                        />
                                 ))}
-                            </datalist>
-                            <small style={{opacity: 0.6}}>
-                                {'Pick from suggestions or type a new name. On approval, the channel is placed there for you and listed members — a missing category is created automatically.'}
-                            </small>
-                        </div>
+                                </datalist>
+                                <small style={{opacity: 0.6}}>
+                                    {'Pick from suggestions or type a new name. On approval, the channel is placed there for you and listed members — a missing category is created automatically.'}
+                                </small>
+                            </div>
 
                             {error ? (
                                 <div
                                     className='alert alert-danger'
-                                role='alert'
+                                    role='alert'
                                     style={{marginBottom: 16}}
                                 >
                                     {error}

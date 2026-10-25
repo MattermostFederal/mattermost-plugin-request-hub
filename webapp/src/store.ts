@@ -163,6 +163,7 @@ export const isCurrentUserTeamAdmin = (state: GlobalState, teamId: string): bool
     if (!myMember) {
         return false;
     }
+
     // scheme_admin and roles are non-optional on TeamMembership.
     return myMember.scheme_admin || myMember.roles.split(' ').includes('team_admin');
 };

@@ -67,6 +67,7 @@ function isTeamAdmin(store: Store): boolean {
     if (!myMember) {
         return false;
     }
+
     // scheme_admin and roles are non-optional on TeamMembership — no fallbacks needed.
     return myMember.scheme_admin || myMember.roles.split(' ').includes('team_admin');
 }
@@ -557,6 +558,7 @@ export function installTeamMenuOverride(store: Store): () => void {
     // its DOM structure and "Request a Team" / "Request Team Admin" are broken.
     const warnTimer = window.setTimeout(() => {
         if (!menuFoundOnce) {
+            // eslint-disable-next-line no-console -- intentional one-shot DOM-structure diagnostic
             console.warn(
                 '[mattermost-request-hub] Team sidebar dropdown not found after 10s. ' +
                 '"Request a Team" and "Request Team Admin" labels may not be working. ' +
