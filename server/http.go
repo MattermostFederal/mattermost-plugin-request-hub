@@ -1111,7 +1111,8 @@ func (p *Plugin) handleTeamCreationDialogSubmit(w http.ResponseWriter, r *http.R
 }
 
 // handleTeamAdminAction handles Approve/Deny on a team admin promotion request.
-// Only System Admins may approve — team admin grants broad permissions.
+// System Admins and the Team Admins of the target team may act (see
+// canApproveTeamAdminRequest).
 func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, approve bool) {
 	userID, ok := requireActionUserID(w, r)
 	if !ok {
@@ -1128,10 +1129,6 @@ func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, a
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Could not verify your identity."})
 		return
 	}
-	if !actingUser.IsSystemAdmin() {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Only System Admins can approve or deny Team Admin requests."})
-		return
-	}
 
 	requestID, _ := request.Context[actionContextRequestID].(string)
 	req, rawReq, err := p.loadTeamAdminRequest(requestID)
@@ -1142,6 +1139,14 @@ func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, a
 	}
 	if req == nil {
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: alreadyHandledText})
+		return
+	}
+	if !p.canApproveTeamAdminRequest(actingUser, req.TeamID) {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Only System Admins and the team's Team Admins can approve or deny Team Admin requests."})
+		return
+	}
+	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
 		return
 	}
 	if p.refuseAction(w, request.PostId, req.ApprovalPostID, req.ID, requestTypeTeamAdmin, approve) {
@@ -1527,8 +1532,8 @@ func (p *Plugin) handleTeamAction(w http.ResponseWriter, r *http.Request, approv
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Could not verify your identity."})
 		return
 	}
-	if !actingUser.IsSystemAdmin() {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Only System Admins can approve or deny team creation requests."})
+	if !p.canApproveTeamRequest(actingUser) {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "You aren't allowed to approve or deny team creation requests."})
 		return
 	}
 
@@ -1541,6 +1546,10 @@ func (p *Plugin) handleTeamAction(w http.ResponseWriter, r *http.Request, approv
 	}
 	if req == nil {
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: alreadyHandledText})
+		return
+	}
+	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
 		return
 	}
 	if p.refuseAction(w, request.PostId, req.ApprovalPostID, req.ID, requestTypeTeam, approve) {
@@ -2611,6 +2620,34 @@ func (p *Plugin) canApproveAdminRequest(user *model.User, channelID string) bool
 		return false
 	}
 	return p.isTeamAdminOfTeamID(user.Id, channel.TeamId)
+}
+
+// canApproveTeamAdminRequest reports whether the acting user may approve or
+// deny a Team Admin request for teamID: System Admins, and the Team Admins of
+// that team. Mattermost already lets a Team Admin promote their own team's
+// members, so this grants nothing new. Approval-team Team Admins are not
+// included for other teams. postTeamAdminApprovalRequest mentions this set.
+func (p *Plugin) canApproveTeamAdminRequest(user *model.User, teamID string) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsSystemAdmin() {
+		return true
+	}
+	return p.isTeamAdminOfTeamID(user.Id, teamID)
+}
+
+// canApproveTeamRequest reports whether the acting user may approve or deny a
+// team creation request: System Admins, and Team Admins of the approval team
+// when AllowTeamAdminTeamApprovers is on.
+func (p *Plugin) canApproveTeamRequest(user *model.User) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsSystemAdmin() {
+		return true
+	}
+	return p.getConfiguration().AllowTeamAdminTeamApprovers && p.isApprovalTeamAdmin(user.Id)
 }
 
 // isTeamAdminOfTeamID reports whether the user is a Team Admin of the team
