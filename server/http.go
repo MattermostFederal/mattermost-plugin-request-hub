@@ -1517,6 +1517,34 @@ func (p *Plugin) canApproveAdminRequest(user *model.User, channelID string) bool
 	return p.isTeamAdminOfTeamID(user.Id, channel.TeamId)
 }
 
+// canApproveTeamAdminRequest reports whether the acting user may approve or
+// deny a Team Admin request for teamID: System Admins, and the Team Admins of
+// that team. Mattermost already lets a Team Admin promote their own team's
+// members, so this grants nothing new. Approval-team Team Admins are not
+// included for other teams. postTeamAdminApprovalRequest mentions this set.
+func (p *Plugin) canApproveTeamAdminRequest(user *model.User, teamID string) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsSystemAdmin() {
+		return true
+	}
+	return p.isTeamAdminOfTeamID(user.Id, teamID)
+}
+
+// canApproveTeamRequest reports whether the acting user may approve or deny a
+// team creation request: System Admins, and Team Admins of the approval team
+// when AllowTeamAdminTeamApprovers is on.
+func (p *Plugin) canApproveTeamRequest(user *model.User) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsSystemAdmin() {
+		return true
+	}
+	return p.getConfiguration().AllowTeamAdminTeamApprovers && p.isApprovalTeamAdmin(user.Id)
+}
+
 // isTeamAdminOfTeamID reports whether the user is a Team Admin of the team
 // identified by teamID (e.g. a channel's TeamId). isApprovalTeamAdmin uses it
 // for the team approvalTeam resolves.
