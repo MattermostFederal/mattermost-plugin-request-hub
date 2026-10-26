@@ -168,21 +168,27 @@ func (p *Plugin) createTeamForRequest(req *teamCreationRequest) (*model.Team, er
 
 func (p *Plugin) postTeamCreationApprovalRequest(req *teamCreationRequest, requester *model.User) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a team creation request needs System Admin review."
-	if ch != nil && p.getConfiguration().AllowTeamAdminTeamApprovers {
-		// Approval-team Team Admins can act on this card, so they need to be
-		// in the channel and notified.
-		p.addTeamApproversToChannel(ch.TeamId, ch.Id)
-		if mentions := p.mentionList(p.adminApproverIDs(ch.TeamId)); mentions != "" {
-			header = mentions + " — a team creation request needs your review."
-		}
-	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamCreationApprovalAttachment(req, requester),
-		header,
+		p.teamScopeApprovalHeader(ch, "team creation request"),
 		ch,
 	)
+}
+
+// teamScopeApprovalHeader builds the header for a team creation or Team Admin
+// card in the team requests channel ch, mentioning the users who can act on
+// it (see canApproveTeamRequest). With AllowApprovalTeamAdminsForTeamRequests
+// on, the approval team's Team Admins are added to ch first so they can see
+// the card.
+func (p *Plugin) teamScopeApprovalHeader(ch *model.Channel, kind string) string {
+	if ch != nil && p.getConfiguration().AllowApprovalTeamAdminsForTeamRequests {
+		p.addTeamApproversToChannel(ch.TeamId, ch.Id)
+		if mentions := p.mentionList(p.adminApproverIDs(ch.TeamId)); mentions != "" {
+			return mentions + " — a " + kind + " needs your review."
+		}
+	}
+	return p.systemAdminMentions() + " — a " + kind + " needs System Admin review."
 }
 
 func (p *Plugin) teamCreationApprovalAttachment(req *teamCreationRequest, requester *model.User) *model.MessageAttachment {
