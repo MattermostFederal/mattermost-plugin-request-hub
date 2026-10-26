@@ -163,32 +163,15 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) {
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)
 }
 
-// postTeamAdminApprovalRequest posts the card where the team's approvers can
-// act on it: the team's own approval channel when PerTeamApprovalChannels is
-// on and the team has an approver, otherwise the team requests channel next
-// to team creation requests. System Admins and the team's Team Admins (see
-// canApproveTeamAdminRequest) are mentioned.
+// postTeamAdminApprovalRequest posts to the team requests approval channel,
+// the same channel as team creation requests so all team-scope actions appear
+// together. Approvers are the same too (see canApproveTeamRequest).
 func (p *Plugin) postTeamAdminApprovalRequest(req *teamAdminRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
-	var ch *model.Channel
-	if p.getConfiguration().PerTeamApprovalChannels && p.hasActiveTeamApprovers(team.Id) {
-		teamCh, chErr := p.ensureTeamApprovalChannel(team.Id)
-		if chErr != nil {
-			p.API.LogWarn("failed to resolve per-team approval channel for Team Admin request; using team requests channel",
-				"team_id", team.Id, "error", chErr.Error())
-		}
-		ch = teamCh
-	}
-	if ch == nil {
-		ch = p.ensureTeamCreationApprovalChannel()
-	}
-	header := "A Team Admin request needs your review."
-	if mentions := p.mentionList(p.adminApproverIDs(team.Id)); mentions != "" {
-		header = mentions + " — a Team Admin request needs your review."
-	}
+	ch := p.ensureTeamCreationApprovalChannel()
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamAdminApprovalAttachment(req, requester, team),
-		header,
+		p.teamScopeApprovalHeader(ch, "Team Admin request"),
 		ch,
 	)
 }

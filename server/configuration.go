@@ -96,9 +96,9 @@ type configuration struct {
 
 	// --- 3. Approver policy ---
 	AllowTeamAdminApprovers bool
-	// AllowTeamAdminTeamApprovers lets Team Admins of the approval team
-	// approve team creation requests. Off by default.
-	AllowTeamAdminTeamApprovers bool
+	// AllowApprovalTeamAdminsForTeamRequests lets Team Admins of the approval
+	// team approve team creation and Team Admin requests. Off by default.
+	AllowApprovalTeamAdminsForTeamRequests bool
 
 	// --- 4. Requestable types (per-type feature toggles) ---
 	// Defaults (plugin.json): channel, channel-admin, team, team-admin,

@@ -21,13 +21,16 @@ func (p *Plugin) systemAdminDecider(actingUserID, what string) (*model.User, *de
 }
 
 // decideTeamAdminRequest approves or denies a Team Admin request on behalf
-// of actingUserID. System Admins and the Team Admins of the request's team
-// may decide it (see canApproveTeamAdminRequest). See decideChannelRequest
-// for clickedPostID.
+// of actingUserID. System Admins may decide it, and so may Team Admins of the
+// approval team when AllowApprovalTeamAdminsForTeamRequests is on (see
+// canApproveTeamRequest). See decideChannelRequest for clickedPostID.
 func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID string, approve bool) decisionResult {
 	actingUser, appErr := p.API.GetUser(actingUserID)
 	if appErr != nil {
 		return decisionResult{Reply: "Could not verify your identity."}
+	}
+	if !p.canApproveTeamRequest(actingUser) {
+		return decisionResult{Reply: "You aren't allowed to approve or deny Team Admin requests."}
 	}
 
 	req, rawReq, err := p.loadTeamAdminRequest(requestID)
@@ -37,9 +40,6 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 	}
 	if req == nil {
 		return decisionResult{Reply: alreadyHandledText}
-	}
-	if !p.canApproveTeamAdminRequest(actingUser, req.TeamID) {
-		return decisionResult{Reply: "Only System Admins and the team's Team Admins can approve or deny Team Admin requests."}
 	}
 	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
 		return decisionResult{Reply: ownRequestText}
@@ -340,7 +340,7 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 
 // decideTeamRequest approves or denies a team creation request on behalf
 // of actingUserID. System Admins may decide it, and so may Team Admins of
-// the approval team when AllowTeamAdminTeamApprovers is on.
+// the approval team when AllowApprovalTeamAdminsForTeamRequests is on.
 func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string, approve bool) decisionResult {
 	actingUser, appErr := p.API.GetUser(actingUserID)
 	if appErr != nil {
