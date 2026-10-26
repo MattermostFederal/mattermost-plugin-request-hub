@@ -8,7 +8,7 @@
     "lint": "eslint --quiet --cache .",
     "fix": "eslint --quiet --fix --cache .",
     "check-types": "tsc",
-    "postinstall": "playwright install chromium",
+    "postinstall": "[ -n \"$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" ] || playwright install chromium",
     "test": "playwright test --config=playwright.config.ts && playwright test --config=playwright-ct.config.ts",
     "test:pw": "playwright test --config=playwright.config.ts",
     "test:pw-ct": "playwright test --config=playwright-ct.config.ts"
