@@ -488,7 +488,7 @@ func (p *Plugin) addTeamApproversToChannel(teamID, channelID string) {
 func (p *Plugin) postChannelWelcomeMessage(ch *model.Channel, team *model.Team) {
 	msg := fmt.Sprintf(
 		"This channel was created automatically by the Mattermost Request Hub plugin. "+
-			"Channel creation and Channel Admin promotion requests for the **%s** team are posted here for review.\n\n"+
+			"Channel creation, Channel Admin and Team Admin requests for the **%s** team are posted here for review.\n\n"+
 			"Team Admins will receive new-request notifications and can use the **Approve** / **Deny** buttons. "+
 			"Reply to any request thread to ask the requester for more information.",
 		escapeMarkdown(team.DisplayName),

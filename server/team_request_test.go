@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -133,4 +137,116 @@ func TestCreateTeamForRequest_PromotesRequesterWhenFlagSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "new-team", team.Id)
 	api.AssertCalled(t, "UpdateTeamMemberRoles", "new-team", "u_req", teamAdminRoles)
+}
+
+func TestPostTeamCreationApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowTeamAdminTeamApprovers: true})
+
+	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "teams-ch", TeamId: "appteam-id"}, nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
+	api.On("GetTeamMembers", "appteam-id", 0, 200).Return([]*model.TeamMember{
+		{TeamId: "appteam-id", UserId: "appta", SchemeAdmin: true},
+		{TeamId: "appteam-id", UserId: "member1"},
+	}, nil)
+	api.On("AddChannelMember", "teams-ch", "appta").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelSidebarCategories", "appta", "appteam-id").Return(&model.OrderedSidebarCategories{
+		Categories: []*model.SidebarCategoryWithChannels{{
+			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
+			Channels:        []string{"teams-ch"},
+		}},
+	}, nil)
+	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead"}, nil)
+	api.On("GetUsersByIds", []string{"appta"}).Return([]*model.User{{Id: "appta", Username: "lead"}}, nil)
+	api.On("KVSet", kvApprovalCardsPrefix+"r1", mock.Anything).Return(nil)
+
+	var approvalPost *model.Post
+	api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
+		approvalPost = args.Get(0).(*model.Post)
+	}).Return(&model.Post{Id: "approval-post-1"}, nil)
+
+	req := &teamCreationRequest{ID: "r1", RequesterID: "u_req", DisplayName: "Marketing", Name: "marketing", Type: "O"}
+	_, channelID, err := p.postTeamCreationApprovalRequest(req, &model.User{Id: "u_req", Username: "reqer"})
+
+	require.NoError(t, err)
+	require.Equal(t, "teams-ch", channelID)
+	require.Contains(t, approvalPost.Message, "@lead")
+	api.AssertNotCalled(t, "AddChannelMember", "teams-ch", "member1")
+}
+
+func TestCanApproveTeamRequest(t *testing.T) {
+	api := &plugintest.API{}
+	p := newTestPlugin(api)
+	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetTeamMember", "appteam-id", "appta").Return(&model.TeamMember{TeamId: "appteam-id", UserId: "appta", SchemeAdmin: true}, nil)
+	api.On("GetTeamMember", "appteam-id", "member1").Return(&model.TeamMember{TeamId: "appteam-id", UserId: "member1", Roles: "team_user"}, nil)
+	sysAdmin := &model.User{Id: "sys1", Roles: "system_user system_admin"}
+	appTA := &model.User{Id: "appta", Roles: "system_user"}
+
+	// AllowTeamAdminApprovers covers channel requests only.
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamAdminApprovers: true})
+	require.False(t, p.canApproveTeamRequest(nil))
+	require.True(t, p.canApproveTeamRequest(sysAdmin))
+	require.False(t, p.canApproveTeamRequest(appTA))
+
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamAdminTeamApprovers: true})
+	require.True(t, p.canApproveTeamRequest(appTA))
+	require.False(t, p.canApproveTeamRequest(&model.User{Id: "member1", Roles: "system_user"}))
+}
+
+// runTeamAction clicks Approve or Deny on team request r1's card as userID.
+func runTeamAction(t *testing.T, p *Plugin, userID string, approve bool) model.PostActionIntegrationResponse {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, routeApproveTeam, strings.NewReader(actionBody(t, "r1")))
+	r.Header.Set(headerUserID, userID)
+	w := httptest.NewRecorder()
+	p.handleTeamAction(w, r, approve)
+	var resp model.PostActionIntegrationResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	return resp
+}
+
+func TestHandleTeamAction_ApprovalTeamAdminRefusedWhenOff(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowTeamAdminApprovers: true})
+
+	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead", Roles: "system_user"}, nil)
+
+	resp := runTeamAction(t, p, "appta", true)
+
+	require.Contains(t, resp.EphemeralText, "aren't allowed")
+	api.AssertNotCalled(t, "KVGet", kvTeamRequestPrefix+"r1")
+	api.AssertNotCalled(t, "CreateTeam", mock.Anything)
+}
+
+func TestHandleTeamAction_ApprovalTeamAdminCannotApproveOwnRequest(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowTeamAdminTeamApprovers: true})
+
+	raw, err := json.Marshal(&teamCreationRequest{ID: "r1", RequesterID: "appta", DisplayName: "Marketing", Name: "marketing", Type: "O", ApprovalPostID: "post1"})
+	require.NoError(t, err)
+	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead", Roles: "system_user"}, nil)
+	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetTeamMember", "appteam-id", "appta").Return(&model.TeamMember{TeamId: "appteam-id", UserId: "appta", SchemeAdmin: true}, nil)
+	api.On("KVGet", kvTeamRequestPrefix+"r1").Return(raw, nil)
+
+	resp := runTeamAction(t, p, "appta", true)
+
+	require.Equal(t, ownRequestText, resp.EphemeralText)
+	api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "CreateTeam", mock.Anything)
 }
