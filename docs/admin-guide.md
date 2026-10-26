@@ -59,8 +59,8 @@ Create and assign attributes in **System Console → User Management → Attribu
 
 | Setting | Purpose |
 |---------|---------|
-| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve or deny channel creation requests. Channel Admin and Team Admin requests are always reviewed by System Admins and the Team Admins of the requested team, whatever this is set to. |
-| **Team Admins can approve team creation** | Default off. When on, Team Admins of the approval team can approve or deny team creation requests and are added to `mattermost-team-requests`. Useful when System Admins are scarce. |
+| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve or deny channel creation requests. Channel Admin requests are always reviewed by System Admins and the Team Admins of the channel's team, whatever this is set to. |
+| **Approval team's Team Admins can approve team and Team Admin requests** | Default off. When on, Team Admins of the approval team can approve or deny team creation and Team Admin requests and are added to `mattermost-team-requests`. They can then make anyone a Team Admin on any team, which is close to System Admin trust. Turn it on only where System Admins are scarce and you trust those Team Admins fully. |
 | **Per-team approval channels** | Default **on**. Auto-creates `mattermost-channel-requests` in each team that has a Team Admin or System Admin member. Channel / Channel Admin requests from that team go there (not the primary approval team's root channel). All ticket channels (including **Mattermost: Team Requests**) are kept in a managed sidebar category **Mattermost: Request Hub**. |
 | **Offer tools to Agents** | Default **off**. Lets the Mattermost Agents plugin list prefixes and file requests of every type on a user's behalf (see [Agents tools](#agents-tools)). Takes effect on save. |
 
@@ -83,6 +83,10 @@ Create and assign attributes in **System Console → User Management → Attribu
 ### Locking down native channel creation
 
 The plugin intercepts the sidebar UI for non-admins, but it can't veto the native Mattermost channel creation API. To fully route members through the request flow, remove the **Create Public/Private Channel** permission from the System User role in **System Console → User Management → Permissions → System Scheme**.
+
+### Locking down native Team Admin promotion
+
+Team Admins can promote their own team's members in Mattermost directly, without a request. To make the plugin the only way to become a Team Admin, remove **Manage team roles** from the Team Admin role in **System Console → User Management → Permissions → System Scheme**. The plugin still promotes approved requests, because it acts through the plugin API. Only System Admins approve Team Admin requests unless **Approval team's Team Admins can approve team and Team Admin requests** is on.
 
 ---
 
@@ -127,13 +131,14 @@ Approve and Deny work only on the cards the plugin posted for that request.
 |---|---|
 | Channel creation | System Admins and Team Admins of the team the channel will be in. With **Team Admins can approve requests** on, also Team Admins of the approval team. |
 | Channel Admin | System Admins and Team Admins of the channel's team |
-| Team creation, Team Admin, team member, guest invite | System Admins |
+| Team creation, Team Admin | System Admins. With **Approval team's Team Admins can approve team and Team Admin requests** on, also Team Admins of the approval team. |
+| Team member, guest invite | System Admins |
 | Bot, incoming webhook, outgoing webhook | Two steps, security first, then system, by two different people (one System Admin in System Admins only mode). See [Two-step approvers](#two-step-approvers-bot--webhook). |
 
 Approving your own request:
 
-- **Channel and Channel Admin:** only a System Admin can approve their own request.
-- **Team types:** System Admins only, so a System Admin can approve their own.
+- **Channel, Channel Admin, team creation and Team Admin:** only a System Admin can approve their own request.
+- **Team member and guest invite:** System Admins only, so a System Admin can approve their own.
 - **Bot and webhook:** nobody can approve either step of their own request, System Admins included. A System Admin's request needs two other approvers, or one other System Admin in System Admins only mode.
 
 Being allowed to approve doesn't make a card visible. Team Admins of the approval team are added to the root channel the same way as to any per-team channel (while **Per-team approval channels** is on, when they join the approval team or are promoted through a Request Hub request), and never to other teams' channels. So **Team Admins can approve requests** mostly matters for cards in the root channel. Likewise, when **Per-team approval channels** is off, Team Admins of other teams can approve their teams' channel cards but usually can't see them, because those cards go to the root channel.
@@ -293,8 +298,8 @@ The plugin records which team **Approval team** named the first time it was used
 |---|---|---|---|
 | Channel creation | Sidebar +, channel header button, More actions, slash cmd | Root channel or per-team channel | Team Admins or System Admins |
 | Channel Admin | More actions, Members panel button, slash cmd | Root channel or per-team channel | Team Admins of the channel's team or System Admins |
-| Team Admin | More actions, slash cmd | `mattermost-team-requests` | System Admins |
-| Team creation | More actions, team sidebar menu | `mattermost-team-requests` | System Admins |
+| Team Admin | More actions, slash cmd | `mattermost-team-requests` | System Admins, or approval-team Team Admins when enabled |
+| Team creation | More actions, team sidebar menu | `mattermost-team-requests` | System Admins, or approval-team Team Admins when enabled |
 | Team member add | More actions, Request Hub, slash | `mattermost-team-requests` | System Admins |
 | Guest invite | More actions, Request Hub, slash | `mattermost-team-requests` | System Admins |
 | Bot account (+ token + webhooks) | More actions, Integrations page | `mattermost-bot-requests` | Two-step: security, then system |
