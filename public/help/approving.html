@@ -50,6 +50,10 @@
         </p>
         <p>
             Channel and team cards are <strong>single-step</strong>: one approver decides.
+            Team Admin cards can be approved by System Admins or the Team Admins of the requested team, and go to that team's
+            <code>mattermost-channel-requests</code> channel when it has one. With <strong>Team Admins can approve team creation</strong>
+            on, Team Admins of the approval team can approve team creation cards.
+            Only a System Admin can approve a request they made themselves.
             Bot and webhook cards are <strong>two-step</strong> (security + system).
         </p>
 

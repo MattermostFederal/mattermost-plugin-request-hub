@@ -110,6 +110,8 @@ func TestTeamScopedSubmit_ApprovalPostFailureRemovesRequest(t *testing.T) {
 			tc.setup(api)
 			api.On("KVSet", keyWithPrefix(tc.prefix), mock.Anything).Return(nil)
 			api.On("GetUsers", mock.Anything).Return(nil, testAppErr("list failed"))
+			// Team Admin cards also mention the team's Team Admins.
+			api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
 			var deleted string
 			api.On("KVDelete", keyWithPrefix(tc.prefix)).Run(func(args mock.Arguments) {
 				deleted = args.String(0)
