@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/mattermost/mattermost-plugin-agents/v2 v2.9.0
-	github.com/mattermost/mattermost/server/public v0.4.5-0.20260911134158-fa302bf9e623
+	github.com/mattermost/mattermost/server/public v0.5.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.12.1
