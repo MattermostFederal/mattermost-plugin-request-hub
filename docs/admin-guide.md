@@ -52,7 +52,8 @@ Create and assign these attributes in **System Console → User Management → A
 
 | Setting | Purpose |
 |---------|---------|
-| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve or deny channel creation and channel admin requests (not team/bot/webhook). |
+| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve or deny channel creation requests. Channel Admin and Team Admin requests are always reviewed by System Admins and the Team Admins of the requested team, whatever this is set to. |
+| **Team Admins can approve team creation** | Default off. When on, Team Admins of the approval team can approve or deny team creation requests and are added to `mattermost-team-requests`. Useful when System Admins are scarce. |
 | **Per-team approval channels** | Default **on**. Auto-creates `mattermost-channel-requests` in each team that has a Team Admin or System Admin member. Channel / Channel Admin requests from that team go there (not the primary approval team's root channel). All ticket channels (including **Mattermost: Team Requests**) are kept in a managed sidebar category **Mattermost: Request Hub**. |
 
 ### Locking down native channel creation
