@@ -144,7 +144,7 @@ func TestPostTeamCreationApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *t
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowTeamAdminTeamApprovers: true})
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowApprovalTeamAdminsForTeamRequests: true})
 
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
@@ -196,7 +196,7 @@ func TestCanApproveTeamRequest(t *testing.T) {
 	require.True(t, p.canApproveTeamRequest(sysAdmin))
 	require.False(t, p.canApproveTeamRequest(appTA))
 
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamAdminTeamApprovers: true})
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowApprovalTeamAdminsForTeamRequests: true})
 	require.True(t, p.canApproveTeamRequest(appTA))
 	require.False(t, p.canApproveTeamRequest(&model.User{Id: "member1", Roles: "system_user"}))
 }
@@ -234,7 +234,7 @@ func TestHandleTeamAction_ApprovalTeamAdminCannotApproveOwnRequest(t *testing.T)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowTeamAdminTeamApprovers: true})
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowTeamRequests: true, AllowApprovalTeamAdminsForTeamRequests: true})
 
 	raw, err := json.Marshal(&teamCreationRequest{ID: "r1", RequesterID: "appta", DisplayName: "Marketing", Name: "marketing", Type: "O", ApprovalPostID: "post1"})
 	require.NoError(t, err)
