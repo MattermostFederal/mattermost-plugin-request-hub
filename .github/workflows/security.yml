@@ -103,7 +103,7 @@ jobs:
       - name: Upload server Grype SARIF to code scanning
         if: always() && steps.grype-server.outputs.sarif != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ steps.grype-server.outputs.sarif }}
           category: grype
@@ -111,7 +111,7 @@ jobs:
       - name: Upload webapp Grype SARIF to code scanning
         if: always() && steps.grype-webapp.outputs.sarif != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ steps.grype-webapp.outputs.sarif }}
           category: grype-webapp
@@ -151,7 +151,7 @@ jobs:
         run: go run ./build/manifest apply
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: go
           # Index from repo root so root-package files (main.go,
@@ -160,14 +160,14 @@ jobs:
           # package inside it, not a separate module.
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
 
       # Split analysis from upload so each step's success/failure has
       # one clear meaning. `upload: never` writes SARIF locally; the
       # explicit security-gate step then enforces the finding threshold,
       # and the upload step pushes results to GitHub Code Scanning.
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         id: codeql-analyze
         with:
           category: codeql-go
@@ -190,7 +190,7 @@ jobs:
       - name: Upload CodeQL SARIF to code scanning
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: codeql-results
           category: codeql-go

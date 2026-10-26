@@ -16,4 +16,7 @@ const originalResolveFilename = (Module as any)._resolveFilename;
 export default defineConfig({
     testMatch: '**/*.spec.ts',
     testDir: './src',
+    use: {
+        launchOptions: {executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined},
+    },
 });
