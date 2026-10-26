@@ -136,7 +136,7 @@ func TestEnsureAllTeamApprovalChannels_SeedsApprovalTeamAdminsIntoRootChannel(t 
 		{TeamId: "team-hq", UserId: "u_member", Roles: "team_user"},
 	}, nil)
 	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", false).
-		Return(&model.Channel{Id: "ch-root", TeamId: "team-hq"}, nil)
+		Return(&model.Channel{Id: "ch-root", TeamId: "team-hq", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}, nil)
 	api.On("AddChannelMember", "ch-root", "u_tadmin").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
