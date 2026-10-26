@@ -144,14 +144,14 @@
                 "key": "AllowTeamAdminApprovers",
                 "display_name": "Team Admins can approve requests",
                 "type": "bool",
-                "help_text": "When enabled, Team Admins of the approval team can approve or deny channel-creation requests in addition to System Admins. Team Admins of the team a channel is requested in can always act on that request. Channel Admin requests are always reviewed by System Admins and the Team Admins of the channel's own team, whatever this is set to. Team Admin requests are always reviewed by System Admins and the Team Admins of the requested team. Nobody but a System Admin can approve their own request."
+                "help_text": "When enabled, Team Admins of the approval team can approve or deny channel-creation requests in addition to System Admins. Team Admins of the team a channel is requested in can always act on that request. Channel Admin requests are always reviewed by System Admins and the Team Admins of the channel's own team, whatever this is set to. Nobody but a System Admin can approve their own request."
             },
             {
-                "key": "AllowTeamAdminTeamApprovers",
-                "display_name": "Team Admins can approve team creation",
+                "key": "AllowApprovalTeamAdminsForTeamRequests",
+                "display_name": "Approval team's Team Admins can approve team and Team Admin requests",
                 "type": "bool",
                 "default": false,
-                "help_text": "When enabled, Team Admins of the approval team can approve or deny team creation requests in addition to System Admins, and are added to the Mattermost: Team Requests channel. Use this where System Admins are scarce and you trust the approval team's Team Admins to decide who gets a new team. Nobody but a System Admin can approve their own request."
+                "help_text": "When enabled, Team Admins of the approval team can approve or deny team creation and Team Admin requests in addition to System Admins, and are added to the Mattermost: Team Requests channel. Warning: they can then make anyone a Team Admin on any team, including teams they don't belong to. That is close to System Admin trust, so turn this on only where System Admins are scarce and you trust those Team Admins fully. Nobody but a System Admin can approve their own request."
             },
             {
                 "key": "ChannelNamePrefixes",

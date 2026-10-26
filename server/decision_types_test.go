@@ -97,7 +97,7 @@ func TestExecuteDecision_DenyClosesEveryCopyForEveryNewerType(t *testing.T) {
 func TestExecuteDecision_TeamTypesRefuseOtherUsers(t *testing.T) {
 	for kind, reply := range map[string]string{
 		pendingKindTeam:       "You aren't allowed to approve or deny team creation requests.",
-		pendingKindTeamAdmin:  "Only System Admins and the team's Team Admins can approve or deny Team Admin requests.",
+		pendingKindTeamAdmin:  "You aren't allowed to approve or deny Team Admin requests.",
 		pendingKindTeamMember: "Only System Admins can approve or deny team member requests.",
 		pendingKindTeamGuest:  "Only System Admins can approve or deny guest invite requests.",
 	} {

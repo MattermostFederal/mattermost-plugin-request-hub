@@ -60,12 +60,13 @@ func TestTeamTypeActions_OnlySystemAdminsMayDecide(t *testing.T) {
 	}
 }
 
-// Team creation requests are for System Admins, and for approval-team Team
-// Admins only when AllowTeamAdminTeamApprovers is on.
-func TestTeamAction_TeamAdminRefusedWhenNotAllowed(t *testing.T) {
-	for _, tc := range actionCasesNamed("team") {
+// Team creation and Team Admin requests are for System Admins, and for
+// approval-team Team Admins only when AllowApprovalTeamAdminsForTeamRequests is
+// on. Nobody else, including the requested team's own Team Admins.
+func TestTeamScopeActions_TeamAdminRefusedWhenNotAllowed(t *testing.T) {
+	for _, tc := range actionCasesNamed("team", "team admin") {
 		for _, approve := range []bool{true, false} {
-			t.Run(decisionName(approve), func(t *testing.T) {
+			t.Run(tc.name+"/"+decisionName(approve), func(t *testing.T) {
 				api := &plugintest.API{}
 				stubLogLevels(api)
 				defer api.AssertExpectations(t)
@@ -74,33 +75,9 @@ func TestTeamAction_TeamAdminRefusedWhenNotAllowed(t *testing.T) {
 
 				resp := clickAction(t, p, tc.handler, "u_lead", actionBody(t, "r1"), approve)
 
-				require.Contains(t, resp.EphemeralText, "aren't allowed to approve or deny team creation requests")
+				require.Contains(t, resp.EphemeralText, "aren't allowed to approve or deny")
 				// Refused before the request is read: the mock has no KVGet.
 				require.Nil(t, resp.Update)
-			})
-		}
-	}
-}
-
-// Team Admin requests are for System Admins and the request's own team's
-// Team Admins.
-func TestTeamAdminAction_OtherTeamsTeamAdminRefused(t *testing.T) {
-	for _, tc := range actionCasesNamed("team admin") {
-		for _, approve := range []bool{true, false} {
-			t.Run(decisionName(approve), func(t *testing.T) {
-				api := &plugintest.API{}
-				stubLogLevels(api)
-				defer api.AssertExpectations(t)
-				p := newTestPlugin(api)
-				api.On("GetUser", "u_lead").Return(&model.User{Id: "u_lead", Username: "lead", Roles: "system_user"}, nil)
-				api.On("KVGet", kvTeamAdminRequestPrefix+"r1").Return(pendingRecordJSON(t, tc, "u_req"), nil)
-				api.On("GetTeamMember", "team1", "u_lead").Return(nil, testAppErr("not a member"))
-
-				resp := clickAction(t, p, tc.handler, "u_lead", actionBody(t, "r1"), approve)
-
-				require.Contains(t, resp.EphemeralText, "the team's Team Admins")
-				require.Nil(t, resp.Update)
-				api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
 			})
 		}
 	}
