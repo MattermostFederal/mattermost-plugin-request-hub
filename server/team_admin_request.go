@@ -113,7 +113,7 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 		},
 	})
 
-	return "Your Team Admin request has been submitted for approval. You'll be notified once a System Admin responds.", nil
+	return "Your Team Admin request has been submitted for approval. You'll be notified once an approver responds.", nil
 }
 
 func (p *Plugin) sendTeamAdminTicketCreatedDM(req *teamAdminRequest, requester *model.User, team *model.Team) (dmRootPostID, dmChannelID string) {
@@ -144,12 +144,28 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) {
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)
 }
 
-// postTeamAdminApprovalRequest posts to the team requests approval channel.
-// Only System Admins can approve team admin requests. Uses the same channel as
-// team creation requests so all team-scope actions appear together.
+// postTeamAdminApprovalRequest posts the card where the team's approvers can
+// act on it: the team's own approval channel when PerTeamApprovalChannels is
+// on and the team has an approver, otherwise the team requests channel next
+// to team creation requests. System Admins and the team's Team Admins (see
+// canApproveTeamAdminRequest) are mentioned.
 func (p *Plugin) postTeamAdminApprovalRequest(req *teamAdminRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
-	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a Team Admin request needs System Admin review."
+	var ch *model.Channel
+	if p.getConfiguration().PerTeamApprovalChannels && p.hasActiveTeamApprovers(team.Id) {
+		teamCh, chErr := p.ensureTeamApprovalChannel(team.Id)
+		if chErr != nil {
+			p.API.LogWarn("failed to resolve per-team approval channel for Team Admin request; using team requests channel",
+				"team_id", team.Id, "error", chErr.Error())
+		}
+		ch = teamCh
+	}
+	if ch == nil {
+		ch = p.ensureTeamCreationApprovalChannel()
+	}
+	header := "A Team Admin request needs your review."
+	if mentions := p.mentionList(p.adminApproverIDs(team.Id)); mentions != "" {
+		header = mentions + " — a Team Admin request needs your review."
+	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamAdminApprovalAttachment(req, requester, team),
