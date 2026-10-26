@@ -41,7 +41,7 @@ func pendingRecordJSON(t *testing.T, tc actionHandlerCase, requesterID string) [
 }
 
 func TestTeamTypeActions_OnlySystemAdminsMayDecide(t *testing.T) {
-	for _, tc := range actionCasesNamed("team", "team admin", "team member", "team guest") {
+	for _, tc := range actionCasesNamed("team member", "team guest") {
 		for _, approve := range []bool{true, false} {
 			t.Run(tc.name+"/"+decisionName(approve), func(t *testing.T) {
 				api := &plugintest.API{}
@@ -60,9 +60,54 @@ func TestTeamTypeActions_OnlySystemAdminsMayDecide(t *testing.T) {
 	}
 }
 
+// Team creation requests are for System Admins, and for approval-team Team
+// Admins only when AllowTeamAdminTeamApprovers is on.
+func TestTeamAction_TeamAdminRefusedWhenNotAllowed(t *testing.T) {
+	for _, tc := range actionCasesNamed("team") {
+		for _, approve := range []bool{true, false} {
+			t.Run(decisionName(approve), func(t *testing.T) {
+				api := &plugintest.API{}
+				stubLogLevels(api)
+				defer api.AssertExpectations(t)
+				p := newTestPlugin(api)
+				api.On("GetUser", "u_lead").Return(&model.User{Id: "u_lead", Username: "lead", Roles: "system_user"}, nil)
+
+				resp := clickAction(t, p, tc.handler, "u_lead", actionBody(t, "r1"), approve)
+
+				require.Contains(t, resp.EphemeralText, "aren't allowed to approve or deny team creation requests")
+				// Refused before the request is read: the mock has no KVGet.
+				require.Nil(t, resp.Update)
+			})
+		}
+	}
+}
+
+// Team Admin requests are for System Admins and the request's own team's
+// Team Admins.
+func TestTeamAdminAction_OtherTeamsTeamAdminRefused(t *testing.T) {
+	for _, tc := range actionCasesNamed("team admin") {
+		for _, approve := range []bool{true, false} {
+			t.Run(decisionName(approve), func(t *testing.T) {
+				api := &plugintest.API{}
+				stubLogLevels(api)
+				defer api.AssertExpectations(t)
+				p := newTestPlugin(api)
+				api.On("GetUser", "u_lead").Return(&model.User{Id: "u_lead", Username: "lead", Roles: "system_user"}, nil)
+				api.On("KVGet", kvTeamAdminRequestPrefix+"r1").Return(pendingRecordJSON(t, tc, "u_req"), nil)
+				api.On("GetTeamMember", "team1", "u_lead").Return(nil, testAppErr("not a member"))
+
+				resp := clickAction(t, p, tc.handler, "u_lead", actionBody(t, "r1"), approve)
+
+				require.Contains(t, resp.EphemeralText, "the team's Team Admins")
+				require.Nil(t, resp.Update)
+				api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
+			})
+		}
+	}
+}
+
 // System Admins may approve their own channel and Channel Admin requests:
-// the click gets past the own-request check to the claim. (The team types
-// have no own-request check; only System Admins decide them.)
+// the click gets past the own-request check to the claim.
 func TestActionHandlers_SystemAdminMayApproveOwnRequest(t *testing.T) {
 	for _, tc := range actionCasesNamed("channel", "channel admin") {
 		t.Run(tc.name, func(t *testing.T) {

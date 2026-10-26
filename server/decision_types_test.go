@@ -94,21 +94,22 @@ func TestExecuteDecision_DenyClosesEveryCopyForEveryNewerType(t *testing.T) {
 	}
 }
 
-func TestExecuteDecision_TeamTypesAreForSystemAdmins(t *testing.T) {
-	for kind, what := range map[string]string{
-		pendingKindTeam:       "team creation requests",
-		pendingKindTeamAdmin:  "Team Admin requests",
-		pendingKindTeamMember: "team member requests",
-		pendingKindTeamGuest:  "guest invite requests",
+func TestExecuteDecision_TeamTypesRefuseOtherUsers(t *testing.T) {
+	for kind, reply := range map[string]string{
+		pendingKindTeam:       "You aren't allowed to approve or deny team creation requests.",
+		pendingKindTeamAdmin:  "Only System Admins and the team's Team Admins can approve or deny Team Admin requests.",
+		pendingKindTeamMember: "Only System Admins can approve or deny team member requests.",
+		pendingKindTeamGuest:  "Only System Admins can approve or deny guest invite requests.",
 	} {
 		t.Run(kind, func(t *testing.T) {
-			_, p, store, updated := newerTypeFixture(t)
+			api, p, store, updated := newerTypeFixture(t)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{TeamId: "team1", UserId: "u_req", Roles: "team_user"}, nil).Maybe()
 			id := model.NewId()
 			storeDMFallback(t, store, kind, id, newerTypeRecord(kind, id, twoStepState{}))
 
 			resp := runCommandAs(p, "u_req", "/mattermost-request-hub approve "+id)
 
-			require.Equal(t, "Only System Admins can approve or deny "+what+".", resp.Text)
+			require.Equal(t, reply, resp.Text)
 			require.Contains(t, store, pendingKinds[kind].kvPrefix+id)
 			require.Empty(t, updated)
 		})
@@ -375,6 +376,7 @@ func TestRequestStatus_NewerTypes(t *testing.T) {
 
 			// Someone who is neither the requester nor an approver.
 			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: "system_user"}, nil)
+			api.On("GetTeamMember", mock.Anything, "u_other").Return(nil, testAppErr("not a member")).Maybe()
 			stubSyncedGroup(api, "security-approvers", "g-sec")
 			api.On("GetGroupsForUser", "u_other").Return([]*model.Group{}, nil).Maybe()
 			_, err := p.requestStatus("u_other", id)
