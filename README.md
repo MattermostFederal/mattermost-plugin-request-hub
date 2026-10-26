@@ -47,6 +47,7 @@ make deploy  # optional: deploy to a running Mattermost server
 - `make dist`: build the plugin bundle
 - `make check-style`: lint Go and webapp code
 - `make test`: run tests
+- `make e2e`: run the Playwright e2e suite in `e2e/` against a throwaway Mattermost server in Docker (needs Docker and the Node version in `e2e/.nvmrc`; set `MM_IMAGE` to test another server image)
 - `make deploy`: deploy to the Mattermost server specified by `MM_SERVICESETTINGS_SITEURL` and `MM_ADMIN_TOKEN`
 
 ## Configuration

@@ -512,6 +512,7 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 		p.API.LogWarn("failed to list teams for approval-channel sweep", "error", appErr.Error())
 		return
 	}
+	approvalTeam := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
 	created := 0
 	skipped := 0
 	for _, team := range teams {
@@ -519,10 +520,18 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 			skipped++
 			continue
 		}
-		if _, err := p.ensureTeamApprovalChannel(team.Id); err != nil {
+		ch, err := p.ensureTeamApprovalChannel(team.Id)
+		if err != nil {
 			p.API.LogWarn("failed to ensure approval channel for team",
 				"team_id", team.Id, "team_name", team.Name, "error", err.Error())
 			continue
+		}
+		// In the approval team this is also the root approval channel, which
+		// ensureRootApprovalChannel creates with System Admins only, so the
+		// fast path above never seeds the team's Team Admins. Re-sync them,
+		// the same way OnActivate re-syncs System Admins.
+		if team.Name == approvalTeam {
+			p.addTeamApproversToChannel(team.Id, ch.Id)
 		}
 		created++
 	}

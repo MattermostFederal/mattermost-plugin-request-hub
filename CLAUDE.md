@@ -25,4 +25,5 @@ This is a minimal Mattermost plugin template. The server is written in Go and th
 - `make dist` - build the plugin bundle
 - `make check-style` - lint both Go and webapp code
 - `make test` - run tests
+- `make e2e` - run the Playwright e2e suite in `e2e/` against Mattermost in Docker (Node from `e2e/.nvmrc`)
 - `make deploy` - build and deploy to a running Mattermost server

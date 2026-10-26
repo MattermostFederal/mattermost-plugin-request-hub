@@ -102,6 +102,28 @@ updates:
           - minor
           - patch
 
+  # npm — the Playwright e2e suite in e2e/. Its own package so testcontainers
+  # can run on a newer Node than the webapp.
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      # No `include: scope` — see the go entry above.
+      prefix: "deps(e2e)"
+    groups:
+      e2e-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   # GitHub Actions used by .github/workflows/*.yml. Keeps action SHAs
   # current — important because we pin all actions to SHAs (security),
   # which means we don't get automatic updates the way @v4 tag users do.

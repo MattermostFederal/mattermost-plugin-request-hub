@@ -118,6 +118,60 @@ func TestEnsureTeamApprovalChannel_FastPathReturnsExisting(t *testing.T) {
 	api.AssertNotCalled(t, "CreateChannel", mock.Anything)
 }
 
+// --- ensureAllTeamApprovalChannels ---
+
+// The approval team's per-team channel is the root channel, created with
+// System Admins only. The sweep must add the team's Team Admins to it.
+func TestEnsureAllTeamApprovalChannels_SeedsApprovalTeamAdminsIntoRootChannel(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: true, ApprovalTeam: "hq"})
+
+	api.On("GetTeams").Return([]*model.Team{{Id: "team-hq", Name: "hq"}}, nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
+	api.On("GetTeamMembers", "team-hq", 0, 200).Return([]*model.TeamMember{
+		{TeamId: "team-hq", UserId: "u_tadmin", SchemeAdmin: true},
+		{TeamId: "team-hq", UserId: "u_member", Roles: "team_user"},
+	}, nil)
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", false).
+		Return(&model.Channel{Id: "ch-root", TeamId: "team-hq"}, nil)
+	api.On("AddChannelMember", "ch-root", "u_tadmin").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
+		Categories: []*model.SidebarCategoryWithChannels{{
+			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
+			Channels:        []string{"ch-root"},
+		}},
+	}, nil)
+
+	p.ensureAllTeamApprovalChannels()
+
+	api.AssertCalled(t, "AddChannelMember", "ch-root", "u_tadmin")
+	api.AssertNotCalled(t, "AddChannelMember", "ch-root", "u_member")
+}
+
+// Other teams' existing channels keep the fast path: no re-seeding.
+func TestEnsureAllTeamApprovalChannels_LeavesOtherTeamsExistingChannels(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: true, ApprovalTeam: "hq"})
+
+	api.On("GetTeams").Return([]*model.Team{{Id: "team-eng", Name: "eng"}}, nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
+	api.On("GetTeamMembers", "team-eng", 0, 200).Return([]*model.TeamMember{
+		{TeamId: "team-eng", UserId: "u_tadmin", SchemeAdmin: true},
+	}, nil)
+	api.On("GetChannelByName", "team-eng", "mattermost-channel-requests", false).
+		Return(&model.Channel{Id: "ch-eng", TeamId: "team-eng"}, nil)
+
+	p.ensureAllTeamApprovalChannels()
+
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
 func TestEnsureTeamApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)

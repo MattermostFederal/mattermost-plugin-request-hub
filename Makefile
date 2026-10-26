@@ -339,6 +339,11 @@ ifneq ($(HAS_WEBAPP),)
 	cd webapp && $(NPM) run test;
 endif
 
+## Builds the bundle and runs the Playwright e2e suite against Mattermost in Docker (needs Node from e2e/.nvmrc).
+.PHONY: e2e
+e2e: dist
+	cd e2e && $(NPM) ci && npx playwright install chromium && $(NPM) test
+
 ## Prints Go code coverage summary to terminal.
 .PHONY: coverage-backend
 coverage-backend: apply
