@@ -141,7 +141,7 @@ func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error)
 		},
 	})
 
-	return "Your team creation request has been submitted for approval. You'll be notified once a System Admin responds.", nil
+	return "Your team creation request has been submitted for approval. You'll be notified once an approver responds.", nil
 }
 
 func (p *Plugin) sendTeamCreationTicketCreatedDM(req *teamCreationRequest, requester *model.User) (dmRootPostID, dmChannelID string) {
@@ -183,6 +183,14 @@ func (p *Plugin) createTeamForRequest(req *teamCreationRequest) (*model.Team, er
 func (p *Plugin) postTeamCreationApprovalRequest(req *teamCreationRequest, requester *model.User) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
 	header := p.systemAdminMentions() + " — a team creation request needs System Admin review."
+	if ch != nil && p.getConfiguration().AllowTeamAdminTeamApprovers {
+		// Approval-team Team Admins can act on this card, so they need to be
+		// in the channel and notified.
+		p.addTeamApproversToChannel(ch.TeamId, ch.Id)
+		if mentions := p.mentionList(p.adminApproverIDs(ch.TeamId)); mentions != "" {
+			header = mentions + " — a team creation request needs your review."
+		}
+	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamCreationApprovalAttachment(req, requester),
