@@ -205,10 +205,9 @@ func (p *Plugin) executeDocsCommand(args *model.CommandArgs) (*model.CommandResp
 
 // docsLinkText is the Markdown link to the bundled guide.
 func (p *Plugin) docsLinkText(args *model.CommandArgs) string {
-	path := fmt.Sprintf("/plugins/%s/public/help/docs.html", manifest.Id)
-	location := path
+	location := docsPath()
 	if args != nil && args.SiteURL != "" {
-		location = strings.TrimRight(args.SiteURL, "/") + path
+		location = strings.TrimRight(args.SiteURL, "/") + location
 	}
 	return "[Open the full guide](" + location + ") (opens in a new tab)."
 }

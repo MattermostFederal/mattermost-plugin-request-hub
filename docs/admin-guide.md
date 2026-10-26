@@ -105,6 +105,8 @@ The plugin creates and manages five dedicated private channels in the configured
 | `mattermost-webhook-requests` | Standalone incoming and outgoing webhook requests |
 | `mattermost-audit-requests` | Audit log |
 
+Each channel gets a **Request Hub docs** bookmark that links to the built-in guide. The plugin bot joins the channel to add it. Channels that existed before the upgrade get the bookmark once, on the next activation that has **Site URL** set. If you remove the bookmark, the plugin doesn't add it back.
+
 If one of these channels is archived, the plugin doesn't recreate it: the archived channel still holds the name. Unarchive it (or rename it, so the plugin can create a new one). Until then, cards for that channel are DM'd to System Admins, and channel requests for a per-team channel go to the root channel.
 
 ---

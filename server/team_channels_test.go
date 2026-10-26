@@ -176,6 +176,7 @@ func TestEnsureTeamApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
@@ -258,6 +259,7 @@ func TestEnsureTeamApprovalChannel_UsesFixedChannelName(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	p := newTestPlugin(api)
 	// Channel name is hardcoded — no per-team name setting exists.
 	p.setConfiguration(&configuration{})
@@ -301,6 +303,7 @@ func TestEnsureTeamApprovalChannel_BotAlreadyOnTeamIsNotAddedAgain(t *testing.T)
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
@@ -323,6 +326,7 @@ func TestEnsureTeamApprovalChannel_BotTeamJoinFailureStillCreates(t *testing.T) 
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 

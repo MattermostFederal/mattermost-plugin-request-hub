@@ -111,6 +111,9 @@ func (p *Plugin) OnActivate() error {
 		// "Mattermost: Request Hub" sidebar category for all current members
 		// (also renames a short-lived "Mattermost Requests" category if present).
 		p.migrateTicketChannelsToManagedCategory()
+		// One-shot: bookmark the docs in request channels created before
+		// channels were bookmarked on creation.
+		p.bookmarkDocsInExistingChannels()
 	}()
 
 	p.startTwoStepChannelReconciler()

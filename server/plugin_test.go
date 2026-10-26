@@ -31,6 +31,7 @@ func TestOnActivate_EnsuresBotAndRegistersCommand(t *testing.T) {
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()
+	api.On("GetConfig").Return(&model.Config{}).Maybe()
 
 	require.NoError(t, p.OnActivate())
 	defer func() { require.NoError(t, p.OnDeactivate()) }()

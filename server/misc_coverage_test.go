@@ -447,6 +447,8 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("GetChannelSidebarCategories", "sa1", "t1").Return(nil, testAppErr("down")).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil)
 	api.On("GetUsersInChannel", "appch", "username", 0, 200).Return([]*model.User{}, nil)
+	// No SiteURL, so the docs bookmark sweep waits for a later activation.
+	api.On("GetConfig").Return(&model.Config{}).Maybe()
 	done := make(chan struct{})
 	api.On("KVSet", kvSidebarCategoryMigrated, []byte("1")).Run(func(mock.Arguments) { close(done) }).Return(nil)
 

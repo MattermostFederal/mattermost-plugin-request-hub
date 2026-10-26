@@ -104,6 +104,7 @@ func TestSystemAdminIDSet_SkipsBotAndBlankEntries(t *testing.T) {
 func TestEnsureRootApprovalChannel_CreatesChannelAndSeedsAdmins(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(nil, testAppErr("not found"))
 	created := pluginChannelIn("root", "mattermost-channel-requests", "t1")
@@ -287,6 +288,7 @@ func TestEnsureNamedApprovalChannel_BlankTeamReturnsNil(t *testing.T) {
 func TestEnsureNamedApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	defer api.AssertExpectations(t)
+	expectDocsBookmarkAttempt(api)
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-bot-requests", false).Return(nil, testAppErr("not found"))
 	created := pluginChannelIn("botch", "mattermost-bot-requests", "t1")
