@@ -245,10 +245,8 @@ func (p *Plugin) canDecide(user *model.User, rec storedRequest) bool {
 		return p.canApproveChannelRequest(user, req.TeamID)
 	case *adminRequest:
 		return p.canApproveAdminRequest(user, req.ChannelID)
-	case *teamCreationRequest:
+	case *teamCreationRequest, *teamAdminRequest:
 		return p.canApproveTeamRequest(user)
-	case *teamAdminRequest:
-		return p.canApproveTeamAdminRequest(user, req.TeamID)
 	case *botRequest, *webhookRequest:
 		canSec, canSys := p.twoStepPools(user, "request status")
 		return canSec || canSys
