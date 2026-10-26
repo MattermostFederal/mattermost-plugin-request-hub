@@ -141,6 +141,11 @@ type configuration struct {
 	MaxPendingRequestsPerUser string
 	RequestExpiryDays         string
 
+	// BotTokenLifetimeDays is how long an access token issued with a bot
+	// request lasts. A text setting like the limits above; 0 means tokens
+	// never expire.
+	BotTokenLifetimeDays string
+
 	// --- 8. Exercise mode ---
 	// EnableExercise lets System Admins run the exercise subcommand.
 	// ExerciseScenarioJSON replaces the built-in fictional scenario when
@@ -149,9 +154,10 @@ type configuration struct {
 	ExerciseScenarioJSON string
 
 	// --- Parsed / computed (unexported) ---
-	prefixes   []channelPrefix
-	maxPending int
-	expiryDays int
+	prefixes          []channelPrefix
+	maxPending        int
+	expiryDays        int
+	tokenLifetimeDays int
 }
 
 // The defaults match plugin.json. The maximums keep the settings in a
@@ -159,8 +165,10 @@ type configuration struct {
 const (
 	defaultMaxPendingRequests = 5
 	defaultRequestExpiryDays  = 30
+	defaultBotTokenLifetime   = 365
 	maxPendingRequestsLimit   = 1000
 	maxRequestExpiryDays      = 3650
+	maxBotTokenLifetime       = 3650
 )
 
 // MaxPending returns how many requests of each kind one user may have
@@ -173,6 +181,12 @@ func (c *configuration) MaxPending() int {
 // requests never expire.
 func (c *configuration) ExpiryDays() int {
 	return c.expiryDays
+}
+
+// TokenLifetimeDays returns how many days a bot access token lasts. 0 means
+// tokens never expire.
+func (c *configuration) TokenLifetimeDays() int {
+	return c.tokenLifetimeDays
 }
 
 // allowsChannelName reports whether name still fits the configured prefix
@@ -308,6 +322,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	configuration.prefixes = parsePrefixList(configuration.ChannelNamePrefixes, p.API.LogError)
 	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
 	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
+	configuration.tokenLifetimeDays = parseNonNegativeInt(configuration.BotTokenLifetimeDays, defaultBotTokenLifetime, maxBotTokenLifetime, "BotTokenLifetimeDays", p.API.LogWarn)
 
 	// Detect PerTeamApprovalChannels being enabled for the first time so we can
 	// backfill channels for teams that existed before the setting was toggled on.

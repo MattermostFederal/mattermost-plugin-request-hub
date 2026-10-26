@@ -174,6 +174,13 @@
                 "help_text": "Pending requests older than this can no longer be approved, and stop counting toward the per-user limit. At most 3650. 0 means requests never expire. Applies to existing requests too."
             },
             {
+                "key": "BotTokenLifetimeDays",
+                "display_name": "Bot token lifetime (days)",
+                "type": "text",
+                "default": "365",
+                "help_text": "How long an access token issued with an approved bot request stays valid, up to 3650 days. 0 means tokens never expire. Only affects tokens issued after the change; this is not the request expiry above."
+            },
+            {
                 "key": "EnableExercise",
                 "display_name": "Enable exercise mode",
                 "type": "bool",

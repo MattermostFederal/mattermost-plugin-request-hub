@@ -415,7 +415,7 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		api.On("GetConfig").Return(&model.Config{})
-		_, err := p.createBotToken("tok", "bot1", "desc")
+		_, _, err := p.createBotToken("tok", "bot1", "desc")
 		require.EqualError(t, err, "SiteURL not configured")
 	})
 
@@ -425,7 +425,7 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		stubSiteURL(api, ts.URL)
-		token, err := p.createBotToken("tok", "bot1", "desc")
+		token, _, err := p.createBotToken("tok", "bot1", "desc")
 		require.NoError(t, err)
 		require.Equal(t, "secret-value", token)
 		require.Equal(t, []string{"POST /api/v4/users/bot1/tokens"}, srv.seen())
@@ -437,10 +437,47 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		stubSiteURL(api, ts.URL)
-		_, err := p.createBotToken("tok", "bot1", "desc")
+		_, _, err := p.createBotToken("tok", "bot1", "desc")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "create token")
 	})
+}
+
+func TestCreateBotToken_Lifetime(t *testing.T) {
+	for name, tc := range map[string]struct {
+		days     int
+		wantDays int
+	}{
+		"default of one year": {days: 365, wantDays: 365},
+		"custom lifetime":     {days: 30, wantDays: 30},
+		"never expires":       {days: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var sent model.UserAccessToken
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(mustMarshal(t, model.UserAccessToken{Id: "t1", Token: "secret-value", ExpiresAt: sent.ExpiresAt}))
+			}))
+			t.Cleanup(ts.Close)
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			p.getConfiguration().tokenLifetimeDays = tc.days
+			stubSiteURL(api, ts.URL)
+
+			before := time.Now()
+			_, expiresAt, err := p.createBotToken("tok", "bot1", "desc")
+
+			require.NoError(t, err)
+			require.Equal(t, sent.ExpiresAt, expiresAt)
+			if tc.wantDays == 0 {
+				require.Zero(t, sent.ExpiresAt)
+				return
+			}
+			want := before.AddDate(0, 0, tc.wantDays)
+			require.WithinDuration(t, want, time.UnixMilli(sent.ExpiresAt), time.Minute)
+		})
+	}
 }
 
 func TestScheduleTokenPostDeletion_AppendsAfterRetry(t *testing.T) {

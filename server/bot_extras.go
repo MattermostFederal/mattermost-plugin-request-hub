@@ -18,20 +18,26 @@ type tokenPostEntry struct {
 }
 
 // createBotToken creates a personal access token for botUserID using the
-// approving admin's session token. The token value is returned to the caller
-// and never stored — it exists only in the approval DM, which auto-deletes.
-func (p *Plugin) createBotToken(authToken, botUserID, description string) (string, error) {
+// approving admin's session token. The token lasts for the configured Bot
+// token lifetime. The token value and its expiry (Unix millis, 0 for never)
+// are returned to the caller and never stored — the value exists only in the
+// approval DM, which auto-deletes.
+func (p *Plugin) createBotToken(authToken, botUserID, description string) (string, int64, error) {
 	internalURL := p.internalBaseURL()
 	if internalURL == "" {
-		return "", fmt.Errorf("SiteURL not configured")
+		return "", 0, fmt.Errorf("SiteURL not configured")
+	}
+	var expiresAt int64
+	if days := p.getConfiguration().TokenLifetimeDays(); days > 0 {
+		expiresAt = time.Now().AddDate(0, 0, days).UnixMilli()
 	}
 	client := model.NewAPIv4Client(internalURL)
 	client.SetToken(authToken)
-	token, _, err := client.CreateUserAccessToken(context.Background(), botUserID, description, 0)
+	token, _, err := client.CreateUserAccessToken(context.Background(), botUserID, description, expiresAt)
 	if err != nil {
-		return "", fmt.Errorf("create token: %w", err)
+		return "", 0, fmt.Errorf("create token: %w", err)
 	}
-	return token.Token, nil
+	return token.Token, token.ExpiresAt, nil
 }
 
 // addBotToWebhookChannel puts the new bot on the channel's team and in the
@@ -121,7 +127,7 @@ func (p *Plugin) createOutgoingWebhookForBot(authToken, botUserID string, req *b
 // something to show — if all fields are empty it is a no-op.
 // The approval confirmation itself is handled by notifyRequesterInThreadCard.
 // If the reply contains a token it is scheduled for auto-deletion after 72 hours.
-func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue, incomingWebhookURL string, outgoingWebhookCreated bool, partialErrors []string) {
+func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue string, tokenExpiresAt int64, incomingWebhookURL string, outgoingWebhookCreated bool, partialErrors []string) {
 	var lines []string
 
 	if tokenValue != "" {
@@ -130,6 +136,10 @@ func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue, incomingWebhook
 			fmt.Sprintf("`%s`", tokenValue),
 			"⚠️ **Save this now.** This message auto-deletes in ~72 hours and the token cannot be retrieved again.",
 		)
+		if tokenExpiresAt > 0 {
+			lines = append(lines, fmt.Sprintf("⏳ The token expires on **%s**. Ask for a new one before then.",
+				time.UnixMilli(tokenExpiresAt).UTC().Format("January 2, 2006")+" (UTC)"))
+		}
 	}
 	if incomingWebhookURL != "" {
 		lines = append(lines, fmt.Sprintf("🔗 **Incoming webhook URL:** `%s`", incomingWebhookURL))

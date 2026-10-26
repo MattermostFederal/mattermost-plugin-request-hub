@@ -295,6 +295,7 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	}
 
 	var tokenValue string
+	var tokenExpiresAt int64
 	var incomingWebhookURL string
 	var outgoingWebhookCreated bool
 	var partialErrors []string
@@ -310,12 +311,13 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	}
 
 	if wantsToken && authToken != "" {
-		tok, tokErr := p.createBotToken(authToken, bot.UserId, "API token for @"+req.Username)
+		tok, expiresAt, tokErr := p.createBotToken(authToken, bot.UserId, "API token for @"+req.Username)
 		if tokErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("token generation failed: %s", tokErr.Error()))
 			p.API.LogError("failed to create bot token", "bot_user_id", bot.UserId, "error", tokErr.Error())
 		} else {
 			tokenValue = tok
+			tokenExpiresAt = expiresAt
 		}
 	}
 
@@ -397,7 +399,7 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		CardText:   fmt.Sprintf("Fully approved (security + system). Bot **@%s** has been created.", bot.Username),
 		StatusLine: outcome,
 	})
-	p.sendBotExtrasReply(req, tokenValue, incomingWebhookURL, outgoingWebhookCreated, partialErrors)
+	p.sendBotExtrasReply(req, tokenValue, tokenExpiresAt, incomingWebhookURL, outgoingWebhookCreated, partialErrors)
 	return result
 }
 

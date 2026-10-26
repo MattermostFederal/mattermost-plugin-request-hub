@@ -135,6 +135,8 @@ func TestOnConfigurationChange_ParsesRequestLimits(t *testing.T) {
 	require.NoError(t, p.OnConfigurationChange())
 	require.Equal(t, 2, p.getConfiguration().MaxPending())
 	require.Equal(t, defaultRequestExpiryDays, p.getConfiguration().ExpiryDays())
+	// A blank token lifetime means the one-year default.
+	require.Equal(t, defaultBotTokenLifetime, p.getConfiguration().TokenLifetimeDays())
 	api.AssertCalled(t, "LogWarn", "channel-requests: setting must be a whole number 0 or greater; using the default",
 		"setting", "RequestExpiryDays", "value", "soon", "default", defaultRequestExpiryDays)
 }
@@ -149,10 +151,12 @@ func TestOnConfigurationChange_CapsRequestLimits(t *testing.T) {
 		dest := args.Get(0).(*configuration)
 		dest.MaxPendingRequestsPerUser = "5000"
 		dest.RequestExpiryDays = "99999999999999"
+		dest.BotTokenLifetimeDays = "4000"
 	}).Return(nil)
 
 	require.NoError(t, p.OnConfigurationChange())
 	require.Equal(t, maxPendingRequestsLimit, p.getConfiguration().MaxPending())
+	require.Equal(t, maxBotTokenLifetime, p.getConfiguration().TokenLifetimeDays())
 	require.Equal(t, maxRequestExpiryDays, p.getConfiguration().ExpiryDays())
 	require.False(t, requestExpired(model.GetMillis()-day, p.getConfiguration().ExpiryDays(), model.GetMillis()))
 }
