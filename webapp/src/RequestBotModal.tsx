@@ -14,23 +14,23 @@ import type {GlobalState} from './store';
 
 const overlayStyle: React.CSSProperties = {
     position: 'fixed',
-inset: 0,
-background: 'rgba(0, 0, 0, 0.5)',
+    inset: 0,
+    background: 'rgba(0, 0, 0, 0.5)',
     display: 'flex',
-alignItems: 'center',
-justifyContent: 'center',
-zIndex: 1050,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
     background: 'var(--center-channel-bg, #fff)',
-color: 'var(--center-channel-color, #3d3c40)',
+    color: 'var(--center-channel-color, #3d3c40)',
     borderRadius: 8,
-width: 540,
-maxWidth: '90vw',
-maxHeight: '90vh',
-overflowY: 'auto',
+    width: 540,
+    maxWidth: '90vw',
+    maxHeight: '90vh',
+    overflowY: 'auto',
     padding: 24,
-boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 const sectionStyle: React.CSSProperties = {

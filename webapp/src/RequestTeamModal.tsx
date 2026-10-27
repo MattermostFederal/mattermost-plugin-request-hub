@@ -132,7 +132,7 @@ export const RequestTeamModal = () => {
                     style={{marginTop: 0}}
                 >{'Request a New Team'}</h3>
                 <p style={{opacity: 0.72}}>
-                    {'System Admin approval is required to create a new team.'}
+                    {'A System Admin must approve new teams. If your admins allow it, Team Admins of the approval team can approve them too.'}
                 </p>
 
                 {success ? (

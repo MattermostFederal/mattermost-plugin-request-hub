@@ -42,20 +42,28 @@ type webhookRequest struct {
 	twoStepState
 }
 
-// requireWebhookTargetChannel loads channelID and ensures it is a public or
-// private team channel the requester may target. System Admins skip membership.
-// Used by standalone webhook requests and bot webhook extras.
-func (p *Plugin) requireWebhookTargetChannel(requester *model.User, channelID string) (*model.Channel, error) {
+// requireWebhookTargetChannel loads channelID and ensures it is a channel the
+// requester may target with a webhookType hook: a public or private team
+// channel for incoming, a public one for outgoing. System Admins don't need
+// to be members. Used by standalone webhook requests and bot webhook extras.
+func (p *Plugin) requireWebhookTargetChannel(requester *model.User, channelID, webhookType string) (*model.Channel, error) {
 	channelID = strings.TrimSpace(channelID)
 	if channelID == "" {
 		return nil, errors.New("a target channel is required")
 	}
 	channel, appErr := p.API.GetChannel(channelID)
 	if appErr != nil {
-		return nil, errors.Wrap(appErr, "failed to load target channel")
+		p.API.LogWarn("failed to load webhook target channel", "channel_id", channelID, "error", appErr.Error())
+		return nil, errors.New("could not find the target channel")
 	}
 	if channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate {
 		return nil, errors.New("webhooks can only target public or private channels")
+	}
+	if channel.DeleteAt != 0 {
+		return nil, errors.New("webhooks can't target an archived channel")
+	}
+	if webhookType == webhookTypeOutgoing && channel.Type != model.ChannelTypeOpen {
+		return nil, errors.New("outgoing webhooks can only use public channels")
 	}
 	if requester != nil && !requester.IsSystemAdmin() {
 		if _, memErr := p.API.GetChannelMember(channelID, requester.Id); memErr != nil {
@@ -66,10 +74,12 @@ func (p *Plugin) requireWebhookTargetChannel(requester *model.User, channelID st
 }
 
 // submitWebhookRequest validates input and queues a webhook request in the
-// dedicated webhook approval channel. Unlike other request types, System Admin
-// callers are NOT given a creation bypass — the webhook creation call requires
-// the approving admin's session token, which is only available at approve-time.
+// dedicated webhook approval channel. The webhook is created at approve time
+// with the approving admin's session token.
 func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displayName, description, callbackURL string) (string, error) {
+	if !p.getConfiguration().RequestEnabled(requestTypeWebhook) {
+		return "", errors.New(webhookRequestsDisabledMsg)
+	}
 	if webhookType != webhookTypeIncoming && webhookType != webhookTypeOutgoing {
 		return "", errors.Errorf("unknown webhook type %q", webhookType)
 	}
@@ -79,16 +89,28 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 	if strings.TrimSpace(displayName) == "" {
 		return "", errors.New("a display name is required")
 	}
-	if webhookType == webhookTypeOutgoing && strings.TrimSpace(callbackURL) == "" {
-		return "", errors.New("a callback URL is required for outgoing webhooks")
+	if err := checkByteLen("display name", displayName, maxWebhookNameBytes); err != nil {
+		return "", err
+	}
+	if err := checkByteLen("description", description, maxWebhookDescriptionBytes); err != nil {
+		return "", err
+	}
+	if webhookType == webhookTypeOutgoing {
+		if strings.TrimSpace(callbackURL) == "" {
+			return "", errors.New("a callback URL is required for outgoing webhooks")
+		}
+		if err := checkCallbackURL(callbackURL); err != nil {
+			return "", err
+		}
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
 	}
 
-	channel, err := p.requireWebhookTargetChannel(requester, channelID)
+	channel, err := p.requireWebhookTargetChannel(requester, channelID, webhookType)
 	if err != nil {
 		return "", err
 	}
@@ -188,22 +210,27 @@ func (p *Plugin) createWebhookForRequest(req *webhookRequest, adminUserID string
 
 	switch req.WebhookType {
 	case webhookTypeIncoming:
+		// Owned by the requester and locked to the requested channel, so
+		// the hook posts as them and only where they asked.
 		hook, _, apiErr := client.CreateIncomingWebhook(ctx, &model.IncomingWebhook{
-			ChannelId:   req.ChannelID,
-			TeamId:      req.TeamID,
-			DisplayName: req.DisplayName,
-			Description: req.Description,
+			ChannelId:     req.ChannelID,
+			TeamId:        req.TeamID,
+			UserId:        req.RequesterID,
+			ChannelLocked: true,
+			DisplayName:   req.DisplayName,
+			Description:   req.Description,
 		})
 		if apiErr != nil {
 			return "", "", errors.Wrap(apiErr, "failed to create incoming webhook")
 		}
 		return fmt.Sprintf("Your incoming webhook **%s** was approved. Your webhook URL:\n`%s/hooks/%s`",
-			hook.DisplayName, publicURL, hook.Id), hook.Id, nil
+			escapeMarkdown(hook.DisplayName), publicURL, hook.Id), hook.Id, nil
 
 	case webhookTypeOutgoing:
 		hook, _, apiErr := client.CreateOutgoingWebhook(ctx, &model.OutgoingWebhook{
 			TeamId:       req.TeamID,
 			ChannelId:    req.ChannelID,
+			CreatorId:    req.RequesterID,
 			DisplayName:  req.DisplayName,
 			Description:  req.Description,
 			CallbackURLs: []string{req.CallbackURL},
@@ -212,7 +239,7 @@ func (p *Plugin) createWebhookForRequest(req *webhookRequest, adminUserID string
 		if apiErr != nil {
 			return "", "", errors.Wrap(apiErr, "failed to create outgoing webhook")
 		}
-		return fmt.Sprintf("Your outgoing webhook **%s** was approved and is now active.", hook.DisplayName), hook.Id, nil
+		return fmt.Sprintf("Your outgoing webhook **%s** was approved and is now active.", escapeMarkdown(hook.DisplayName)), hook.Id, nil
 
 	default:
 		return "", "", errors.Errorf("unknown webhook type: %s", req.WebhookType)
@@ -322,6 +349,7 @@ func (p *Plugin) postWebhookApprovalRequest(req *webhookRequest, requester *mode
 	webhookCh := p.ensureWebhookApprovalChannel()
 	go p.reconcileTwoStepApproverChannels()
 	return p.postApprovalAttachment(
+		req.ID,
 		p.webhookApprovalAttachment(req, requester, channel),
 		p.webhookApprovalHeader(),
 		webhookCh,
@@ -342,16 +370,16 @@ func (p *Plugin) webhookApprovalAttachment(req *webhookRequest, requester *model
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
 		{Title: "Type", Value: typeLabel, Short: true},
 		{Title: "Target channel", Value: fmt.Sprintf("~%s", channel.Name), Short: true},
-		{Title: "Display name", Value: req.DisplayName, Short: true},
+		{Title: "Display name", Value: escapeMarkdown(req.DisplayName), Short: true},
 		{Title: "Approvals", Value: p.twoStepStatusValue(req.twoStepState), Short: false},
 	}
 
 	var details []string
 	if req.Description != "" {
-		details = append(details, fmt.Sprintf("**Description:** %s", req.Description))
+		details = append(details, fmt.Sprintf("**Description:** %s", escapeMarkdown(req.Description)))
 	}
 	if req.CallbackURL != "" {
-		details = append(details, fmt.Sprintf("**Callback URL:** `%s`", req.CallbackURL))
+		details = append(details, fmt.Sprintf("**Callback URL:** %s", escapeMarkdown(req.CallbackURL)))
 	}
 
 	siteURL := "/plugins/" + manifest.Id
@@ -445,7 +473,7 @@ func (p *Plugin) openIncomingWebhookDialog(triggerID string) error {
 				Name:        fieldDisplayName,
 				Type:        "text",
 				Placeholder: "e.g. Monitoring Alerts",
-				MaxLength:   64,
+				MaxLength:   maxWebhookNameBytes,
 			},
 			{
 				DisplayName: "Description / purpose",
@@ -453,7 +481,7 @@ func (p *Plugin) openIncomingWebhookDialog(triggerID string) error {
 				Type:        "textarea",
 				Optional:    true,
 				Placeholder: "What service is this for? What events does it send?",
-				MaxLength:   500,
+				MaxLength:   maxWebhookDescriptionBytes,
 			},
 		},
 	}
@@ -487,7 +515,7 @@ func (p *Plugin) openOutgoingWebhookDialog(triggerID string) error {
 				Name:        fieldDisplayName,
 				Type:        "text",
 				Placeholder: "e.g. Incident Relay",
-				MaxLength:   64,
+				MaxLength:   maxWebhookNameBytes,
 			},
 			{
 				DisplayName: "Description / purpose",
@@ -495,7 +523,7 @@ func (p *Plugin) openOutgoingWebhookDialog(triggerID string) error {
 				Type:        "textarea",
 				Optional:    true,
 				Placeholder: "What does this webhook do? What service does it relay to?",
-				MaxLength:   500,
+				MaxLength:   maxWebhookDescriptionBytes,
 			},
 			{
 				DisplayName: "Callback URL",
@@ -503,7 +531,7 @@ func (p *Plugin) openOutgoingWebhookDialog(triggerID string) error {
 				Type:        "text",
 				Placeholder: "https://example.com/mattermost-hook",
 				HelpText:    "The external URL Mattermost will POST to when messages are sent in the target channel.",
-				MaxLength:   1024,
+				MaxLength:   maxCallbackURLLen,
 			},
 		},
 	}

@@ -33,6 +33,7 @@ func TestHandleBotAction_UserGroupDualRoleFillsOnlySecurity(t *testing.T) {
 
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{
+		AllowBotTokenRequests: true,
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
 		SystemApproverGroup:   "system-approvers",
@@ -61,7 +62,8 @@ func TestHandleBotAction_UserGroupDualRoleFillsOnlySecurity(t *testing.T) {
 	api.On("GetUser", "dual").Return(dual, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer"}, nil)
 	api.On("KVGet", kvBotRequestPrefix+"bot-req-1").Return(raw, nil)
-	api.On("GetGroupsForUser", "dual").Return([]*model.Group{{Name: &secName}}, nil)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	api.On("GetGroupsForUser", "dual").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil)
 
 	// refreshTicketThread lookups
 	api.On("KVSet", kvApprovalPostPrefix+"post1", mock.Anything).Return(nil)
@@ -122,7 +124,8 @@ func TestPlanAndApply_UserGroupDualRoleEndToEnd(t *testing.T) {
 	})
 
 	secName := "security-approvers"
-	api.On("GetGroupsForUser", "dual").Return([]*model.Group{{Name: &secName}}, nil)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	api.On("GetGroupsForUser", "dual").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil)
 
 	dual := &model.User{Id: "dual", Roles: "system_user system_admin"}
 	canSec, err := p.canApproveStep(dual, stepSecurity)
@@ -142,7 +145,8 @@ func TestPlanAndApply_UserGroupDualRoleEndToEnd(t *testing.T) {
 	require.Empty(t, state.SystemApproverID)
 
 	// Second distinct dual-role user completes system only.
-	api.On("GetGroupsForUser", "dual2").Return([]*model.Group{{Name: &secName}}, nil)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	api.On("GetGroupsForUser", "dual2").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil)
 	dual2 := &model.User{Id: "dual2", Roles: "system_user system_admin"}
 	canSec2, err := p.canApproveStep(dual2, stepSecurity)
 	require.NoError(t, err)

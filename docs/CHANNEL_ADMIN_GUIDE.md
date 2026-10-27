@@ -3,8 +3,8 @@
 Mattermost Request Hub also lets a member **request that someone be made a
 Channel Admin** on a channel that already exists — without giving every member
 the ability to manage the channel directly. The request goes to an approver;
-on approval the nominee is added to the channel (if not already a member) and
-granted the Channel Admin role.
+on approval the nominee is granted the Channel Admin role. Nominees must already
+be members of the channel: this flow never adds anyone to a channel.
 
 > Companion guides: [new channels](CHANNEL_CREATION_GUIDE.md) ·
 > [teams](TEAM_REQUEST_GUIDE.md) ·
@@ -56,7 +56,8 @@ items (the slash command still works if the feature is enabled).
 | **Make Channel Admin** | Search and add one or more people to be promoted to Channel Admin. Start typing a name and pick from the list. |
 
 Everyone you add is promoted to Channel Admin once an approver accepts the
-request. Anyone who isn't already in the channel is added to it first.
+request. Everyone you nominate must already be a member of the channel; if
+someone isn't, add them to the channel first (or ask a Channel Admin to).
 
 Click **Submit request**. You'll see a confirmation, and you'll get a direct
 message when an approver responds. If your admin hasn't configured an approval
@@ -90,17 +91,21 @@ ticket DM Thread (not a new root DM to the bot).
 
 The request is posted to the **approval channel**, and everyone who can act on it
 is @-mentioned there: every **System Admin** plus the **Team Admins** of the
-channel's team. Any of them can **Approve** or **Deny**.
+channel's team. Any of them can **Approve** or **Deny**, except that only a
+System Admin can approve a request they made themselves. Team Admins of other
+teams, including the approval team, can't act on it.
 
 <img src="images/channel-admin-request/mattermost-promotion-approval-card.png" alt="Channel Admin approval card" width="720">
 
-- **Approve** — each nominee is added to the channel (if needed) and promoted to
-  Channel Admin. A bot message in the channel announces who can now manage it,
-  and the requester is notified by DM.
+- **Approve** — each nominee who is still a member of the channel is promoted to
+  Channel Admin. Anyone who has left since the request was made is skipped, and
+  the approval message, DM and audit line list only who was actually promoted.
+  A bot message in the channel announces who can now manage it.
 - **Deny** — the request is closed and the requester is notified by DM.
 
-Requests from **System Admins** skip this
-step — the nominees are promoted immediately.
+Requests from **System Admins** are queued for approval too. A System Admin can
+approve their own request. Anyone else can't approve a request they made or one
+that nominates them.
 
 ---
 
@@ -113,7 +118,7 @@ requests, in **System Console → Plugins → Mattermost Request Hub**:
 |---------|---------|
 | **Approval team** | The team that owns plugin-managed approval channels. Required. |
 | **Allow channel admin requests** | Enables Channel Admin entry points. |
-| **Team Admins can approve requests** | Also lets Team Admins of the approval team approve/deny. (Team Admins of the *requested channel's* team can always act on that channel's admin requests.) |
+| **Team Admins can approve requests** | Applies to channel-creation requests only. Channel Admin requests are always reviewed by System Admins and the Team Admins of the *requested channel's* team, whatever this is set to. |
 | **Per-team approval channels** | Default on. Same per-team routing as channel creation — requests go to that team's `mattermost-channel-requests` when it has a Team Admin or System Admin. |
 
 See the [channel-creation guide](CHANNEL_CREATION_GUIDE.md#admin-setup) for the full settings

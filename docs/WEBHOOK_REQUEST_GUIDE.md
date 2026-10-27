@@ -67,7 +67,7 @@ or group messages (those can't be webhook targets).
 
 | Field | What it does |
 |-------|--------------|
-| **Source channel** | Pre-filled with your current channel (read-only). |
+| **Source channel** | Pre-filled with your current channel (read-only). Must be a public channel: Mattermost runs outgoing webhooks only on public channels. |
 | **Display name** | Label shown on the Integrations page. |
 | **Callback URL** | Required. The `https://` (or `http://`) endpoint Mattermost will POST to. |
 | **Description** | Optional. |
@@ -122,9 +122,8 @@ If an incoming webhook URL can't be delivered to the requester, the hook is
 
 ### System Admin note
 
-Webhooks have **no single-click System Admin bypass**. System Admins still go
-through the queue; they can fill the system step, but a security approver must
-fill the other.
+Requests from System Admins are queued like any other. A System Admin can fill
+the system step, but a security approver must fill the other.
 
 If webhook creation fails after both steps, the card stays pending with an error
 so the final approver can retry.

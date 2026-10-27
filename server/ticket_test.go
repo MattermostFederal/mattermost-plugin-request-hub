@@ -138,3 +138,25 @@ func TestNotifyTicketProgress(t *testing.T) {
 	})
 	api.AssertCalled(t, "UpdatePost", mock.Anything)
 }
+
+func TestPersistTicketPosts_LostOrFailedWriteSkipsRelay(t *testing.T) {
+	for name, casErr := range map[string]*model.AppError{"lost": nil, "failed": testAppErr("kv down")} {
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogLevels(api)
+			defer api.AssertExpectations(t)
+			p := newTestPlugin(api)
+
+			rawBefore := []byte(`{"id":"r1"}`)
+			api.On("KVCompareAndSet", kvRequestPrefix+"r1", rawBefore, mock.Anything).Return(false, casErr)
+
+			p.persistTicketPosts(ticketPersist{
+				KVKey: kvRequestPrefix + "r1", RawBefore: rawBefore, Record: map[string]string{"id": "r1"},
+				RequestID: "r1", Label: "channel request",
+				Thread: ticketThread{ApprovalPostID: "ap1", DMRootPostID: "dm1", Kind: requestTypeChannel},
+			})
+
+			api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
+		})
+	}
+}

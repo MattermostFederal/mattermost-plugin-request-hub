@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/pkg/errors"
 )
 
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
@@ -57,7 +58,7 @@ func (p *Plugin) stopTwoStepChannelReconciler() {
 }
 
 // reconcileTwoStepApproverChannels is the periodic path: group/attribute member
-// listing only — never the full-directory user scan.
+// listing only.
 func (p *Plugin) reconcileTwoStepApproverChannels() {
 	cfg := p.getConfiguration()
 	switch cfg.twoStepMode() {
@@ -68,7 +69,7 @@ func (p *Plugin) reconcileTwoStepApproverChannels() {
 	default:
 		return
 	}
-	ids := p.listTwoStepApproverUserIDs(false)
+	ids := p.listTwoStepApproverUserIDs()
 	if len(ids) == 0 {
 		return
 	}
@@ -93,7 +94,7 @@ func (p *Plugin) syncTwoStepApproverChannels() {
 			p.linkTwoStepGroupsToChannel(ch)
 		}
 	}
-	ids := p.listTwoStepApproverUserIDs(true)
+	ids := p.listTwoStepApproverUserIDs()
 	p.API.LogInfo("two-step channel access: reseeding approvers into bot/webhook channels",
 		"count", len(ids))
 	for _, userID := range ids {
@@ -118,8 +119,8 @@ func (p *Plugin) linkTwoStepGroupsToChannel(ch *model.Channel) {
 		if name == "" {
 			continue
 		}
-		group := p.resolveApproverGroup(name)
-		if group == nil || !group.IsSyncable() {
+		group, err := p.resolveApproverGroup(name)
+		if err != nil || !group.IsSyncable() {
 			continue
 		}
 		if ch.TeamId != "" {
@@ -333,10 +334,8 @@ func (p *Plugin) addUserToApprovalChannel(ch *model.Channel, userID string) {
 	}
 }
 
-// listTwoStepApproverUserIDs returns pool member IDs. When allowUserScan is
-// true (activate / config change), unresolved custom groups fall back to a
-// full-directory scan. Periodic reconcile keeps allowUserScan false.
-func (p *Plugin) listTwoStepApproverUserIDs(allowUserScan bool) []string {
+// listTwoStepApproverUserIDs returns pool member IDs.
+func (p *Plugin) listTwoStepApproverUserIDs() []string {
 	cfg := p.getConfiguration()
 	seen := map[string]struct{}{}
 	var out []string
@@ -356,7 +355,7 @@ func (p *Plugin) listTwoStepApproverUserIDs(allowUserScan bool) []string {
 		return nil
 	case twoStepModeUserGroup:
 		for _, step := range []approverStep{stepSecurity, stepSystem} {
-			for _, id := range p.listApproverGroupMemberIDs(cfg.approverGroupName(step), allowUserScan) {
+			for _, id := range p.listApproverGroupMemberIDs(cfg.approverGroupName(step)) {
 				add(id)
 			}
 		}
@@ -377,81 +376,72 @@ func normalizeApproverGroupName(groupName string) string {
 	return strings.TrimPrefix(groupName, "@")
 }
 
-// resolveApproverGroup finds a custom or LDAP group by configured name/handle.
-// GetGroupByName alone often misses custom user groups depending on server
-// version/opts — fall back to GetGroups / GetGroupsBySource.
-func (p *Plugin) resolveApproverGroup(groupName string) *model.Group {
+// resolveApproverGroup finds the LDAP or plugin-synced group configured as an
+// approver pool, by name or display name. Custom groups are never used: any
+// user can create one or add themselves to it. Returns an error when no such
+// group can be found; it never returns (nil, nil).
+func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	groupName = normalizeApproverGroupName(groupName)
 	if groupName == "" {
-		return nil
-	}
-
-	if group, appErr := p.API.GetGroupByName(groupName); appErr == nil && group != nil && group.DeleteAt == 0 {
-		return group
+		return nil, errors.New("no approver group is configured")
 	}
 
 	want := strings.ToLower(groupName)
+	customMatch := false
 	match := func(g *model.Group) bool {
 		if g == nil || g.DeleteAt != 0 {
 			return false
 		}
-		if g.Name != nil && strings.ToLower(*g.Name) == want {
-			return true
+		if (g.Name == nil || strings.ToLower(*g.Name) != want) && strings.ToLower(g.DisplayName) != want {
+			return false
 		}
-		return strings.ToLower(g.DisplayName) == want
+		if g.Source == model.GroupSourceCustom {
+			customMatch = true
+			return false
+		}
+		return true
 	}
 
-	for _, source := range []model.GroupSource{model.GroupSourceCustom, model.GroupSourceLdap} {
-		opts := model.GroupSearchOpts{
-			Q:                    groupName,
-			Source:               source,
-			FilterAllowReference: true,
-		}
-		groups, appErr := p.API.GetGroups(0, 100, opts, nil)
-		if appErr != nil {
-			p.API.LogDebug("two-step channel access: GetGroups failed",
-				"group", groupName, "source", string(source), "error", appErr.Error())
-		} else {
-			for _, g := range groups {
-				if match(g) {
-					return g
-				}
-			}
-		}
+	if group, appErr := p.API.GetGroupByName(groupName); appErr == nil && match(group) {
+		return group, nil
+	}
 
-		bySource, srcErr := p.API.GetGroupsBySource(source)
-		if srcErr != nil {
-			continue
-		}
-		for _, g := range bySource {
-			if match(g) {
-				return g
-			}
+	groups, appErr := p.API.GetGroups(0, 100, model.GroupSearchOpts{Q: groupName, FilterAllowReference: true}, nil)
+	if appErr != nil {
+		p.API.LogDebug("two-step channel access: GetGroups failed", "group", groupName, "error", appErr.Error())
+	}
+	for _, g := range groups {
+		if match(g) {
+			return g, nil
 		}
 	}
 
-	p.API.LogWarn("two-step channel access: could not resolve approver group",
-		"group", groupName)
-	return nil
+	bySource, appErr := p.API.GetGroupsBySource(model.GroupSourceLdap)
+	if appErr != nil {
+		return nil, errors.Wrap(appErr, "failed to list LDAP groups")
+	}
+	for _, g := range bySource {
+		if match(g) {
+			return g, nil
+		}
+	}
+
+	if customMatch {
+		p.API.LogWarn("two-step channel access: the approver group is a custom group; only LDAP or plugin-synced groups can approve",
+			"group", groupName)
+	} else {
+		p.API.LogWarn("two-step channel access: could not resolve approver group", "group", groupName)
+	}
+	return nil, errors.Errorf("approver group %q not found", groupName)
 }
 
-func (p *Plugin) listApproverGroupMemberIDs(groupName string, allowUserScan bool) []string {
-	groupName = normalizeApproverGroupName(groupName)
-	if groupName == "" {
+func (p *Plugin) listApproverGroupMemberIDs(groupName string) []string {
+	group, err := p.resolveApproverGroup(groupName)
+	if err != nil {
 		return nil
 	}
-
-	group := p.resolveApproverGroup(groupName)
-	if group != nil {
-		// Group exists — trust GetGroupMemberUsers even when empty (don't scan).
-		return p.listGroupMemberIDsByGroupID(group.Id, groupName)
-	}
-
-	if !allowUserScan {
-		return nil
-	}
-	// Unresolved custom groups: walk users via GetGroupsForUser (activate only).
-	return p.listApproverGroupMemberIDsViaUserScan(groupName)
+	// Group exists — trust GetGroupMemberUsers even when empty.
+	return p.listGroupMemberIDsByGroupID(group.Id, groupName)
 }
 
 func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
@@ -470,49 +460,6 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			}
 		}
 		if len(users) < perPage {
-			return ids
-		}
-	}
-}
-
-func (p *Plugin) listApproverGroupMemberIDsViaUserScan(groupName string) []string {
-	want := strings.ToLower(normalizeApproverGroupName(groupName))
-	if want == "" {
-		return nil
-	}
-
-	const perPage = 100
-	var ids []string
-	for page := 0; ; page++ {
-		users, appErr := p.API.GetUsers(&model.UserGetOptions{Page: page, PerPage: perPage})
-		if appErr != nil {
-			p.API.LogWarn("two-step channel access: GetUsers scan failed",
-				"group", groupName, "error", appErr.Error())
-			return ids
-		}
-		for _, u := range users {
-			if u == nil || u.Id == p.botUserID {
-				continue
-			}
-			groups, gErr := p.API.GetGroupsForUser(u.Id)
-			if gErr != nil {
-				continue
-			}
-			for _, g := range groups {
-				if g == nil || g.Name == nil {
-					continue
-				}
-				if strings.ToLower(*g.Name) == want {
-					ids = append(ids, u.Id)
-					break
-				}
-			}
-		}
-		if len(users) < perPage {
-			if len(ids) == 0 {
-				p.API.LogWarn("two-step channel access: no users found in approver group via scan",
-					"group", groupName)
-			}
 			return ids
 		}
 	}

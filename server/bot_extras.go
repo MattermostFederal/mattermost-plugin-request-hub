@@ -34,9 +34,27 @@ func (p *Plugin) createBotToken(authToken, botUserID, description string) (strin
 	return token.Token, nil
 }
 
+// addBotToWebhookChannel puts the new bot on the channel's team and in the
+// channel. An incoming webhook's owner has to be able to read its channel,
+// and a new bot starts on no team.
+func (p *Plugin) addBotToWebhookChannel(botUserID, channelID string) error {
+	channel, appErr := p.API.GetChannel(channelID)
+	if appErr != nil {
+		return fmt.Errorf("load channel: %s", appErr.Error())
+	}
+	if err := p.ensureTeamMember(channel.TeamId, botUserID); err != nil {
+		return fmt.Errorf("add bot to team: %w", err)
+	}
+	if _, appErr := p.API.AddChannelMember(channel.Id, botUserID); appErr != nil {
+		return fmt.Errorf("add bot to channel: %s", appErr.Error())
+	}
+	return nil
+}
+
 // createIncomingWebhookForBot creates an incoming webhook for the bot using the
-// approving admin's session token. Returns the full webhook URL on success.
-func (p *Plugin) createIncomingWebhookForBot(authToken, _ string, req *botRequest) (string, error) {
+// approving admin's session token. The hook posts as the bot and only to its
+// channel. Returns the full webhook URL on success.
+func (p *Plugin) createIncomingWebhookForBot(authToken, botUserID string, req *botRequest) (string, error) {
 	client := model.NewAPIv4Client(p.internalBaseURL())
 	client.SetToken(authToken)
 
@@ -52,10 +70,12 @@ func (p *Plugin) createIncomingWebhookForBot(authToken, _ string, req *botReques
 	}
 
 	hook, _, err := client.CreateIncomingWebhook(context.Background(), &model.IncomingWebhook{
-		ChannelId:   req.IncomingWebhookChannelID,
-		TeamId:      channel.TeamId,
-		DisplayName: name,
-		Description: fmt.Sprintf("Incoming webhook for bot @%s", req.Username),
+		ChannelId:     req.IncomingWebhookChannelID,
+		TeamId:        channel.TeamId,
+		UserId:        botUserID,
+		ChannelLocked: true,
+		DisplayName:   name,
+		Description:   fmt.Sprintf("Incoming webhook for bot @%s", req.Username),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create incoming webhook: %w", err)
@@ -65,9 +85,9 @@ func (p *Plugin) createIncomingWebhookForBot(authToken, _ string, req *botReques
 	return fmt.Sprintf("%s/hooks/%s", p.siteURL(), hook.Id), nil
 }
 
-// createOutgoingWebhookForBot creates an outgoing webhook for the bot using the
-// approving admin's session token.
-func (p *Plugin) createOutgoingWebhookForBot(authToken, _ string, req *botRequest) error {
+// createOutgoingWebhookForBot creates an outgoing webhook owned by the bot using
+// the approving admin's session token.
+func (p *Plugin) createOutgoingWebhookForBot(authToken, botUserID string, req *botRequest) error {
 	client := model.NewAPIv4Client(p.internalBaseURL())
 	client.SetToken(authToken)
 
@@ -84,6 +104,7 @@ func (p *Plugin) createOutgoingWebhookForBot(authToken, _ string, req *botReques
 	_, _, err := client.CreateOutgoingWebhook(context.Background(), &model.OutgoingWebhook{
 		TeamId:       channel.TeamId,
 		ChannelId:    req.OutgoingWebhookChannelID,
+		CreatorId:    botUserID,
 		DisplayName:  name,
 		Description:  fmt.Sprintf("Outgoing webhook for bot @%s", req.Username),
 		CallbackURLs: []string{req.OutgoingWebhookCallbackURL},
@@ -114,7 +135,7 @@ func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue, incomingWebhook
 		lines = append(lines, fmt.Sprintf("🔗 **Incoming webhook URL:** `%s`", incomingWebhookURL))
 	}
 	if outgoingWebhookCreated {
-		name := req.OutgoingWebhookDisplayName
+		name := escapeMarkdown(req.OutgoingWebhookDisplayName)
 		if name == "" {
 			name = "outgoing webhook"
 		}

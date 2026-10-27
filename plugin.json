@@ -82,7 +82,7 @@
                 "display_name": "Bot/webhook two-step approver mode",
                 "type": "dropdown",
                 "default": "attribute",
-                "help_text": "Bot/webhook requests require two distinct approvers: (1) a security review from the security pool, then (2) a System Admin or member of the system pool. Use User Attributes when ABAC/CPA is configured; User Groups when you manage approvers via Mattermost groups; System Admins only as a setup backup (one System Admin can complete both steps).",
+                "help_text": "Bot/webhook requests require two distinct approvers: (1) a security review from the security pool, then (2) a System Admin or member of the system pool. Use User Attributes when ABAC/CPA is configured; User Groups when you manage approvers via LDAP or plugin-synced groups; System Admins only as a setup backup (one System Admin can complete both steps).",
                 "options": [
                     {
                         "display_name": "User Attributes (ABAC / CPA)",
@@ -118,7 +118,7 @@
                 "type": "text",
                 "default": "security-approvers",
                 "placeholder": "security-approvers",
-                "help_text": "Used when mode is User Groups. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers — change freely. Clear the field only if you intentionally want System Admins to cover security during setup."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers — change freely. Clear the field only if you intentionally want System Admins to cover security during setup."
             },
             {
                 "key": "SystemApproverGroup",
@@ -126,7 +126,7 @@
                 "type": "text",
                 "default": "system-approvers",
                 "placeholder": "system-approvers",
-                "help_text": "Used when mode is User Groups. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers — change freely. Clear the field to use System Admins only for that step."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers — change freely. Clear the field to use System Admins only for that step."
             },
             {
                 "key": "ApprovalTeam",
@@ -144,7 +144,14 @@
                 "key": "AllowTeamAdminApprovers",
                 "display_name": "Team Admins can approve requests",
                 "type": "bool",
-                "help_text": "When enabled, Team Admins of the approval team can click Approve/Deny on channel and channel-admin requests in addition to System Admins."
+                "help_text": "When enabled, Team Admins of the approval team can approve or deny channel-creation requests in addition to System Admins. Team Admins of the team a channel is requested in can always act on that request. Channel Admin requests are always reviewed by System Admins and the Team Admins of the channel's own team, whatever this is set to. Nobody but a System Admin can approve their own request."
+            },
+            {
+                "key": "AllowApprovalTeamAdminsForTeamRequests",
+                "display_name": "Approval team's Team Admins can approve team and Team Admin requests",
+                "type": "bool",
+                "default": false,
+                "help_text": "When enabled, Team Admins of the approval team can approve or deny team creation and Team Admin requests in addition to System Admins, and are added to the Mattermost: Team Requests channel. Warning: they can then make anyone a Team Admin on any team, including teams they don't belong to. That is close to System Admin trust, so turn this on only where System Admins are scarce and you trust those Team Admins fully. Nobody but a System Admin can approve their own request."
             },
             {
                 "key": "ChannelNamePrefixes",

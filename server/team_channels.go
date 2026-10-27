@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,7 +41,7 @@ func (p *Plugin) resolveApprovalChannel(teamID string) (*model.Channel, string) 
 			p.API.LogInfo("channel-requests: no team/system admins on team; routing to root channel",
 				"team_id", teamID, "team_name", teamName)
 			ch := p.ensureRootApprovalChannel()
-			return ch, fmt.Sprintf("For Team: %s — ", teamName)
+			return ch, fmt.Sprintf("For Team: %s — ", escapeMarkdown(teamName))
 		}
 
 		ch, err := p.ensureTeamApprovalChannel(teamID)
@@ -111,24 +112,20 @@ func (p *Plugin) systemAdminIDSet() map[string]bool {
 // Returns nil when ApprovalTeam is blank (plugin not yet configured), so callers
 // can fall back to DMing System Admins.
 func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
-	config := p.getConfiguration()
-	teamName := strings.TrimSpace(config.ApprovalTeam)
-	if teamName == "" {
+	team, err := p.approvalTeam()
+	if err != nil {
+		p.API.LogWarn("root approval team not found; falling back to System Admin DMs", "error", err.Error())
 		return nil
 	}
+	if team == nil {
+		return nil
+	}
+	teamName := team.Name
 	channelName := "mattermost-channel-requests"
 
 	// Fast path: channel already exists.
-	if ch, appErr := p.API.GetChannelByNameForTeamName(teamName, channelName, false); appErr == nil {
+	if ch, taken := p.lookupApprovalChannel(team.Id, channelName); ch != nil || taken {
 		return ch
-	}
-
-	// Channel not found — look up the team so we can create the channel.
-	team, appErr := p.API.GetTeamByName(teamName)
-	if appErr != nil {
-		p.API.LogWarn("root approval team not found; falling back to System Admin DMs",
-			"team", teamName, "error", appErr.Error())
-		return nil
 	}
 
 	ch, appErr := p.API.CreateChannel(&model.Channel{
@@ -144,7 +141,7 @@ func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
 	})
 	if appErr != nil {
 		// A concurrent call may have beaten us — retry the lookup before surfacing the error.
-		if existing, getErr := p.API.GetChannelByNameForTeamName(teamName, channelName, false); getErr == nil {
+		if existing, _ := p.lookupApprovalChannel(team.Id, channelName); existing != nil {
 			return existing
 		}
 		p.API.LogWarn("failed to create root approval channel; falling back to System Admin DMs",
@@ -281,20 +278,17 @@ func (p *Plugin) addSystemAdminsToChannel(channelID string) {
 // System Admins and posts a one-time orientation message on first creation.
 // Returns nil when ApprovalTeam is not configured (plugin not yet set up).
 func (p *Plugin) ensureNamedApprovalChannel(name, displayName, purpose string) *model.Channel {
-	config := p.getConfiguration()
-	teamName := strings.TrimSpace(config.ApprovalTeam)
-	if teamName == "" {
-		return nil
-	}
-
-	team, appErr := p.API.GetTeamByName(teamName)
-	if appErr != nil {
+	team, err := p.approvalTeam()
+	if err != nil {
 		p.API.LogWarn("cannot ensure named approval channel — team not found",
-			"team", teamName, "channel", name, "error", appErr.Error())
+			"channel", name, "error", err.Error())
+		return nil
+	}
+	if team == nil {
 		return nil
 	}
 
-	if existing, lookupErr := p.API.GetChannelByName(team.Id, name, false); lookupErr == nil {
+	if existing, taken := p.lookupApprovalChannel(team.Id, name); existing != nil || taken {
 		return existing
 	}
 
@@ -308,7 +302,7 @@ func (p *Plugin) ensureNamedApprovalChannel(name, displayName, purpose string) *
 	})
 	if appErr != nil {
 		// Concurrent activation may have beaten us — retry lookup before failing.
-		if existing, getErr := p.API.GetChannelByName(team.Id, name, false); getErr == nil {
+		if existing, _ := p.lookupApprovalChannel(team.Id, name); existing != nil {
 			return existing
 		}
 		p.API.LogWarn("failed to create dedicated approval channel",
@@ -404,8 +398,10 @@ func (p *Plugin) ensureTeamApprovalChannel(teamID string) (*model.Channel, error
 	channelName := p.getConfiguration().TeamChannelName()
 
 	// Fast path: channel already exists.
-	if ch, appErr := p.API.GetChannelByName(teamID, channelName, false); appErr == nil {
+	if ch, taken := p.lookupApprovalChannel(teamID, channelName); ch != nil {
 		return ch, nil
+	} else if taken {
+		return nil, errors.New("the team approval channel name is taken by another channel")
 	}
 
 	team, appErr := p.API.GetTeam(teamID)
@@ -414,11 +410,10 @@ func (p *Plugin) ensureTeamApprovalChannel(teamID string) (*model.Channel, error
 	}
 
 	// Ensure the bot is a team member before creating the channel. The plugin
-	// API bypasses most permission checks, but the bot must be in the team to
-	// reliably post messages in team channels later. CreateTeamMember is
-	// idempotent — MM returns the existing membership if the bot is already in
-	// the team, so this is safe to call unconditionally.
-	if _, addErr := p.API.CreateTeamMember(teamID, p.botUserID); addErr != nil {
+	// API skips most permission checks, but the bot must be in the team to
+	// reliably post messages in team channels later. An existing membership
+	// is left alone: adding the bot again fails on current servers.
+	if addErr := p.ensureTeamMember(teamID, p.botUserID); addErr != nil {
 		p.API.LogWarn("failed to add bot to team before creating approval channel",
 			"team_id", teamID, "bot_user_id", p.botUserID, "error", addErr.Error())
 	}
@@ -437,7 +432,7 @@ func (p *Plugin) ensureTeamApprovalChannel(teamID string) (*model.Channel, error
 	if appErr != nil {
 		// A concurrent call may have beaten us to creation — retry the lookup
 		// before surfacing the error.
-		if existing, getErr := p.API.GetChannelByName(teamID, channelName, false); getErr == nil {
+		if existing, _ := p.lookupApprovalChannel(teamID, channelName); existing != nil {
 			return existing, nil
 		}
 		return nil, errors.Wrap(appErr, "failed to create team approval channel")
@@ -493,7 +488,7 @@ func (p *Plugin) postChannelWelcomeMessage(ch *model.Channel, team *model.Team) 
 			"Channel creation and Channel Admin promotion requests for the **%s** team are posted here for review.\n\n"+
 			"Team Admins will receive new-request notifications and can use the **Approve** / **Deny** buttons. "+
 			"Reply to any request thread to ask the requester for more information.",
-		team.DisplayName,
+		escapeMarkdown(team.DisplayName),
 	)
 	if _, appErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
@@ -674,4 +669,116 @@ func (p *Plugin) UserHasJoinedTeam(_ *plugin.Context, teamMember *model.TeamMemb
 		return
 	}
 	p.addChannelToPermissionsCategory(teamMember.UserId, teamMember.TeamId, ch.Id)
+}
+
+// kvApprovalTeamKey records which team the Approval team setting named when
+// it was first used, so a different team that later takes that name isn't
+// treated as the approval team.
+const kvApprovalTeamKey = "approval_team"
+
+type approvalTeamRecord struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+// approvalTeamResetHint tells an admin how to clear the recorded Approval
+// team: the record is forgotten only when the setting changes.
+const approvalTeamResetHint = "to use it, set Approval team to a different team, save, then set it back"
+
+// approvalTeam returns the team named by the Approval team setting, or nil
+// when the setting is blank. The first team found for a name is recorded;
+// if that name later belongs to a different team (the original was renamed
+// or deleted), approvalTeam returns an error until the setting is changed
+// and changed back. Archived teams are refused.
+func (p *Plugin) approvalTeam() (*model.Team, error) {
+	name := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
+	if name == "" {
+		return nil, nil
+	}
+	team, appErr := p.API.GetTeamByName(name)
+	if appErr != nil || team == nil {
+		return nil, errors.Errorf("approval team %q not found", name)
+	}
+	if team.DeleteAt != 0 {
+		return nil, errors.Errorf("approval team %q is archived", name)
+	}
+
+	record, _ := json.Marshal(approvalTeamRecord{Name: name, ID: team.Id}) // always marshals
+	// Two tries: if another server records a team between our read and
+	// write, the second pass checks what it recorded.
+	for range 2 {
+		data, appErr := p.API.KVGet(kvApprovalTeamKey)
+		if appErr != nil {
+			return nil, errors.Wrap(appErr, "failed to load the recorded approval team")
+		}
+		if data != nil {
+			var recorded approvalTeamRecord
+			if err := json.Unmarshal(data, &recorded); err != nil {
+				p.API.LogError("The recorded Approval team can't be read, so the Approval team isn't used. In the plugin settings, set Approval team to a different team, save, then set it back.",
+					"error", err.Error())
+				return nil, errors.Wrap(err, "failed to read the recorded approval team")
+			}
+			if recorded.Name == name {
+				if recorded.ID != team.Id {
+					p.API.LogError("The team named in the Approval team setting is not the team that was selected. In the plugin settings, set Approval team to a different team, save, then set it back.",
+						"team", name, "recorded_team_id", recorded.ID, "team_id", team.Id)
+					return nil, errors.Errorf("the team named %q is not the team that was selected as the Approval team; %s", name, approvalTeamResetHint)
+				}
+				return team, nil
+			}
+		}
+
+		saved, appErr := p.API.KVCompareAndSet(kvApprovalTeamKey, data, record)
+		if appErr != nil {
+			p.API.LogWarn("failed to record the approval team", "team", name, "error", appErr.Error())
+			return team, nil
+		}
+		if saved {
+			return team, nil
+		}
+	}
+	return nil, errors.New("the recorded approval team kept changing; try again")
+}
+
+// forgetApprovalTeam clears the recorded approval team so the next lookup
+// records whichever team the setting names.
+func (p *Plugin) forgetApprovalTeam() {
+	if appErr := p.API.KVDelete(kvApprovalTeamKey); appErr != nil {
+		p.API.LogWarn("failed to clear the recorded approval team", "error", appErr.Error())
+	}
+}
+
+// isPluginApprovalChannel reports whether ch is a live private channel this
+// plugin's bot created, the only kind used for approval cards.
+func (p *Plugin) isPluginApprovalChannel(ch *model.Channel) bool {
+	return ch != nil && ch.Type == model.ChannelTypePrivate && ch.CreatorId == p.botUserID && ch.DeleteAt == 0
+}
+
+// lookupApprovalChannel finds the approval channel with the given name in a
+// team. taken is true when a channel with that name exists but the plugin
+// didn't create it; approval cards are then not posted there, and an admin
+// is asked to rename that channel.
+func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, taken bool) {
+	existing, appErr := p.API.GetChannelByName(teamID, name, true)
+	if appErr != nil || existing == nil {
+		return nil, false
+	}
+	if p.isPluginApprovalChannel(existing) {
+		return existing, false
+	}
+	p.API.LogError("An approval channel name is used by a channel the plugin can't use (archived, public, or not created by the plugin), so requests are sent elsewhere. Rename that channel so the plugin can create its own.",
+		"team_id", teamID, "channel_id", existing.Id, "channel_name", name)
+	return nil, true
+}
+
+// ensureTeamMember adds userID to the team unless they're already an active
+// member.
+func (p *Plugin) ensureTeamMember(teamID, userID string) error {
+	if member, appErr := p.API.GetTeamMember(teamID, userID); appErr == nil && member != nil && member.DeleteAt == 0 {
+		return nil
+	}
+	if _, appErr := p.API.CreateTeamMember(teamID, userID); appErr != nil {
+		return appErr
+	}
+	return nil
 }

@@ -29,7 +29,7 @@ type teamMemberRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs []string, reason string, forceQueue bool) (string, error) {
+func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs []string, reason string) (string, error) {
 	if !p.getConfiguration().RequestEnabled(requestTypeTeamMember) {
 		return "", errors.New(teamMemberRequestsDisabledMsg)
 	}
@@ -40,15 +40,29 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 	if len(nominees) == 0 {
 		return "", errors.New("pick at least one person to add to the team")
 	}
+	if err := checkIDList(nominees, "people to add"); err != nil {
+		return "", err
+	}
+	if err := checkTextLen("reason", reason, maxReasonLen); err != nil {
+		return "", err
+	}
 
 	team, appErr := p.API.GetTeam(teamID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load team")
+		p.API.LogWarn("failed to load team for team member request", "team_id", teamID, "error", appErr.Error())
+		return "", errors.New("could not find that team")
+	}
+	if team.IsGroupConstrained() {
+		return "", errors.New("this team's members are managed by groups, so people can't be added by request")
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
+	}
+	if err := p.checkNominees(nominees, nomineeRules{role: "a team member", allowBots: true, allowGuests: true}); err != nil {
+		return "", err
 	}
 
 	req := &teamMemberRequest{
@@ -62,16 +76,6 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 	// Any authenticated user may nominate people onto any team; System Admins
 	// approve. Membership of the requester on the target team is intentionally
 	// not required — governance is the approval card, not submit-side RBAC.
-	if !forceQueue && requester.IsSystemAdmin() {
-		failed := p.addTeamMembers(req)
-		added := exceptIDs(req.NomineeIDs, failed)
-		if len(added) > 0 {
-			p.logAudit(auditDirect, fmt.Sprintf("@%s added %s to team %s",
-				requester.Username, p.mentionList(added), team.DisplayName), "")
-		}
-		return p.teamMemberOutcomeMessage(added, failed, team.DisplayName), nil
-	}
-
 	if err := p.storeTeamMemberRequest(req); err != nil {
 		return "", err
 	}
@@ -146,24 +150,11 @@ func exceptIDs(all, exclude []string) []string {
 	return out
 }
 
-func (p *Plugin) teamMemberOutcomeMessage(added, failed []string, teamDisplay string) string {
-	switch {
-	case len(added) > 0 && len(failed) > 0:
-		return fmt.Sprintf("Added %s to **%s**. Failed for %s.",
-			p.mentionList(added), teamDisplay, p.mentionList(failed))
-	case len(added) > 0:
-		return fmt.Sprintf("Added %s to **%s**.", p.mentionList(added), teamDisplay)
-	case len(failed) > 0:
-		return fmt.Sprintf("Could not add %s to **%s**.", p.mentionList(failed), teamDisplay)
-	default:
-		return fmt.Sprintf("No users were added to **%s**.", teamDisplay)
-	}
-}
-
 func (p *Plugin) postTeamMemberApprovalRequest(req *teamMemberRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
 	header := p.systemAdminMentions() + " — a team member request needs System Admin review."
 	return p.postApprovalAttachment(
+		req.ID,
 		p.teamMemberApprovalAttachment(req, requester, team),
 		header,
 		ch,
@@ -173,11 +164,11 @@ func (p *Plugin) postTeamMemberApprovalRequest(req *teamMemberRequest, requester
 func (p *Plugin) teamMemberApprovalAttachment(req *teamMemberRequest, requester *model.User, team *model.Team) *model.MessageAttachment {
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
-		{Title: "Team", Value: team.DisplayName, Short: true},
+		{Title: "Team", Value: escapeMarkdown(team.DisplayName), Short: true},
 		{Title: "Users to add", Value: p.mentionList(req.NomineeIDs), Short: false},
 	}
 	if req.Reason != "" {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: req.Reason, Short: false})
+		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: escapeMarkdown(req.Reason), Short: false})
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
@@ -245,7 +236,7 @@ func (p *Plugin) openTeamMemberRequestDialog(triggerID, teamID string) error {
 		IntroductionText: fmt.Sprintf(
 			"Nominate existing Mattermost users **or bots** to be added to **%s**. System Admin approval is required.\n\n"+
 				"**Adding a bot:** search for the bot username below (create the bot first via Request a Bot if needed). Same approval process as people.",
-			teamName,
+			escapeMarkdown(teamName),
 		),
 		SubmitLabel: "Submit request",
 		State:       teamID,

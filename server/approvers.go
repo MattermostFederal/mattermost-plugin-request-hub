@@ -151,13 +151,7 @@ func (p *Plugin) canApproveStepViaGroup(user *model.User, step approverStep) (bo
 		p.API.LogWarn("approver group check failed", "group", groupName, "step", step.String(), "error", err.Error())
 		return p.poolLookupSoftFallback(user, step), nil
 	}
-	if in {
-		return true, nil
-	}
-	if !p.approverGroupReady(groupName) {
-		return p.poolLookupSoftFallback(user, step), nil
-	}
-	return false, nil
+	return in, nil
 }
 
 // poolLookupSoftFallback: once a security pool name is configured, System
@@ -170,32 +164,28 @@ func (p *Plugin) poolLookupSoftFallback(user *model.User, step approverStep) boo
 	return user.IsSystemAdmin()
 }
 
-// userInApproverGroup reports whether userID belongs to the named Mattermost
-// group (custom or synced). Match is case-insensitive on group.Name.
+// userInApproverGroup reports whether userID belongs to the LDAP or
+// plugin-synced group configured as groupName. It returns an error when that
+// group can't be found, so callers don't treat a failed lookup as "not a
+// member".
 func (p *Plugin) userInApproverGroup(userID, groupName string) (bool, error) {
-	groupName = strings.TrimSpace(groupName)
-	if userID == "" || groupName == "" {
+	if userID == "" || normalizeApproverGroupName(groupName) == "" {
 		return false, nil
+	}
+	group, err := p.resolveApproverGroup(groupName)
+	if err != nil {
+		return false, err
 	}
 	groups, appErr := p.API.GetGroupsForUser(userID)
 	if appErr != nil {
 		return false, errors.Wrap(appErr, "failed to list groups for user")
 	}
-	want := strings.ToLower(groupName)
 	for _, g := range groups {
-		if g == nil || g.Name == nil {
-			continue
-		}
-		if strings.ToLower(*g.Name) == want {
+		if g != nil && g.Id == group.Id {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-// approverGroupReady is true when the named group exists and is not deleted.
-func (p *Plugin) approverGroupReady(groupName string) bool {
-	return p.resolveApproverGroup(groupName) != nil
 }
 
 // securityPoolConfigured is true when attribute/usergroup mode has a non-empty

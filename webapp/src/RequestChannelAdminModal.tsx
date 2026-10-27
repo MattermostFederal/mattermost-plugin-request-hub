@@ -33,8 +33,8 @@ const fieldStyle: React.CSSProperties = {marginBottom: 16};
 
 // RequestChannelAdminModal lets a channel member request that one or more
 // people be made Channel Admin on the current channel. The request is sent to
-// an admin for approval (or applied immediately for System Admins), reusing
-// the same approval flow as channel-creation requests.
+// an admin for approval, reusing the same approval flow as channel-creation
+// requests.
 export const RequestChannelAdminModal = () => {
     const dispatch = useDispatch();
     const channelId = useSelector(getAdminModalChannelId);
@@ -147,7 +147,7 @@ export const RequestChannelAdminModal = () => {
                                 onChange={setNomineesText}
                             />
                             <small style={{opacity: 0.6, display: 'block', marginTop: 4}}>
-                                {'These users are promoted to Channel Admin once an admin approves. Anyone not already in the channel is added.'}
+                                {'These users are promoted to Channel Admin once an admin approves. They must already be members of the channel.'}
                             </small>
                         </div>
 

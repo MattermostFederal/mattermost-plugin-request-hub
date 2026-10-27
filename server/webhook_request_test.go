@@ -54,8 +54,9 @@ func mmAPIStub(t *testing.T) *httptest.Server {
 // ensureWebhookApprovalChannel (called by submitWebhookRequest).
 func stubWebhookChannel(api *plugintest.API, teamName, channelID string) {
 	api.On("GetTeamByName", teamName).Return(&model.Team{Id: "team-id", DisplayName: "App Team"}, nil)
-	api.On("GetChannelByName", "team-id", "mattermost-webhook-requests", false).
-		Return(&model.Channel{Id: channelID}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "team-id", "mattermost-webhook-requests", true).
+		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: channelID}, nil)
 }
 
 // --- submitWebhookRequest tests -------------------------------------------------
@@ -88,9 +89,9 @@ func TestSubmitWebhookRequest_RejectsUnknownType(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown webhook type")
 }
 
-// TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses verifies that unlike
-// other request types, System Admins are NOT given a creation bypass for
-// webhooks (the admin session token is only available at approve-time).
+// TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses verifies that, as
+// for every request type, a System Admin's webhook request queues for
+// approval instead of creating the webhook.
 func TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
