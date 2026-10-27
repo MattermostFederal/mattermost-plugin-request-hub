@@ -50,7 +50,7 @@ func TestSubmitTeamGuestRequest_QueuesForApproval(t *testing.T) {
 
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "team-req-ch", TeamId: "appteam-id"}, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)

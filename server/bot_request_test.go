@@ -45,7 +45,7 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil)
 	api.On("GetDirectChannel", "u_admin", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
@@ -71,7 +71,7 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	// ensureBotApprovalChannel
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 
 	var approvalPost *model.Post
