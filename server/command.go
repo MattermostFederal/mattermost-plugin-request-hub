@@ -161,7 +161,7 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 		}
 		return p.executeOutgoingWebhookRequestCommand(args)
 	default:
-		return ephemeralResponse(fmt.Sprintf("Unknown subcommand `%s`.\n\n%s", words[1].Text, commandHelpText(p.getConfiguration()))), nil
+		return ephemeralResponse(fmt.Sprintf("Unknown subcommand %s.\n\n%s", escapeMarkdown(words[1].Text), commandHelpText(p.getConfiguration()))), nil
 	}
 }
 
@@ -371,7 +371,7 @@ func commandHelpText(config *configuration) string {
 		}
 		fmt.Fprintf(&b, "\n| `/%s %s` | %s |", commandTrigger, row.usage, row.what)
 	}
-	b.WriteString("\n\nSeparate users or channels with spaces or commas. Put quotes around text that starts with `--`.")
+	b.WriteString("\n\nSeparate users or channels with spaces or commas. Put quotes around text that starts with `--`, or with an em or en dash, which autocorrect may type for `--`.")
 	return b.String()
 }
 
@@ -443,6 +443,9 @@ func splitCommandArgs(s string) ([]commandArg, error) {
 				}
 			}
 			if end < 0 {
+				if slices.ContainsFunc(runes[i+1:], isQuoteMark) {
+					return nil, errors.New("a closing quote mark must be followed by a space")
+				}
 				return nil, errors.New("a quote mark is not closed")
 			}
 			words = append(words, commandArg{Text: string(runes[i+1 : end]), Quoted: true})
@@ -523,6 +526,20 @@ func flagBool(flags map[string][]string, flag string) (bool, error) {
 	return ok, nil
 }
 
+// flagList splits the values of flag into a list, or returns nil when it
+// wasn't given. It errors when the flag is given with no usable entries.
+func flagList(flags map[string][]string, flag string) ([]string, error) {
+	values, ok := flags[flag]
+	if !ok {
+		return nil, nil
+	}
+	list := splitListArgs(values)
+	if len(list) == 0 {
+		return nil, errors.Errorf("`%s` needs at least one name", flag)
+	}
+	return list, nil
+}
+
 // splitListArgs splits each word on commas so `@a,@b`, `@a, @b` and
 // `@a @b` name the same users, and drops empty entries.
 func splitListArgs(words []string) []string {
@@ -575,8 +592,12 @@ func parseChannelCreateArgs(params []commandArg) (channelCreateInput, error) {
 	if in.Category, err = flagText(flags, "--category", "a name"); err != nil {
 		return in, err
 	}
-	in.Members = splitListArgs(flags["--members"])
-	in.Admins = splitListArgs(flags["--admins"])
+	if in.Members, err = flagList(flags, "--members"); err != nil {
+		return in, err
+	}
+	if in.Admins, err = flagList(flags, "--admins"); err != nil {
+		return in, err
+	}
 	return in, nil
 }
 
@@ -759,7 +780,11 @@ func (p *Plugin) executeTeamGuestInviteCommand(args *model.CommandArgs, params [
 	if err != nil {
 		return usage(err)
 	}
-	channelIDs, err := p.resolveChannelRefs(args.UserId, args.TeamId, splitListArgs(flags["--channels"]))
+	channelRefs, err := flagList(flags, "--channels")
+	if err != nil {
+		return usage(err)
+	}
+	channelIDs, err := p.resolveChannelRefs(args.UserId, args.TeamId, channelRefs)
 	if err != nil {
 		return ephemeralResponse(err.Error())
 	}
@@ -914,12 +939,12 @@ func (p *Plugin) executePrefixesCommand() *model.CommandResponse {
 	var b strings.Builder
 	b.WriteString("Channel prefixes you can use:\n")
 	for _, pf := range config.prefixes {
-		fmt.Fprintf(&b, "- `%s`", pf.Prefix)
+		fmt.Fprintf(&b, "- %s", inlineCode(pf.Prefix))
 		if pf.Description != "" {
 			fmt.Fprintf(&b, " %s", escapeMarkdown(pf.Description))
 		}
 		if pf.SuffixPatternRaw != "" {
-			fmt.Fprintf(&b, " (suffix rule: `%s`)", pf.SuffixPatternRaw)
+			fmt.Fprintf(&b, " (suffix rule: %s)", inlineCode(pf.SuffixPatternRaw))
 		}
 		b.WriteString("\n")
 	}

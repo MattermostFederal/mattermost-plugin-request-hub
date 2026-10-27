@@ -109,8 +109,12 @@ func TestExecuteCommand_HelpAndUnknownSubcommand(t *testing.T) {
 
 	resp = runCommand(p, "/mattermost-request-hub bogus")
 	require.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-	require.Contains(t, resp.Text, "Unknown subcommand `bogus`")
+	require.Contains(t, resp.Text, "Unknown subcommand bogus.")
 	require.Contains(t, resp.Text, commandHelpText(p.getConfiguration()))
+
+	// A backtick can't open live Markdown in the reply.
+	resp = runCommand(p, "/mattermost-request-hub x`[click](http://evil.test)")
+	require.True(t, strings.HasPrefix(resp.Text, "Unknown subcommand x\\`\\[click\\]\\("), resp.Text)
 }
 
 func TestExecuteCommand_BareCommandWithTrailingSpaceOpensDialog(t *testing.T) {
@@ -149,12 +153,14 @@ func TestExecuteCommand_Prefixes(t *testing.T) {
 	p.setConfiguration(&configuration{AllowChannelRequests: true, prefixes: []channelPrefix{
 		{Prefix: "team-", Description: "Team *channels*"},
 		{Prefix: "proj-", SuffixPatternRaw: "^[0-9]{4}$"},
+		{Prefix: "x`-", SuffixPatternRaw: "^a`b$"},
 	}})
 	resp := runCommand(p, "/mattermost-request-hub prefixes")
 	require.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
 	require.Equal(t, "Channel prefixes you can use:\n"+
 		"- `team-` Team \\*channels\\*\n"+
-		"- `proj-` (suffix rule: `^[0-9]{4}$`)", resp.Text)
+		"- `proj-` (suffix rule: `^[0-9]{4}$`)\n"+
+		"- `x-` (suffix rule: `^ab$`)", resp.Text)
 }
 
 func TestParseChannelCreateArgs(t *testing.T) {

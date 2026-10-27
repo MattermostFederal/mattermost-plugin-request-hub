@@ -285,6 +285,12 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
     const orderedCandidates = [...assigned, ...available];
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        // Backspace on empty input removes the last selected user.
+        if (e.key === 'Backspace' && !query && selected.length > 0) {
+            commit(selected.slice(0, -1));
+            return;
+        }
+
         // With no visible dropdown, Enter still accepts the literal
         // typed name (useful for offline / unknown-user fallback).
         if (!showDropdown || orderedCandidates.length === 0) {
@@ -317,9 +323,6 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
                 e.stopPropagation();
                 setShowDropdown(false);
             }
-        } else if (e.key === 'Backspace' && !query && selected.length > 0) {
-            // Backspace on empty input removes the last selected user.
-            commit(selected.slice(0, -1));
         }
     };
 

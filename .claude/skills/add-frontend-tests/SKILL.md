@@ -21,20 +21,19 @@ This skill uses a plan-then-execute workflow:
 
 ## Step 1: Measure Current Coverage (in plan mode)
 
-`make coverage-frontend` calls three npm scripts, `test:coverage`, `test:pw-ct-coverage` and `test:coverage-merged`, that **do not exist yet** in `webapp/package.json`, so the target fails today. Do not report coverage numbers you did not measure.
-
-Pick one, and say which in the plan:
-
-1. **Add the coverage scripts** (unit coverage with C8, component coverage with V8 browser coverage, and a merged report) as the first task of the plan, then measure. This changes `package.json` and may add dev dependencies, so it needs the user's approval like any other task.
-2. **Measure by inventory** when the user does not want tooling changes: list every module under `webapp/src/` and whether it has a `.spec.ts` or `.pw.tsx` beside it, and read the existing tests to see which branches they reach. Treat a module with no test as 0%.
+Run the full coverage suite from the repo root:
 
 ```bash
-cd webapp
-find src -name '*.ts' -o -name '*.tsx' | grep -v -e '\.spec\.ts$' -e '\.pw\.tsx$' -e '/types/' -e 'manifest.ts$' | sort
-find src -name '*.spec.ts' -o -name '*.pw.tsx' | sort
+make coverage-frontend
 ```
 
-Today only `src/manifest.spec.ts` and `src/HeaderIcon.pw.tsx` exist, so nearly every module starts in Tier 1.
+It runs three npm scripts in `webapp/package.json`:
+
+- `test:coverage`: unit tests (`*.spec.ts`) under C8, configured by `c8-unit.json`.
+- `test:pw-ct-coverage`: component tests (`*.pw.tsx`). Browser V8 coverage is collected by the fixture in `playwright/ct-coverage.ts`, so every component test must import `test` and `expect` from there, not from `@playwright/experimental-ct-react`, or its coverage is lost.
+- `test:coverage-merged`: merges both, configured by `c8-merged.json`. It counts every source file under `src/`, including ones no test loads. **Use this report for the gates below.**
+
+Component coverage is skipped when `CI` is set, so read the merged number from a local run.
 
 ### Coverage Threshold Check
 
@@ -93,7 +92,7 @@ Exit plan mode and wait for user approval before proceeding to Step 3.
 - Run: `cd webapp && npm run test:pw`
 
 **Component Tests (`.pw.tsx`)**, run in a browser via Playwright Component Testing (`webapp/playwright-ct.config.ts`, setup in `webapp/playwright/index.tsx`):
-- For React components with real DOM rendering: `RequestChannelModal`, `RequestChannelAdminModal`, `MemberPicker`, `PrefixEditor`, `ApprovalChannelPicker`, `AutoApprovePicker`, `HeaderIcon`
+- For React components with real DOM rendering: `RequestChannelModal`, `RequestChannelAdminModal`, `MemberPicker`, `PrefixEditor`, `ApprovalChannelPicker`, `HeaderIcon`, `RequestHubModal`, the team, bot and webhook request modals
 - File pattern: beside the component, `src/<Component>.pw.tsx`
 - Run: `cd webapp && npm run test:pw-ct`
 
@@ -103,9 +102,9 @@ Exit plan mode and wait for user approval before proceeding to Step 3.
 
 **Redux state.** `src/store.ts` holds a plain reducer and action creators with no module-level state, so there is nothing to reset between tests. Test the reducer as a pure function. For a component that reads the store, mount it inside a `Provider` with a store built from a minimal `GlobalState` for that test.
 
-**Route mocking for API calls.** The plugin id is `com.mattermostfederal.channel-requests`, and `src/client.ts` calls `/plugins/<id>/api/v1/...`:
+**Route mocking for API calls.** The plugin id is `com.mattermostfederal.mattermost-plugin-request-hub`, and `src/client.ts` calls `/plugins/<id>/api/v1/...`:
 ```typescript
-await page.route('**/plugins/com.mattermostfederal.channel-requests/api/v1/prefixes', (route) => {
+await page.route('**/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/prefixes', (route) => {
     route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -116,7 +115,7 @@ await page.route('**/plugins/com.mattermostfederal.channel-requests/api/v1/prefi
 
 **Error route mocking:**
 ```typescript
-await page.route('**/plugins/com.mattermostfederal.channel-requests/api/v1/create', (route) => {
+await page.route('**/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/create', (route) => {
     route.fulfill({
         status: 400,
         contentType: 'application/json',
@@ -125,7 +124,7 @@ await page.route('**/plugins/com.mattermostfederal.channel-requests/api/v1/creat
 });
 
 // Network failure simulation
-await page.route('**/plugins/com.mattermostfederal.channel-requests/api/**', (route) => {
+await page.route('**/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/**', (route) => {
     route.abort('connectionrefused');
 });
 ```
@@ -236,7 +235,7 @@ The reducer and action creators in `store.ts`, the `client.ts` fetch wrappers, a
 Components that have some tests but miss important states (error, loading, empty).
 
 **Phase 3, Interaction and integration tests:**
-The request form end to end: prefix selection, suffix validation against `suffix_regex`, member and Channel Admin pickers, submit success and error. The admin-console editors (`PrefixEditor`, `ApprovalChannelPicker`, `AutoApprovePicker`) reading and writing their setting value.
+The request form end to end: prefix selection, suffix validation against `suffix_regex`, member and Channel Admin pickers, submit success and error. The admin-console editors (`PrefixEditor`, `ApprovalChannelPicker`) reading and writing their setting value.
 
 **Phase 4, Edge cases and error resilience:**
 Malformed JSON inputs, network failures, rapid user interactions, concurrent state updates, cleanup during unmount.
@@ -280,9 +279,9 @@ Report the before/after coverage delta per file and overall from the merged cove
 - **Not reading existing tests first**: you'll write duplicates or miss established helper functions.
 - **Flaky async assertions**: use `await expect(locator).toBeVisible()` (auto-retrying) instead of checking once.
 - **Forgetting route mocks**: component tests that make API calls will fail or hang without `page.route()` setup.
-- **Using the wrong plugin ID in route mocks**: it is `com.mattermostfederal.channel-requests`, from `plugin.json`. API calls will not be intercepted with the wrong path.
+- **Using the wrong plugin ID in route mocks**: it is `com.mattermostfederal.mattermost-plugin-request-hub`, from `plugin.json`. API calls will not be intercepted with the wrong path.
 - **CSS selector fragility**: prefer semantic locators (`getByRole`, `getByText`, `getByTestId`) over CSS class selectors.
 - **Missing cleanup in afterEach**: tracked state must be cleaned up to prevent test pollution.
-- **Running tests before `make apply`**: `src/manifest.ts` is generated and gitignored, so a fresh checkout cannot resolve `manifest` until it runs.
+- **Running tests before `make apply`**: `src/manifest.ts` is generated and gitignored, so a fresh checkout cannot resolve `manifest` until it runs. `make coverage-frontend` runs it first; calling the npm scripts directly does not.
 - **Testing implementation details**: don't assert on internal state or React hooks. Test what the user sees and what callbacks fire.
 - **Locator scoping mistakes**: when a component returns a bare element, use `page.locator()` not `component.locator()` to find the root element itself.
