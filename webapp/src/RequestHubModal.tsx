@@ -92,6 +92,9 @@ type RequestItem = {
     /** When true, only show in public/private channels (not DM/GM). */
     requiresTeamChannel?: boolean;
 
+    /** When true, only show in public channels. */
+    requiresPublicChannel?: boolean;
+
     /** When true, only show when a team is selected (any team — not just the approval team). */
     requiresTeam?: boolean;
 
@@ -215,9 +218,11 @@ export const RequestHubModal = () => {
             action: openIncomingWebhookModal,
             enabled: enabled.webhook,
 
-            // Any team the user is on — not tied to the approval/primary team.
-            // Forms still need an O/P channel; they validate that on submit.
+            // Any team the user is on, not tied to the approval/primary team.
+            // A webhook belongs to a public or private channel, so the tile is
+            // hidden in DMs and group messages like the channel-header item.
             requiresTeam: true,
+            requiresTeamChannel: true,
         },
         {
             icon: '📤',
@@ -225,7 +230,10 @@ export const RequestHubModal = () => {
             description: 'Send channel messages to an external endpoint.',
             action: openOutgoingWebhookModal,
             enabled: enabled.webhook,
+
+            // Outgoing webhooks can only watch public channels.
             requiresTeam: true,
+            requiresPublicChannel: true,
         },
     ];
 
@@ -233,6 +241,7 @@ export const RequestHubModal = () => {
         !item.hidden &&
         item.enabled &&
         (!item.requiresTeamChannel || inTeamChannel) &&
+        (!item.requiresPublicChannel || channelType === 'O') &&
         (!item.requiresTeam || Boolean(teamId)),
     );
 

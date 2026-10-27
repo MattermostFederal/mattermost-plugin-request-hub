@@ -51,9 +51,9 @@ function debug(...args: unknown[]): void {
 // updating across Mattermost upgrades. Everything is defensive — if the markup
 // it expects isn't found, it simply does nothing (the channel-name menu item
 // remains the supported entry point).
-export function installMembersPanelButton(store: Store): void {
+export function installMembersPanelButton(store: Store): () => void {
     if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') {
-        return;
+        return () => undefined;
     }
 
     // Unconditional one-liner so it's obvious in the console whether this build
@@ -71,22 +71,34 @@ export function installMembersPanelButton(store: Store): void {
 
     // Coalesce bursts of mutations into one injection attempt per frame so we
     // don't run the DOM scan on every keystroke/re-render.
-    let scheduled = false;
+    let rafId = 0;
     const schedule = () => {
-        if (scheduled) {
+        if (rafId) {
             return;
         }
-        scheduled = true;
-        window.requestAnimationFrame(() => {
-            scheduled = false;
+        rafId = window.requestAnimationFrame(() => {
+            rafId = 0;
             tryInject(store);
         });
     };
 
-    new MutationObserver(schedule).observe(document.body, {childList: true, subtree: true});
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, {childList: true, subtree: true});
 
     // Handle the case where the panel is already open at load time.
     schedule();
+
+    return () => {
+        observer.disconnect();
+        if (rafId) {
+            window.cancelAnimationFrame(rafId);
+            rafId = 0;
+        }
+
+        // Remove the injected button so a disabled plugin leaves no control
+        // that dispatches into an unmounted modal.
+        document.querySelectorAll(`[${MARKER}]`).forEach((el) => el.remove());
+    };
 }
 
 // RHS_SELECTORS are the candidate roots for Mattermost's right-hand sidebar,
