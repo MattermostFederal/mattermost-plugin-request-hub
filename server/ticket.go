@@ -46,7 +46,8 @@ type ticketPersist struct {
 }
 
 // persistTicketPosts re-stores the request with post IDs filled in. Best-effort:
-// if the CAS loses or errors, approve/deny still work; thread relay may not.
+// if the CAS loses or errors, approve/deny still work because the approval
+// cards were recorded when they were posted; thread relay may not.
 func (p *Plugin) persistTicketPosts(tp ticketPersist) {
 	ok, casErr := p.kvUpdateIfUnchanged(tp.KVKey, tp.RawBefore, tp.Record)
 	if casErr != nil {
@@ -119,6 +120,7 @@ func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAtta
 // update the requester DM card, post the outcome thread line, squash the
 // approval card (archiving details in-thread).
 type ticketClose struct {
+	RequestID        string // the request whose recorded approval cards are cleared
 	RequesterID      string
 	DMRootPostID     string
 	DMChannelID      string
@@ -143,6 +145,7 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 		Text:  c.CardText,
 	})
 	p.postOutcomeThreadReply(c.DMChannelID, c.DMRootPostID, c.Approved, c.ApproverUsername)
+	p.deleteApprovalCards(c.RequestID)
 	return p.resolvedPost(c.ApprovalPostID, c.StatusLine)
 }
 

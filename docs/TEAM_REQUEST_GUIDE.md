@@ -2,7 +2,8 @@
 
 Mattermost Request Hub lets members **request a new team** (and, separately,
 **request Team Admin** on a team they already belong to) instead of creating or
-promoting themselves directly. Requests go to System Admins; on approval the team
+promoting themselves directly. Requests go to System Admins, and can also go to
+the approval team's Team Admins (see [Admin setup](#admin-setup)). On approval the team
 is created (or the requester is promoted) and the requester is notified by DM.
 
 > Companion guides: [new channels](CHANNEL_CREATION_GUIDE.md) ·
@@ -17,7 +18,7 @@ This guide covers:
 - [Requesting a new team](#requesting-a-new-team) — any member
 - [Requesting Team Admin](#requesting-team-admin) — members who are not already Team Admin
 - [Messaging while a request is pending](#messaging-while-a-request-is-pending) — two-way threads
-- [Approving requests](#approving-requests) — System Admins
+- [Approving requests](#approving-requests) — System Admins, and approval-team Team Admins when enabled
 - [Admin setup](#admin-setup) — system admins
 
 ---
@@ -119,7 +120,9 @@ type). Threads stay open after approve/deny so you can still follow up.
 
 Team creation requests post to the plugin-managed
 **`mattermost-team-requests`** private channel in the approval team.
-System Admins see **Approve** and **Deny**.
+System Admins see **Approve** and **Deny**. With **Approval team's Team Admins
+can approve team and Team Admin requests** on, Team Admins of the approval team
+are added to that channel and can approve or deny too.
 
 <img src="images/team-request/mattermost-team-approval-card.png" alt="Team creation approval card" width="720">
 
@@ -127,13 +130,17 @@ System Admins see **Approve** and **Deny**.
   box) promotes them to Team Admin. The requester is notified by DM.
 - **Deny** — closes the request and notifies the requester by DM.
 
-System Admins who submit a team request themselves bypass the queue — the team
-is created immediately.
+Requests from System Admins are queued for approval too. Only a System Admin can
+approve a request they made themselves.
 
 ### Team Admin
 
 Team Admin requests post to **`mattermost-team-requests`** (same channel as team
-creation requests), not the root channel-request queue. System Admins Approve or Deny.
+creation requests), not the root channel-request queue. System Admins Approve or
+Deny, and so do the approval team's Team Admins when **Approval team's Team
+Admins can approve team and Team Admin requests** is on. The requested team's own
+Team Admins can't approve through the plugin. Only a System Admin can approve a
+request they made themselves or one that nominates them.
 
 <img src="images/team-admin-request/mattermost-team-admin-approval-card.png" alt="Team Admin approval card" width="720">
 
@@ -151,6 +158,7 @@ Configure the plugin in **System Console → Plugins → Mattermost Request Hub*
 | **Approval team** | Team that owns plugin-managed approval channels. Required. |
 | **Allow team requests** | Enables **Request a Team** entry points. Default **on**. |
 | **Allow team admin requests** | Enables **Request Team Admin** entry points. Default **on**. |
+| **Approval team's Team Admins can approve team and Team Admin requests** | Default **off**. When on, Team Admins of the approval team can approve or deny team creation and Team Admin requests and are added to **`mattermost-team-requests`**. They can then make anyone a Team Admin on any team, which is close to System Admin trust. Turn it on only where System Admins are scarce and you trust those Team Admins fully. |
 
 Team creation and Team Admin cards both go to **`mattermost-team-requests`**.
 See the [Admin Guide](admin-guide.md) for the full settings reference.
@@ -159,3 +167,8 @@ See the [Admin Guide](admin-guide.md) for the full settings reference.
 > **Create Team** permission from roles that shouldn't create teams natively
 > (System Console → User Management → Permissions). The plugin relabels the UI
 > for non-admins, but it cannot veto the native create-team API.
+>
+> Team Admins can also promote their own team's members natively. To make the
+> plugin the only way to become a Team Admin, remove **Manage team roles** from
+> the Team Admin role in the System Scheme. Approved requests still go through,
+> because the plugin promotes through the plugin API.

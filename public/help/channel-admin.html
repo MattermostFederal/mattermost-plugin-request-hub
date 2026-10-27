@@ -72,10 +72,15 @@
 
         <h2>Form</h2>
         <img src="images/channel-admin-request/mattermost-promotion-modal.png" alt="Request a Channel Admin form">
-        <p>Pick one or more people to promote. Anyone not already in the channel is added first, then made Channel Admin on approve.</p>
+        <p>Pick one or more people to promote. Everyone you pick must already be a member of the channel; this request never adds anyone to it.</p>
 
         <h2>On approve</h2>
         <img src="images/channel-admin-request/mattermost-promotion-approval-card.png" alt="Channel Admin approval card">
+        <p>
+            System Admins and the Team Admins of the channel's team can approve or deny. Team Admins of other
+            teams, including the approval team, can't. Only a System Admin can approve a request they made themselves.
+            Nominees who have left the channel since the request was made are skipped.
+        </p>
 
     </main>
 </div>

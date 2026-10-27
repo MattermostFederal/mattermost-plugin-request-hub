@@ -91,8 +91,10 @@ a ticket thread gets a nudge to reply inside the specific request instead.
 
 ## Approving requests
 
-Approvers (System Admins, plus Team Admins if your admin enabled it) receive each
-request in the **approval channel** with **Approve** and **Deny** buttons.
+Approvers (System Admins, the Team Admins of the team the channel is requested
+in, plus Team Admins of the approval team if your admin enabled it) receive each
+request in the **approval channel** with **Approve** and **Deny** buttons. Only a System Admin can approve a request they made
+themselves. The card names the team the channel will be created in.
 
 <img src="images/channel-request/mattermost-creation-approval-card.png" alt="Channel creation approval card" width="720">
 
@@ -103,9 +105,8 @@ request in the **approval channel** with **Approve** and **Deny** buttons.
 
 <img src="images/channel-request/mattermost-creation-welcome.png" alt="Welcome message in the new channel" width="720">
 
-Requests from **System Admins** who submit via the webapp Request Hub / modal
-(not the slash-command dialog) skip this step — the channel is created
-immediately. Slash-command dialogs always queue for approval (`ForceQueue`).
+Requests from **System Admins** are queued for approval too. A System Admin can
+approve their own request.
 
 ---
 
@@ -120,7 +121,7 @@ Configure the plugin in **System Console → Plugins → Mattermost Request Hub*
 | **Approval team** | The team that owns plugin-managed approval channels. Required. |
 | **Allow channel requests** | Enables channel-creation entry points. |
 | **Channel domain prefixes** | **Required.** The prefix list requesters pick from (see below). An empty list rejects every channel request. |
-| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve/deny, not just System Admins. |
+| **Team Admins can approve requests** | When on, Team Admins of the approval team can approve/deny channel-creation requests, not just System Admins. |
 | **Per-team approval channels** | Default on. Creates `mattermost-channel-requests` in teams with a Team Admin or System Admin; those teams' channel requests go there (not the primary approval team). Ticket channels (including team-creation) live under sidebar category **Mattermost: Request Hub**. |
 
 > To fully funnel non-admins through the request flow, remove the built-in

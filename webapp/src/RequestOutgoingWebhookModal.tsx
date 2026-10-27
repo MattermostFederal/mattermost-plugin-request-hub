@@ -15,23 +15,23 @@ import type {GlobalState} from './store';
 
 const overlayStyle: React.CSSProperties = {
     position: 'fixed',
-inset: 0,
-background: 'rgba(0, 0, 0, 0.5)',
+    inset: 0,
+    background: 'rgba(0, 0, 0, 0.5)',
     display: 'flex',
-alignItems: 'center',
-justifyContent: 'center',
-zIndex: 1050,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
     background: 'var(--center-channel-bg, #fff)',
-color: 'var(--center-channel-color, #3d3c40)',
+    color: 'var(--center-channel-color, #3d3c40)',
     borderRadius: 8,
-width: 512,
-maxWidth: '90vw',
-maxHeight: '90vh',
-overflowY: 'auto',
+    width: 512,
+    maxWidth: '90vw',
+    maxHeight: '90vh',
+    overflowY: 'auto',
     padding: 24,
-boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 
@@ -42,7 +42,7 @@ export const RequestOutgoingWebhookModal = () => {
     const channelName = useSelector((state: GlobalState) => getChannelDisplayName(state, channelId));
     const channelType = useSelector((state: GlobalState) => getChannelType(state, channelId));
     const teamName = useSelector((state: GlobalState) => getCurrentTeamDisplayName(state));
-    const inTeamChannel = channelType === 'O' || channelType === 'P';
+    const inPublicChannel = channelType === 'O';
 
     const [displayName, setDisplayName] = useState('');
     const [callbackUrl, setCallbackUrl] = useState('');
@@ -84,8 +84,8 @@ export const RequestOutgoingWebhookModal = () => {
             setError('Callback URL must start with http:// or https://');
             return;
         }
-        if (!inTeamChannel) {
-            setError('Open a public or private channel on this team first, then submit. Webhooks cannot target DMs or group messages.');
+        if (!inPublicChannel) {
+            setError('Open a public channel on this team first, then submit. Outgoing webhooks can only use public channels.');
             return;
         }
 
@@ -161,9 +161,9 @@ export const RequestOutgoingWebhookModal = () => {
                                 {teamName ? <span style={{marginLeft: 6, fontSize: 12}}>{`(Team: ${teamName})`}</span> : null}
                             </div>
                             <small style={{opacity: 0.6}}>
-                                {inTeamChannel ?
+                                {inPublicChannel ?
                                     'The webhook will fire on messages in this channel. Switch channels before opening the form to change the source.' :
-                                    'Open a public or private channel on this team before submitting — DMs and group messages cannot be webhook targets.'}
+                                    'Open a public channel on this team before submitting. Outgoing webhooks can only use public channels.'}
                             </small>
                         </div>
                         <div style={fieldStyle}>

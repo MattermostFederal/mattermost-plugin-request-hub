@@ -146,7 +146,7 @@ can Approve or Deny.
   notified by DM. Partial failures are listed in the outcome message.
 - **Deny** — closes the request and notifies the requester by DM.
 
-System Admins who submit skip the queue — nominees are added immediately.
+Requests from System Admins are queued for approval too.
 
 ### Guest invites
 
@@ -156,7 +156,7 @@ System Admins who submit skip the queue — nominees are added immediately.
   address on the ticket. The requester is notified by DM.
 - **Deny** — closes the request and notifies the requester by DM.
 
-System Admins who submit skip the queue — the invitation is emailed immediately.
+Requests from System Admins are queued for approval too.
 
 ---
 

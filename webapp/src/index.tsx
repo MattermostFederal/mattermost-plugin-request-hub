@@ -62,13 +62,13 @@ export default class Plugin {
         // initialize() and take the others down with it. safe() logs and
         // continues. The Members-panel injector is installed FIRST so it's
         // never blocked by an earlier registration failing.
-        // Registry helpers often return a registration id (string); only function
-        // returns are treated as disposers.
-        const safe = (label: string, fn: () => void | string | (() => void)) => {
+        // Registry calls return a registration ID (a string); DOM helpers
+        // return a disposer. Only disposers need cleanup here.
+        const safe = (label: string, fn: () => unknown) => {
             try {
                 const disposer = fn();
                 if (typeof disposer === 'function') {
-                    this.disposers.push(disposer);
+                    this.disposers.push(disposer as () => void);
                 }
             } catch (err) {
                 // eslint-disable-next-line no-console

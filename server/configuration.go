@@ -94,6 +94,9 @@ type configuration struct {
 
 	// --- 3. Approver policy ---
 	AllowTeamAdminApprovers bool
+	// AllowApprovalTeamAdminsForTeamRequests lets Team Admins of the approval
+	// team approve team creation and Team Admin requests. Off by default.
+	AllowApprovalTeamAdminsForTeamRequests bool
 
 	// --- 4. Requestable types (per-type feature toggles) ---
 	// Defaults (plugin.json): channel, channel-admin, team, team-admin,
@@ -250,13 +253,20 @@ func (p *Plugin) OnConfigurationChange() error {
 	hadPrevConfig := p.configuration != nil
 	prevPerTeamEnabled := false
 	prevTwoStep := ""
+	prevApprovalTeam := ""
 	if hadPrevConfig {
 		prevPerTeamEnabled = p.configuration.PerTeamApprovalChannels
 		prevTwoStep = twoStepPoolFingerprint(p.configuration)
+		prevApprovalTeam = strings.TrimSpace(p.configuration.ApprovalTeam)
 	}
 	p.configurationLock.RUnlock()
 
 	p.setConfiguration(configuration)
+
+	// A newly selected Approval team is recorded on its next use.
+	if hadPrevConfig && strings.TrimSpace(configuration.ApprovalTeam) != prevApprovalTeam {
+		p.forgetApprovalTeam()
+	}
 
 	if hadPrevConfig && configuration.PerTeamApprovalChannels && !prevPerTeamEnabled {
 		go p.ensureAllTeamApprovalChannels()
@@ -347,9 +357,9 @@ func configurationToMap(c *configuration) (map[string]any, error) {
 // Empty third field -> no constraint on the suffix (other than MM's
 // channel identifier validity check).
 //
-// Empty lines and comments (# prefix) are skipped. Malformed regex is
-// logged and the prefix stays selectable with a no-op rule so a typo
-// can't wedge the plugin.
+// Empty lines and comments (# prefix) are skipped. A malformed regex is
+// logged and the prefix stays listed but rejects every suffix (fail
+// closed), so a typo can't silently lift the naming rule.
 func parsePrefixList(raw string, logErr func(msg string, keyValuePairs ...any)) []channelPrefix {
 	var out []channelPrefix
 	for lineNo, line := range strings.Split(raw, "\n") {
@@ -379,9 +389,14 @@ func parsePrefixList(raw string, logErr func(msg string, keyValuePairs ...any)) 
 	return out
 }
 
+// matchNothing is the suffix rule used when an admin's pattern can't be
+// compiled: requests under that prefix are rejected until it's fixed.
+var matchNothing = regexp.MustCompile(`[^\s\S]`)
+
 // compileSuffixRule converts the third pipe-field into a compiled regex.
-// Returns (nil, third) when the field can't be compiled — the caller
-// stores the raw text so error messages reference what the admin wrote.
+// Returns (matchNothing, third) when the field can't be compiled — the
+// caller stores the raw text so error messages reference what the admin
+// wrote.
 func compileSuffixRule(third, prefix string, logErr func(msg string, keyValuePairs ...any)) (*regexp.Regexp, string) {
 	// Numeric shape: treat as max length. Build [a-z0-9-]{2,N}. Cap at
 	// 48 so long suffixes fit while leaving room for the prefix under
@@ -404,7 +419,7 @@ func compileSuffixRule(third, prefix string, logErr func(msg string, keyValuePai
 			// Shouldn't happen — regex is generated from a bounded int.
 			logErr("channel-requests: failed to compile numeric suffix rule",
 				"prefix", prefix, "n", third, "error", err.Error())
-			return nil, third
+			return matchNothing, third
 		}
 		return re, third
 	}
@@ -412,12 +427,18 @@ func compileSuffixRule(third, prefix string, logErr func(msg string, keyValuePai
 	// Legacy regex path. Anchor the admin-supplied pattern so it must
 	// match the entire suffix — admins write patterns like [a-z0-9-]{2,16}
 	// expecting "the suffix must be exactly this shape". Wrapping in a
-	// non-capturing group keeps top-level alternations intact.
+	// non-capturing group keeps top-level alternations intact. The pattern
+	// must also compile on its own so the wrapping group stays balanced.
+	if _, err := regexp.Compile(third); err != nil {
+		logErr("channel-requests: invalid suffix regex for prefix; rejecting all suffixes until it's fixed",
+			"prefix", prefix, "pattern", third, "error", err.Error())
+		return matchNothing, third
+	}
 	re, err := regexp.Compile("^(?:" + third + ")$")
 	if err != nil {
-		logErr("channel-requests: invalid suffix regex for prefix; falling back to no-pattern",
+		logErr("channel-requests: invalid suffix regex for prefix; rejecting all suffixes until it's fixed",
 			"prefix", prefix, "pattern", third, "error", err.Error())
-		return nil, third
+		return matchNothing, third
 	}
 	return re, third
 }

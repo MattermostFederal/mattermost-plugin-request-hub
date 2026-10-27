@@ -33,11 +33,13 @@ type teamAdminRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-// submitTeamAdminRequest validates the input and either promotes immediately
-// (System Admins) or stores a pending request and posts
-// it to the root approval channel. forceQueue (slash-command dialog) disables
-// the bypass so an approval card is always posted.
-func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs []string, forceQueue bool) (string, error) {
+// submitTeamAdminRequest validates the input, stores a pending request and
+// posts it to the team-requests approval channel. Requests from System Admins
+// queue too.
+func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs []string) (string, error) {
+	if !p.getConfiguration().RequestEnabled(requestTypeTeamAdmin) {
+		return "", errors.New(teamAdminRequestsDisabledMsg)
+	}
 	if strings.TrimSpace(teamID) == "" {
 		return "", errors.New("a team is required")
 	}
@@ -45,15 +47,20 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 	if len(nominees) == 0 {
 		return "", errors.New("pick at least one person to make a Team Admin")
 	}
+	if err := checkIDList(nominees, "Team Admin nominees"); err != nil {
+		return "", err
+	}
 
 	team, appErr := p.API.GetTeam(teamID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load team")
+		p.API.LogWarn("failed to load team for Team Admin request", "team_id", teamID, "error", appErr.Error())
+		return "", errors.New("could not find that team")
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
 	}
 
 	// Requester must be an active member of the team they're nominating into.
@@ -64,19 +71,15 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 			return "", errors.New("you must be a member of the team to request Team Admin access")
 		}
 	}
+	if err := p.checkNominees(nominees, nomineeRules{role: "a Team Admin", teamID: teamID}); err != nil {
+		return "", err
+	}
 
 	req := &teamAdminRequest{
 		ID:          model.NewId(),
 		RequesterID: requesterID,
 		TeamID:      teamID,
 		NomineeIDs:  nominees,
-	}
-
-	if !forceQueue && requester.IsSystemAdmin() {
-		p.promoteTeamAdmins(req)
-		p.logAudit(auditDirect, fmt.Sprintf("@%s promoted %s to Team Admin in %s",
-			requester.Username, p.mentionList(req.NomineeIDs), team.DisplayName), "")
-		return fmt.Sprintf("Promoted %s to Team Admin in **%s**.", p.mentionList(req.NomineeIDs), team.DisplayName), nil
 	}
 
 	if err := p.storeTeamAdminRequest(req); err != nil {
@@ -110,7 +113,7 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 		},
 	})
 
-	return "Your Team Admin request has been submitted for approval. You'll be notified once a System Admin responds.", nil
+	return "Your Team Admin request has been submitted for approval. You'll be notified once an approver responds.", nil
 }
 
 func (p *Plugin) sendTeamAdminTicketCreatedDM(req *teamAdminRequest, requester *model.User, team *model.Team) (dmRootPostID, dmChannelID string) {
@@ -141,15 +144,15 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) {
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)
 }
 
-// postTeamAdminApprovalRequest posts to the team requests approval channel.
-// Only System Admins can approve team admin requests. Uses the same channel as
-// team creation requests so all team-scope actions appear together.
+// postTeamAdminApprovalRequest posts to the team requests approval channel,
+// the same channel as team creation requests so all team-scope actions appear
+// together. Approvers are the same too (see canApproveTeamRequest).
 func (p *Plugin) postTeamAdminApprovalRequest(req *teamAdminRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a Team Admin request needs System Admin review."
 	return p.postApprovalAttachment(
+		req.ID,
 		p.teamAdminApprovalAttachment(req, requester, team),
-		header,
+		p.teamScopeApprovalHeader(ch, "Team Admin request"),
 		ch,
 	)
 }
@@ -158,7 +161,7 @@ func (p *Plugin) teamAdminApprovalAttachment(req *teamAdminRequest, requester *m
 	nominees := p.mentionList(req.NomineeIDs)
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
-		{Title: "Team", Value: team.DisplayName, Short: true},
+		{Title: "Team", Value: escapeMarkdown(team.DisplayName), Short: true},
 		{Title: "Proposed Team Admins", Value: nominees, Short: false},
 		{
 			Title: "⚠️ Privilege Escalation — Team Admin",
@@ -250,12 +253,17 @@ func (p *Plugin) openTeamAdminRequestDialog(triggerID, teamID string) error {
 		teamName = t.DisplayName
 	}
 
+	approvers := "a System Admin"
+	if p.getConfiguration().AllowApprovalTeamAdminsForTeamRequests {
+		approvers = "a System Admin or a Team Admin of the approval team"
+	}
+
 	dialog := model.Dialog{
 		CallbackId: teamAdminDialogCallbackID,
 		Title:      "Request Team Admin Promotion",
 		IntroductionText: fmt.Sprintf(
-			"Nominate users to become Team Admins in **%s**. System Admin approval is required because Team Admin grants broad permissions across the whole team.",
-			teamName,
+			"Nominate users to become Team Admins in **%s**. The request must be approved by %s because Team Admin grants broad permissions across the whole team.",
+			escapeMarkdown(teamName), approvers,
 		),
 		SubmitLabel: "Submit request",
 		State:       teamID,
@@ -266,7 +274,7 @@ func (p *Plugin) openTeamAdminRequestDialog(triggerID, teamID string) error {
 				Type:        "select",
 				DataSource:  "users",
 				MultiSelect: true,
-				HelpText:    "Select one or more users to nominate for Team Admin. They will be added to the team if not already members.",
+				HelpText:    "Select one or more members of this team to nominate for Team Admin.",
 			},
 		},
 	}

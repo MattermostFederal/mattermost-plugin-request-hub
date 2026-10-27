@@ -308,8 +308,10 @@ export async function submitBotRequest(payload: BotRequestPayload): Promise<Chan
     });
     let body: ChannelRequestResult = {};
     try {
- body = await response.json();
-} catch { /* fall through */ }
+        body = await response.json();
+    } catch {
+        // fall through
+    }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }
@@ -329,8 +331,10 @@ export async function submitIncomingWebhookRequest(payload: IncomingWebhookPaylo
     });
     let body: ChannelRequestResult = {};
     try {
- body = await response.json();
-} catch { /* fall through */ }
+        body = await response.json();
+    } catch {
+        // fall through
+    }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }
@@ -350,8 +354,10 @@ export async function submitOutgoingWebhookRequest(payload: OutgoingWebhookPaylo
     });
     let body: ChannelRequestResult = {};
     try {
- body = await response.json();
-} catch { /* fall through */ }
+        body = await response.json();
+    } catch {
+        // fall through
+    }
     if (!response.ok && !body.error) {
         return {error: `Request failed (${response.status}). Please try again.`};
     }

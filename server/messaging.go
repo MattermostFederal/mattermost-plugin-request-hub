@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -19,11 +20,9 @@ const (
 
 	// colorPending is the sidebar color for the initial "ticket submitted" DM card.
 	// colorApproved and colorDenied are used when the root DM card is updated on outcome.
-	// colorDirect is used for System Admin bypass / immediate fulfill audit rows.
 	colorPending  = "#E8A838"
 	colorApproved = "#2DB887"
 	colorDenied   = "#D9534F"
-	colorDirect   = "#3B97D3"
 )
 
 // threadAnchor holds all four post IDs needed to relay messages between a
@@ -150,8 +149,14 @@ func (p *Plugin) forwardDMReplyToTicketThread(post *model.Post, rawAnchor []byte
 		UserId:    p.botUserID,
 		ChannelId: anchor.ApprovalChannelID,
 		RootId:    anchor.ApprovalPostID,
-		Message:   fmt.Sprintf("**Reply from @%s:** %s", poster.Username, post.Message),
+		Message:   fmt.Sprintf("**Reply from @%s:**\n%s", poster.Username, quotedText(post.Message)),
 	})
+}
+
+// quotedText renders a requester's message as typed, as a blockquote, so it
+// reads as their words and not as the plugin's own status lines.
+func quotedText(msg string) string {
+	return "> " + strings.ReplaceAll(escapeMarkdown(msg), "\n", "\n> ")
 }
 
 // forwardThreadReplyToRequesterDM posts the reviewer's approval thread reply
