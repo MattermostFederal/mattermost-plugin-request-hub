@@ -64,6 +64,10 @@ func TestSplitCommandArgs(t *testing.T) {
 
 	_, err := splitCommandArgs(`a "b c`)
 	require.EqualError(t, err, "a quote mark is not closed")
+
+	// The quotes are balanced, but the closing one is mid-word.
+	_, err = splitCommandArgs(`--purpose "hello"world`)
+	require.EqualError(t, err, "a closing quote mark must be followed by a space")
 }
 
 func TestReadArgs_QuotedWordIsNeverAFlag(t *testing.T) {
@@ -102,6 +106,16 @@ func TestParseChannelCreateArgs_QuotesAndLists(t *testing.T) {
 	require.Equal(t, "Plan the --launch", in.Purpose)
 	require.Equal(t, []string{"@alice", "@bob"}, in.Members)
 	require.Equal(t, []string{"@carol", "@dave"}, in.Admins)
+}
+
+func TestParseChannelCreateArgs_EmptyListFlags(t *testing.T) {
+	for command, want := range map[string]string{
+		"eng- Chat --members --private": "`--members` needs at least one name",
+		"eng- Chat --admins , ,":        "`--admins` needs at least one name",
+	} {
+		_, err := parseChannelCreateArgs(argWords(command))
+		require.EqualError(t, err, want, command)
+	}
 }
 
 func TestExecuteCommand_UnclosedQuote(t *testing.T) {
@@ -271,6 +285,7 @@ func TestExecuteCommand_ArgumentFormsUsage(t *testing.T) {
 		"team-guest --x":                             "unknown option `--x`",
 		"team-guest a@b.co":                          "name at least one channel with `--channels`",
 		"team-guest a@b.co --channels ~,":            "name at least one channel with `--channels`",
+		"team-guest a@b.co --channels":               "`--channels` needs at least one name",
 		"bot svcbot Svc --owner @":                   "name the owner as `@user`",
 		"bot svcbot":                                 "a bot username and a display name are required",
 		"bot svcbot Svc --owner a b":                 "`--owner` takes exactly one value",

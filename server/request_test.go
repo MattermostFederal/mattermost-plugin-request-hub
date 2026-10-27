@@ -290,6 +290,22 @@ func TestCreateChannelForRequest_TrimsListsToActualAdds(t *testing.T) {
 	require.Equal(t, []string{"u_admin"}, req.AdminMemberIDs)
 }
 
+func TestResolvePrefixedName_PrefixWithoutHyphen(t *testing.T) {
+	prefixes := []channelPrefix{{Prefix: "eng-"}, {Prefix: "ops"}, {Prefix: "ops-"}}
+
+	name, err := resolvePrefixedName(prefixes, requestInput{Prefix: "eng", Name: "chat"})
+	require.NoError(t, err)
+	require.Equal(t, "eng-chat", name)
+
+	// An exact match wins over the hyphen fallback.
+	name, err = resolvePrefixedName(prefixes, requestInput{Prefix: "ops", Name: "chat"})
+	require.NoError(t, err)
+	require.Equal(t, "opschat", name)
+
+	_, err = resolvePrefixedName(prefixes, requestInput{Prefix: "nope", Name: "chat"})
+	require.EqualError(t, err, `prefix "nope" is not in the list of allowed prefixes: eng-, ops, ops-`)
+}
+
 func TestResolvePrefixedName_AnchoredSuffixMatchesWholeSuffix(t *testing.T) {
 	noopLog := func(string, ...any) {}
 	// Third pipe-field is the suffix regex "dev|development".
