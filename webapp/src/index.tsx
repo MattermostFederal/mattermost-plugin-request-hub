@@ -235,10 +235,9 @@ export default class Plugin {
                 }
                 store.dispatch(openOutgoingWebhookModal());
             },
-            (state: GlobalState) => {
-                const type = getChannelType(state, getCurrentChannelId(state));
-                return type === 'O' || type === 'P';
-            },
+
+            // Outgoing webhooks can only watch public channels.
+            (state: GlobalState) => getChannelType(state, getCurrentChannelId(state)) === 'O',
         ));
 
         safe('channel-header menu: request bot', () => registry.registerChannelHeaderMenuAction(

@@ -11,7 +11,10 @@
     "postinstall": "[ -n \"$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" ] || playwright install chromium",
     "test": "playwright test --config=playwright.config.ts && playwright test --config=playwright-ct.config.ts",
     "test:pw": "playwright test --config=playwright.config.ts",
-    "test:pw-ct": "playwright test --config=playwright-ct.config.ts"
+    "test:pw-ct": "playwright test --config=playwright-ct.config.ts",
+    "test:coverage": "c8 --config=c8-unit.json --temp-directory=.v8-unit-coverage --reporter=text --reporter=html --reports-dir=coverage playwright test --config=playwright.config.ts",
+    "test:pw-ct-coverage": "rm -rf .v8-ct-coverage && mkdir -p .v8-ct-coverage && playwright test --config=playwright-ct.config.ts && c8 report --temp-directory=.v8-ct-coverage --reports-dir=coverage-ct --reporter=text --reporter=html --exclude-after-remap --exclude='**/node_modules/**'",
+    "test:coverage-merged": "rm -rf .v8-merged-coverage && mkdir -p .v8-merged-coverage && cp .v8-unit-coverage/*.json .v8-merged-coverage/ 2>/dev/null; cp .v8-ct-coverage/*.json .v8-merged-coverage/ 2>/dev/null; c8 report --config=c8-merged.json --temp-directory=.v8-merged-coverage --reports-dir=coverage-merged --reporter=text --reporter=html"
   },
   "devDependencies": {
     "@babel/core": "7.29.7",
@@ -30,6 +33,7 @@
     "ajv": "8.20.0",
     "babel-loader": "9.2.1",
     "babel-plugin-polyfill-corejs3": "1.0.0",
+    "c8": "12.0.0",
     "css-loader": "7.1.5",
     "eslint": "9.39.5",
     "eslint-plugin-import": "2.32.0",

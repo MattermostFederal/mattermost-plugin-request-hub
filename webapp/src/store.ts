@@ -49,7 +49,7 @@ export const closeOutgoingWebhookModal = (): Action => ({type: CLOSE_OUTGOING_WE
 export const openHubModal = (): Action => ({type: OPEN_HUB_MODAL});
 export const closeHubModal = (): Action => ({type: CLOSE_HUB_MODAL});
 
-type PluginState = {
+export type PluginState = {
     modalOpen: boolean;
 
     // adminModalChannelId is the channel the "Request Channel Admin" modal is
