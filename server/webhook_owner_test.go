@@ -52,7 +52,9 @@ func (c *hookCapture) server(t *testing.T) *httptest.Server {
 			hook.Id = "out-hook-id"
 			_ = json.NewEncoder(w).Encode(hook)
 		case "/api/v4/users/new-bot-id/tokens":
-			_ = json.NewEncoder(w).Encode(model.UserAccessToken{Id: "tok-id", Token: "tok-value"})
+			var token model.UserAccessToken
+			require.NoError(t, json.Unmarshal(body, &token))
+			_ = json.NewEncoder(w).Encode(model.UserAccessToken{Id: "tok-id", Token: "tok-value", UserId: "new-bot-id", ExpiresAt: token.ExpiresAt})
 		default:
 			http.NotFound(w, r)
 		}

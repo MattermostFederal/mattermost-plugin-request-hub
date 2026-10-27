@@ -136,7 +136,7 @@ func TestOnConfigurationChange_ParsesRequestLimits(t *testing.T) {
 	require.Equal(t, 2, p.getConfiguration().MaxPending())
 	require.Equal(t, defaultRequestExpiryDays, p.getConfiguration().ExpiryDays())
 	// A blank token lifetime means the one-year default.
-	require.Equal(t, defaultBotTokenLifetime, p.getConfiguration().TokenLifetimeDays())
+	require.Equal(t, defaultBotTokenLifetime, p.getConfiguration().TokenLifetimeMonths())
 	api.AssertCalled(t, "LogWarn", "channel-requests: setting must be a whole number 0 or greater; using the default",
 		"setting", "RequestExpiryDays", "value", "soon", "default", defaultRequestExpiryDays)
 }
@@ -151,12 +151,36 @@ func TestOnConfigurationChange_CapsRequestLimits(t *testing.T) {
 		dest := args.Get(0).(*configuration)
 		dest.MaxPendingRequestsPerUser = "5000"
 		dest.RequestExpiryDays = "99999999999999"
-		dest.BotTokenLifetimeDays = "4000"
 	}).Return(nil)
 
 	require.NoError(t, p.OnConfigurationChange())
 	require.Equal(t, maxPendingRequestsLimit, p.getConfiguration().MaxPending())
-	require.Equal(t, maxBotTokenLifetime, p.getConfiguration().TokenLifetimeDays())
 	require.Equal(t, maxRequestExpiryDays, p.getConfiguration().ExpiryDays())
 	require.False(t, requestExpired(model.GetMillis()-day, p.getConfiguration().ExpiryDays(), model.GetMillis()))
+}
+
+func TestParseTokenLifetimeMonths(t *testing.T) {
+	for raw, tc := range map[string]struct {
+		want int
+		warn bool
+	}{
+		"":     {want: defaultBotTokenLifetime},
+		"1":    {want: 1},
+		"6\n":  {want: 6},
+		"12":   {want: 12},
+		"0":    {want: defaultBotTokenLifetime, warn: true},
+		"13":   {want: defaultBotTokenLifetime, warn: true},
+		"-3":   {want: defaultBotTokenLifetime, warn: true},
+		"year": {want: defaultBotTokenLifetime, warn: true},
+	} {
+		t.Run(raw, func(t *testing.T) {
+			warned := false
+			require.Equal(t, tc.want, parseTokenLifetimeMonths(raw, func(string, ...any) { warned = true }))
+			require.Equal(t, tc.warn, warned)
+		})
+	}
+}
+
+func TestTokenLifetimeMonths_UnparsedConfigUsesDefault(t *testing.T) {
+	require.Equal(t, defaultBotTokenLifetime, (&configuration{}).TokenLifetimeMonths())
 }

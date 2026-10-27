@@ -144,10 +144,9 @@ type configuration struct {
 	MaxPendingRequestsPerUser string
 	RequestExpiryDays         string
 
-	// BotTokenLifetimeDays is how long an access token issued with a bot
-	// request lasts. A text setting like the limits above; 0 means tokens
-	// never expire.
-	BotTokenLifetimeDays string
+	// BotTokenLifetimeMonths is how long an access token issued with a bot
+	// request lasts: a dropdown from 1 to 12 months.
+	BotTokenLifetimeMonths string
 
 	// --- 8. Exercise mode ---
 	// EnableExercise lets System Admins run the exercise subcommand.
@@ -157,10 +156,10 @@ type configuration struct {
 	ExerciseScenarioJSON string
 
 	// --- Parsed / computed (unexported) ---
-	prefixes          []channelPrefix
-	maxPending        int
-	expiryDays        int
-	tokenLifetimeDays int
+	prefixes            []channelPrefix
+	maxPending          int
+	expiryDays          int
+	tokenLifetimeMonths int
 }
 
 // The defaults match plugin.json. The maximums keep the settings in a
@@ -168,10 +167,10 @@ type configuration struct {
 const (
 	defaultMaxPendingRequests = 5
 	defaultRequestExpiryDays  = 30
-	defaultBotTokenLifetime   = 365
+	defaultBotTokenLifetime   = 12
 	maxPendingRequestsLimit   = 1000
 	maxRequestExpiryDays      = 3650
-	maxBotTokenLifetime       = 3650
+	maxBotTokenLifetime       = 12
 )
 
 // MaxPending returns how many requests of each kind one user may have
@@ -186,10 +185,13 @@ func (c *configuration) ExpiryDays() int {
 	return c.expiryDays
 }
 
-// TokenLifetimeDays returns how many days a bot access token lasts. 0 means
-// tokens never expire.
-func (c *configuration) TokenLifetimeDays() int {
-	return c.tokenLifetimeDays
+// TokenLifetimeMonths returns how many months a bot access token lasts,
+// from 1 to 12. A configuration that was never parsed gets the default.
+func (c *configuration) TokenLifetimeMonths() int {
+	if c.tokenLifetimeMonths == 0 {
+		return defaultBotTokenLifetime
+	}
+	return c.tokenLifetimeMonths
 }
 
 // allowsChannelName reports whether name still fits the configured prefix
@@ -325,7 +327,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	configuration.prefixes = parsePrefixList(configuration.ChannelNamePrefixes, p.API.LogError)
 	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
 	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
-	configuration.tokenLifetimeDays = parseNonNegativeInt(configuration.BotTokenLifetimeDays, defaultBotTokenLifetime, maxBotTokenLifetime, "BotTokenLifetimeDays", p.API.LogWarn)
+	configuration.tokenLifetimeMonths = parseTokenLifetimeMonths(configuration.BotTokenLifetimeMonths, p.API.LogWarn)
 
 	// Detect PerTeamApprovalChannels being enabled for the first time so we can
 	// backfill channels for teams that existed before the setting was toggled on.
@@ -400,6 +402,23 @@ func parseNonNegativeInt(raw string, def, maxValue int, key string, logWarn func
 	if n > maxValue {
 		logWarn("channel-requests: setting is above its maximum; using the maximum", "setting", key, "value", raw, "maximum", maxValue)
 		return maxValue
+	}
+	return n
+}
+
+// parseTokenLifetimeMonths parses the Bot token lifetime setting. The
+// dropdown only offers 1 to 12, so anything else came from config.json and
+// falls back to the default.
+func parseTokenLifetimeMonths(raw string, logWarn func(msg string, keyValuePairs ...any)) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultBotTokenLifetime
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || !isPositiveInt(raw) || n < 1 || n > maxBotTokenLifetime {
+		logWarn("channel-requests: bot token lifetime must be 1 to 12 months; using the default",
+			"setting", "BotTokenLifetimeMonths", "value", raw, "default", defaultBotTokenLifetime)
+		return defaultBotTokenLifetime
 	}
 	return n
 }

@@ -481,6 +481,10 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 	api.On("RevokeSession", "sess1").Return(nil)
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm9"}, nil)
 	api.On("KVGet", tokenPostRegistryKey).Return(nil, nil)
+	var tracked botTokenExpiry
+	api.On("KVSet", botTokenExpiryKey("tok-id"), mock.Anything).Run(func(args mock.Arguments) {
+		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &tracked))
+	}).Return(nil)
 	var tokenReply string
 	api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
 		if post := args.Get(0).(*model.Post); post.ChannelId == "dm9" && strings.Contains(post.Message, "Access Token") {
@@ -493,6 +497,11 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 	require.NotNil(t, resp.Update)
 	require.Contains(t, resp.Update.Message, "Bot **@svcbot** created.")
 	require.Contains(t, tokenReply, "tok-value")
+	// The expiry is kept for the reminders; the token value is not.
+	require.Equal(t, "new-bot-id", tracked.BotUserID)
+	require.Equal(t, "svcbot", tracked.BotUsername)
+	require.Equal(t, "u_req", tracked.RequesterID)
+	require.Positive(t, tracked.ExpiresAt)
 	api.AssertCalled(t, "KVCompareAndDelete", kvBotRequestPrefix+"r1", mock.Anything)
 	api.AssertNotCalled(t, "PermanentDeleteBot", mock.Anything)
 }

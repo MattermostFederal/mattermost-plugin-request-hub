@@ -68,7 +68,8 @@ token to authenticate to Mattermost as the bot.
 > The token is sent in a DM when the request is fully approved. That DM
 > **auto-deletes after 72 hours**. Save the token in a secrets manager or CI
 > vault before it disappears. The token expires after one year by default (an
-> admin can change this); the DM gives the date.
+> admin can set 1 to 12 months); the DM gives the date. From a month before, you
+> get a weekly reminder, then a daily one in the last week.
 
 Uncheck this if the bot only receives messages via an incoming webhook and never
 calls the API.

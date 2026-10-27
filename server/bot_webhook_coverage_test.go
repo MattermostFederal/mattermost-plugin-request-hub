@@ -415,7 +415,7 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		api.On("GetConfig").Return(&model.Config{})
-		_, _, err := p.createBotToken("tok", "bot1", "desc")
+		_, err := p.createBotToken("tok", "bot1", "desc")
 		require.EqualError(t, err, "SiteURL not configured")
 	})
 
@@ -425,9 +425,10 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		stubSiteURL(api, ts.URL)
-		token, _, err := p.createBotToken("tok", "bot1", "desc")
+		token, err := p.createBotToken("tok", "bot1", "desc")
 		require.NoError(t, err)
-		require.Equal(t, "secret-value", token)
+		require.Equal(t, "secret-value", token.Token)
+		require.Equal(t, "t1", token.Id)
 		require.Equal(t, []string{"POST /api/v4/users/bot1/tokens"}, srv.seen())
 	})
 
@@ -437,20 +438,16 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		stubSiteURL(api, ts.URL)
-		_, _, err := p.createBotToken("tok", "bot1", "desc")
+		_, err := p.createBotToken("tok", "bot1", "desc")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "create token")
 	})
 }
 
 func TestCreateBotToken_Lifetime(t *testing.T) {
-	for name, tc := range map[string]struct {
-		days     int
-		wantDays int
-	}{
-		"default of one year": {days: 365, wantDays: 365},
-		"custom lifetime":     {days: 30, wantDays: 30},
-		"never expires":       {days: 0},
+	for name, months := range map[string]int{
+		"default of one year": 12,
+		"one month":           1,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var sent model.UserAccessToken
@@ -462,19 +459,15 @@ func TestCreateBotToken_Lifetime(t *testing.T) {
 			t.Cleanup(ts.Close)
 			api := &plugintest.API{}
 			p := newTestPlugin(api)
-			p.getConfiguration().tokenLifetimeDays = tc.days
+			p.getConfiguration().tokenLifetimeMonths = months
 			stubSiteURL(api, ts.URL)
 
 			before := time.Now()
-			_, expiresAt, err := p.createBotToken("tok", "bot1", "desc")
+			token, err := p.createBotToken("tok", "bot1", "desc")
 
 			require.NoError(t, err)
-			require.Equal(t, sent.ExpiresAt, expiresAt)
-			if tc.wantDays == 0 {
-				require.Zero(t, sent.ExpiresAt)
-				return
-			}
-			want := before.AddDate(0, 0, tc.wantDays)
+			require.Equal(t, sent.ExpiresAt, token.ExpiresAt)
+			want := before.AddDate(0, months, 0)
 			require.WithinDuration(t, want, time.UnixMilli(sent.ExpiresAt), time.Minute)
 		})
 	}

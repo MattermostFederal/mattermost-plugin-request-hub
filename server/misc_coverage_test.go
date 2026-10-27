@@ -451,6 +451,7 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
 	done := make(chan struct{})
 	api.On("KVSet", kvSidebarCategoryMigrated, []byte("1")).Run(func(mock.Arguments) { close(done) }).Return(nil)
+	stubTokenReminderJob(api)
 
 	require.NoError(t, p.OnActivate())
 	defer func() { require.NoError(t, p.OnDeactivate()) }()

@@ -19,25 +19,22 @@ type tokenPostEntry struct {
 
 // createBotToken creates a personal access token for botUserID using the
 // approving admin's session token. The token lasts for the configured Bot
-// token lifetime. The token value and its expiry (Unix millis, 0 for never)
-// are returned to the caller and never stored — the value exists only in the
-// approval DM, which auto-deletes.
-func (p *Plugin) createBotToken(authToken, botUserID, description string) (string, int64, error) {
+// token lifetime. The token, with its value, is returned to the caller and
+// never stored — the value exists only in the approval DM, which
+// auto-deletes.
+func (p *Plugin) createBotToken(authToken, botUserID, description string) (*model.UserAccessToken, error) {
 	internalURL := p.internalBaseURL()
 	if internalURL == "" {
-		return "", 0, fmt.Errorf("SiteURL not configured")
+		return nil, fmt.Errorf("SiteURL not configured")
 	}
-	var expiresAt int64
-	if days := p.getConfiguration().TokenLifetimeDays(); days > 0 {
-		expiresAt = time.Now().AddDate(0, 0, days).UnixMilli()
-	}
+	expiresAt := time.Now().AddDate(0, p.getConfiguration().TokenLifetimeMonths(), 0).UnixMilli()
 	client := model.NewAPIv4Client(internalURL)
 	client.SetToken(authToken)
 	token, _, err := client.CreateUserAccessToken(context.Background(), botUserID, description, expiresAt)
 	if err != nil {
-		return "", 0, fmt.Errorf("create token: %w", err)
+		return nil, fmt.Errorf("create token: %w", err)
 	}
-	return token.Token, token.ExpiresAt, nil
+	return token, nil
 }
 
 // addBotToWebhookChannel puts the new bot on the channel's team and in the

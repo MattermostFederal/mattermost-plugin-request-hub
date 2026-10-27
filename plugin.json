@@ -181,11 +181,61 @@
                 "help_text": "Pending requests older than this can no longer be approved, and stop counting toward the per-user limit. At most 3650. 0 means requests never expire. Applies to existing requests too."
             },
             {
-                "key": "BotTokenLifetimeDays",
-                "display_name": "Bot token lifetime (days)",
-                "type": "text",
-                "default": "365",
-                "help_text": "How long an access token issued with an approved bot request stays valid, up to 3650 days. 0 means tokens never expire. Only affects tokens issued after the change; this is not the request expiry above."
+                "key": "BotTokenLifetimeMonths",
+                "display_name": "Bot token lifetime",
+                "type": "dropdown",
+                "default": "12",
+                "help_text": "How long an access token issued with an approved bot request stays valid. From a month before it expires, the requester gets a weekly reminder, and daily in the last week; System Admins get them if the requester's account is gone. Only affects tokens issued after the change; this is not the request expiry above.",
+                "options": [
+                    {
+                        "display_name": "1 month",
+                        "value": "1"
+                    },
+                    {
+                        "display_name": "2 months",
+                        "value": "2"
+                    },
+                    {
+                        "display_name": "3 months",
+                        "value": "3"
+                    },
+                    {
+                        "display_name": "4 months",
+                        "value": "4"
+                    },
+                    {
+                        "display_name": "5 months",
+                        "value": "5"
+                    },
+                    {
+                        "display_name": "6 months",
+                        "value": "6"
+                    },
+                    {
+                        "display_name": "7 months",
+                        "value": "7"
+                    },
+                    {
+                        "display_name": "8 months",
+                        "value": "8"
+                    },
+                    {
+                        "display_name": "9 months",
+                        "value": "9"
+                    },
+                    {
+                        "display_name": "10 months",
+                        "value": "10"
+                    },
+                    {
+                        "display_name": "11 months",
+                        "value": "11"
+                    },
+                    {
+                        "display_name": "12 months",
+                        "value": "12"
+                    }
+                ]
             },
             {
                 "key": "EnableExercise",

@@ -311,13 +311,14 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	}
 
 	if wantsToken && authToken != "" {
-		tok, expiresAt, tokErr := p.createBotToken(authToken, bot.UserId, "API token for @"+req.Username)
+		tok, tokErr := p.createBotToken(authToken, bot.UserId, "API token for @"+req.Username)
 		if tokErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("token generation failed: %s", tokErr.Error()))
 			p.API.LogError("failed to create bot token", "bot_user_id", bot.UserId, "error", tokErr.Error())
 		} else {
-			tokenValue = tok
-			tokenExpiresAt = expiresAt
+			tokenValue = tok.Token
+			tokenExpiresAt = tok.ExpiresAt
+			p.trackBotTokenExpiry(tok, bot.Username, req.RequesterID)
 		}
 	}
 

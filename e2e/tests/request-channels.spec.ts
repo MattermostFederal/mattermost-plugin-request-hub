@@ -4,8 +4,14 @@ import {ADMIN, DEFAULT_PLUGIN_CONFIG, PLUGIN_ID, startRequestHub, type RequestHu
 
 test.describe.configure({mode: 'serial'});
 
-const TOKEN_LIFETIME_DAYS = 30;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const TOKEN_LIFETIME_MONTHS = 1;
+
+// addMonths matches the server's time.AddDate for the dates the test runs on.
+const addMonths = (millis: number, months: number) => {
+    const d = new Date(millis);
+    d.setUTCMonth(d.getUTCMonth() + months);
+    return d.getTime();
+};
 
 const REQUEST_CHANNELS = [
     'mattermost-channel-requests',
@@ -23,7 +29,7 @@ test.beforeAll(async () => {
     hub = await startRequestHub('request-channels', {
         ...DEFAULT_PLUGIN_CONFIG,
         twostepapprovermode: 'system_admin',
-        bottokenlifetimedays: String(TOKEN_LIFETIME_DAYS),
+        bottokenlifetimemonths: String(TOKEN_LIFETIME_MONTHS),
     });
     await hub.mm.mmctl('config', 'set', 'ServiceSettings.EnableUserAccessTokens', 'true');
 });
@@ -79,8 +85,8 @@ test('an approved bot token expires after the configured lifetime', async () => 
     const tokens = await admin.getUserAccessTokensForUser(botId) as Array<{expires_at?: number}>;
     expect(tokens).toHaveLength(1);
     const expiresAt = tokens[0].expires_at ?? 0;
-    expect(expiresAt).toBeGreaterThanOrEqual(before + (TOKEN_LIFETIME_DAYS * DAY_MS) - 60_000);
-    expect(expiresAt).toBeLessThanOrEqual(Date.now() + (TOKEN_LIFETIME_DAYS * DAY_MS) + 60_000);
+    expect(expiresAt).toBeGreaterThanOrEqual(addMonths(before, TOKEN_LIFETIME_MONTHS) - 60_000);
+    expect(expiresAt).toBeLessThanOrEqual(addMonths(Date.now(), TOKEN_LIFETIME_MONTHS) + 60_000);
 
     // The requester's token DM gives the date.
     const alice = await hub.client('alice');

@@ -128,6 +128,7 @@ func stubActivation(t *testing.T, api *plugintest.API, p *Plugin, config *config
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
+	stubTokenReminderJob(api)
 }
 
 func TestSyncMCPServer_DoesNothingBeforeActivation(t *testing.T) {
