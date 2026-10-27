@@ -1613,7 +1613,7 @@ func TestHandleAction_UnknownRequesterSkipsWelcomeAndAuditsByID(t *testing.T) {
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{AllowChannelRequests: true, ApprovalTeam: "appteam"})
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", false).Return(pluginChannel("audit", "mattermost-audit-requests"), nil)
+	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", true).Return(pluginChannel("audit", "mattermost-audit-requests"), nil)
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
 
 	pending := &channelRequest{ID: "req1", ApprovalPostID: "post1", RequesterID: "u_req", TeamID: "team1", Name: "team-x", DisplayName: "X", ChannelType: "O"}

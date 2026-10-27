@@ -819,7 +819,7 @@ func mockApprovalChannel(api *plugintest.API) {
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	ch := pluginChannel("appch", "mattermost-channel-requests")
 	ch.TeamId = "appteam-id"
-	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", false).Return(ch, nil)
+	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(ch, nil)
 }
 
 // mockMemberRequester sets up a regular (non-admin) requester u1 who is an
