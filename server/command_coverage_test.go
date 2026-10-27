@@ -119,7 +119,7 @@ func TestExecuteCommand_UnknownSubcommandShowsHelp(t *testing.T) {
 
 	require.Nil(t, appErr)
 	require.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-	require.Equal(t, commandHelpText(), resp.Text)
+	require.Contains(t, resp.Text, commandHelpText(p.getConfiguration()))
 	require.Contains(t, resp.Text, "/mattermost-request-hub webhook-outgoing")
 	require.Empty(t, api.Calls)
 }

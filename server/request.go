@@ -154,6 +154,12 @@ func escapeMarkdown(s string) string {
 	return strings.ReplaceAll(s, "@", "@\u200b")
 }
 
+// inlineCode renders s in a code span, dropping backticks so the value
+// can't close the span early.
+func inlineCode(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "") + "`"
+}
+
 // slugify converts a free-form string into a valid channel URL name.
 func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -177,6 +183,22 @@ func (p *Plugin) resolveChannelName(config *configuration, in requestInput) (str
 	return resolvePrefixedName(config.Prefixes(), in)
 }
 
+// findPrefix returns the prefix named selected. An exact match wins;
+// otherwise "eng" finds "eng-", since people often leave off the hyphen.
+func findPrefix(prefixes []channelPrefix, selected string) *channelPrefix {
+	for i := range prefixes {
+		if prefixes[i].Prefix == selected {
+			return &prefixes[i]
+		}
+	}
+	for i := range prefixes {
+		if prefixes[i].Prefix == selected+"-" {
+			return &prefixes[i]
+		}
+	}
+	return nil
+}
+
 // resolvePrefixedName joins the selected prefix with a slugified suffix.
 // The suffix is slugified BEFORE joining so users can type "My Team" and
 // get "team-my-team".
@@ -185,15 +207,13 @@ func resolvePrefixedName(prefixes []channelPrefix, in requestInput) (string, err
 	if selected == "" {
 		return "", errors.New("please pick a channel prefix (e.g., team-, project-, ops-) from the dropdown")
 	}
-	var entry *channelPrefix
-	for i := range prefixes {
-		if prefixes[i].Prefix == selected {
-			entry = &prefixes[i]
-			break
-		}
-	}
+	entry := findPrefix(prefixes, selected)
 	if entry == nil {
-		return "", errors.Errorf("prefix %q is not in the list of allowed prefixes", selected)
+		allowed := make([]string, len(prefixes))
+		for i := range prefixes {
+			allowed[i] = prefixes[i].Prefix
+		}
+		return "", errors.Errorf("prefix %q is not in the list of allowed prefixes: %s", selected, strings.Join(allowed, ", "))
 	}
 
 	suffix := strings.TrimSpace(in.Name)
