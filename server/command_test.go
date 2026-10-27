@@ -40,6 +40,25 @@ func TestExecuteCommand_OpensDialogWhenConfigured(t *testing.T) {
 	api.AssertCalled(t, "OpenInteractiveDialog", mock.Anything)
 }
 
+func TestExecuteCommand_DialogFailureRepliesPrivately(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		AllowChannelRequests: true,
+		prefixes:             []channelPrefix{{Prefix: "team-", Description: "Teams"}},
+	})
+
+	api.On("OpenInteractiveDialog", mock.Anything).Return(testAppErr("expired trigger"))
+
+	resp, appErr := p.ExecuteCommand(nil, &model.CommandArgs{TriggerId: "trig", TeamId: "team1"})
+
+	require.Nil(t, appErr)
+	require.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
+	require.Contains(t, resp.Text, "Could not open")
+}
+
 func TestExecuteCommand_DocsOpensGuide(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)

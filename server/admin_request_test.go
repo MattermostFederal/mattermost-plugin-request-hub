@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -304,4 +305,152 @@ func TestCanApproveAdminRequest_FormerTeamAdminDenied(t *testing.T) {
 
 	former := &model.User{Id: "u_former", Username: "gone", Roles: "system_user"}
 	require.False(t, p.canApproveAdminRequest(former, "ch1"))
+}
+
+// mockAdminRequestPrereqs sets up a regular requester u1 who belongs to the
+// open channel chX (team1) and nominates testNomineeID, who is also a member.
+func mockAdminRequestPrereqs(api *plugintest.API) {
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Username: "req", Roles: "system_user"}, nil)
+	api.On("GetChannelMember", "chX", "u1").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannel", "chX").Return(&model.Channel{Id: "chX", Name: "marketing", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+	api.On("GetChannelMember", "chX", testNomineeID).Return(&model.ChannelMember{}, nil)
+}
+
+func TestSubmitAdminRequest_RequesterLookupFails(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("GetUser", "u1").Return(nil, testAppErr("gone"))
+
+	_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+
+	require.EqualError(t, err, "could not load your account; try again")
+}
+
+func TestSubmitAdminRequest_StoreFailure(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{})
+
+	mockAdminRequestPrereqs(api)
+	api.On("KVSet", mock.Anything, mock.Anything).Return(testAppErr("kv down"))
+
+	_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+
+	require.EqualError(t, err, "could not save your request; try again")
+	api.AssertNotCalled(t, "CreatePost", mock.Anything)
+}
+
+func TestSubmitAdminRequest_DeliveryFailureRollsBack(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{}) // no approval channel: DMs only
+
+	mockAdminRequestPrereqs(api)
+	var key string
+	api.On("KVSet", mock.Anything, mock.Anything).Run(func(args mock.Arguments) { key = args.String(0) }).Return(nil)
+	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng", DisplayName: "Engineering"}, nil)
+	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nom"}, nil)
+	// Neither the approver lookup nor the DM fallback can find anyone.
+	api.On("GetUsers", mock.Anything).Return(nil, testAppErr("db down"))
+	api.On("GetTeamMembers", "team1", 0, 200).Return(nil, testAppErr("db down"))
+	api.On("KVDelete", mock.Anything).Return(nil)
+
+	_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+
+	require.ErrorContains(t, err, "could not send your request to the approvers")
+	require.True(t, strings.HasPrefix(key, kvAdminRequestPrefix))
+	api.AssertCalled(t, "KVDelete", key)
+}
+
+func TestAdminApprovalHeader_NoApproversIsPlainText(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "bot-user-id"}}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
+
+	require.Equal(t, "A Channel Admin request needs your review.", p.adminApprovalHeader(&model.Channel{TeamId: "team1"}))
+}
+
+func TestAdminApproverIDs_DedupesAndSkipsBot(t *testing.T) {
+	api := &plugintest.API{}
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "bot-user-id"}, {Id: "a1"}}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{
+		{UserId: "a1", Roles: "team_user team_admin"}, // also a System Admin
+		{UserId: "t2", SchemeAdmin: true},
+		{UserId: "u3", Roles: "team_user"},
+		{UserId: "", Roles: "team_admin"},
+	}, nil)
+
+	require.Equal(t, []string{"a1", "t2"}, p.adminApproverIDs("team1"))
+}
+
+func TestLoadAdminRequest_Errors(t *testing.T) {
+	t.Run("store read fails", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		api.On("KVGet", kvAdminRequestPrefix+"a1").Return(nil, testAppErr("kv down"))
+		_, _, err := p.loadAdminRequest("a1")
+		require.ErrorContains(t, err, "failed to load admin request")
+	})
+
+	t.Run("corrupt record", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		api.On("KVGet", kvAdminRequestPrefix+"a1").Return([]byte("{"), nil)
+		_, _, err := p.loadAdminRequest("a1")
+		require.ErrorContains(t, err, "failed to unmarshal admin request")
+	})
+}
+
+func TestPostAdminPromotionMessage(t *testing.T) {
+	t.Run("nobody to name posts nothing", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		api.On("GetUser", "u_nom").Return(nil, testAppErr("gone"))
+
+		p.postAdminPromotionMessage(&model.Channel{Id: "chX"}, &adminRequest{NomineeIDs: []string{"u_nom"}}, nil)
+
+		api.AssertNotCalled(t, "CreatePost", mock.Anything)
+	})
+
+	t.Run("post failure is logged", func(t *testing.T) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		api.On("GetUser", "u_nom").Return(&model.User{Id: "u_nom", Username: "nom"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.Message == "@nom is now a Channel Admin for this channel."
+		})).Return(nil, testAppErr("post failed"))
+
+		p.postAdminPromotionMessage(&model.Channel{Id: "chX"}, &adminRequest{NomineeIDs: []string{"u_nom"}}, nil)
+
+		api.AssertCalled(t, "LogWarn", "failed to post channel-admin promotion message", "channel_id", "chX", "error", mock.Anything)
+	})
+}
+
+func TestPromoteChannelAdmins_SkipsEmptyIDs(t *testing.T) {
+	api := &plugintest.API{}
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("GetChannelMember", "chX", "u_nom").Return(&model.ChannelMember{}, nil)
+	api.On("UpdateChannelMemberRoles", "chX", "u_nom", channelAdminRoles).Return(&model.ChannelMember{}, nil)
+
+	got := p.promoteChannelAdmins(&adminRequest{ChannelID: "chX", NomineeIDs: []string{"", "u_nom"}})
+
+	require.Equal(t, []string{"u_nom"}, got)
+	api.AssertNotCalled(t, "GetChannelMember", "chX", "")
 }

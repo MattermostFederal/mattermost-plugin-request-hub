@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -19,9 +17,8 @@ type actionHandlerCase struct {
 	name     string
 	kvPrefix string
 	// record builds the pending request with the given approval card ID.
-	record func(approvalPostID string) any
-	// handler returns the handler under test.
-	handler func(p *Plugin) func(http.ResponseWriter, *http.Request, bool)
+	record  func(approvalPostID string) any
+	handler actionHandler
 	// stubBeforeClaim registers the calls a Deny makes between the card
 	// check and the claim.
 	stubBeforeClaim func(api *plugintest.API)
@@ -120,14 +117,7 @@ func actionHandlerCases() []actionHandlerCase {
 // and returns the decoded reply.
 func runAction(t *testing.T, p *Plugin, tc actionHandlerCase, approve bool) model.PostActionIntegrationResponse {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(actionBody(t, "r1")))
-	r.Header.Set(headerUserID, "admin1")
-	w := httptest.NewRecorder()
-	tc.handler(p)(w, r, approve)
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp model.PostActionIntegrationResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	return resp
+	return runAsAdmin(t, p, tc.handler, approve)
 }
 
 func stubSystemAdmin(api *plugintest.API) {
