@@ -25,7 +25,7 @@ func TestResolveApprovalChannel_UsesPerTeamChannelWhenEnabled(t *testing.T) {
 		Return([]*model.TeamMember{{TeamId: "team1", UserId: "u_admin", SchemeAdmin: true}}, nil)
 
 	// Fast path: channel already exists in this team.
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-team1"}, nil)
 
 	ch, label := p.resolveApprovalChannel("team1")
@@ -46,7 +46,7 @@ func TestResolveApprovalChannel_UsesPerTeamWhenSystemAdminOnTeam(t *testing.T) {
 	api.On("GetTeamMembers", "team1", 0, 200).
 		Return([]*model.TeamMember{{TeamId: "team1", UserId: "u_sys", Roles: "team_user"}}, nil)
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-team1"}, nil)
 
 	ch, label := p.resolveApprovalChannel("team1")
@@ -72,7 +72,7 @@ func TestResolveApprovalChannel_FallsBackToGlobalWhenPerTeamFails(t *testing.T) 
 
 	// Per-team fast path fails — channel doesn't exist, team lookup also fails
 	// so ensureTeamApprovalChannel returns an error.
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 	api.On("GetTeam", "team1").
 		Return(nil, testAppErr("team not found"))
@@ -80,7 +80,7 @@ func TestResolveApprovalChannel_FallsBackToGlobalWhenPerTeamFails(t *testing.T) 
 	// Global fallback succeeds.
 	api.On("GetTeamByName", "globalteam").Return(&model.Team{Id: "globalteam-id", Name: "globalteam"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "globalteam-id", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "globalteam-id", "mattermost-channel-requests", true).
 		Return(pluginChannel("ch-global", "mattermost-channel-requests"), nil)
 
 	ch, label := p.resolveApprovalChannel("team1")
@@ -110,7 +110,7 @@ func TestEnsureTeamApprovalChannel_FastPathReturnsExisting(t *testing.T) {
 	p.setConfiguration(&configuration{})
 
 	existing := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "existing-ch"}
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).Return(existing, nil)
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(existing, nil)
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestEnsureTeamApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	p.setConfiguration(&configuration{})
 
 	// Channel doesn't exist yet.
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 
 	team := &model.Team{Id: "team1", DisplayName: "Engineering"}
@@ -185,14 +185,14 @@ func TestEnsureTeamApprovalChannel_RaceRetryOnCreateConflict(t *testing.T) {
 
 	// First GetChannelByName (fast path) misses; a concurrent call creates it
 	// before ours does, so CreateChannel fails; the retry lookup succeeds.
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found")).Once()
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Eng"}, nil)
 	api.On("GetTeamMember", "team1", "bot-user-id").Return(nil, testAppErr("not a member"))
 	api.On("CreateTeamMember", "team1", "bot-user-id").Return(&model.TeamMember{}, nil)
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("already exists"))
 	// Retry lookup after CreateChannel fails.
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "already-created"}, nil).Once()
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
@@ -208,7 +208,7 @@ func TestEnsureTeamApprovalChannel_UsesFixedChannelName(t *testing.T) {
 	// Channel name is hardcoded — no per-team name setting exists.
 	p.setConfiguration(&configuration{})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Acme"}, nil)
 	api.On("GetTeamMember", "team1", "bot-user-id").Return(&model.TeamMember{DeleteAt: 1}, nil)
@@ -232,7 +232,7 @@ func TestEnsureTeamApprovalChannel_CreateFailureWithNoChannelIsAnError(t *testin
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Acme"}, nil)
 	api.On("GetTeamMember", "team1", "bot-user-id").Return(&model.TeamMember{}, nil)
@@ -250,7 +250,7 @@ func TestEnsureTeamApprovalChannel_BotAlreadyOnTeamIsNotAddedAgain(t *testing.T)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Acme"}, nil)
 	api.On("GetTeamMember", "team1", "bot-user-id").Return(&model.TeamMember{TeamId: "team1", UserId: "bot-user-id"}, nil)
@@ -272,7 +272,7 @@ func TestEnsureTeamApprovalChannel_BotTeamJoinFailureStillCreates(t *testing.T) 
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(nil, testAppErr("not found"))
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Acme"}, nil)
 	api.On("GetTeamMember", "team1", "bot-user-id").Return(nil, testAppErr("not a member"))
@@ -296,7 +296,7 @@ func TestEnsureTeamApprovalChannel_NameTakenByPrivateChannelOfSomeoneElse(t *tes
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "theirs", Type: model.ChannelTypePrivate, CreatorId: "u_other"}, nil)
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
@@ -345,7 +345,7 @@ func TestUserHasJoinedTeam_AddsTeamAdminToApprovalChannel(t *testing.T) {
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{PerTeamApprovalChannels: true})
 
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-team1"}, nil)
 	api.On("AddChannelMember", "ch-team1", "u_ta").Return(&model.ChannelMember{}, nil)
 
@@ -418,7 +418,7 @@ func TestSubmitRequest_RoutesToPerTeamChannel(t *testing.T) {
 
 	// Per-team channel already exists — fast path.
 	teamCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "team-ch-t1"}
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(teamCh, nil)
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(teamCh, nil)
 	api.On("GetTeam", "t1").Return(&model.Team{Id: "t1", Name: "t1", DisplayName: "Team One"}, nil)
 
 	// Approval post goes to the per-team channel.

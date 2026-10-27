@@ -366,7 +366,7 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).
 		Return(pluginChannel("approval-ch", "mattermost-channel-requests"), nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil)
@@ -403,7 +403,7 @@ func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return !isCardKey(key) }), mock.Anything).Return(nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).
 		Return(pluginChannel("approval-ch", "mattermost-channel-requests"), nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil).Once()
@@ -442,7 +442,7 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
-			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", false).Return(taken, nil)
+			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(taken, nil)
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 			api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)
 			api.On("GetDirectChannel", mock.Anything, "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)

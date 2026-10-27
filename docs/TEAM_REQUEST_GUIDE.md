@@ -140,7 +140,7 @@ creation requests), not the root channel-request queue. System Admins Approve or
 Deny, and so do the approval team's Team Admins when **Approval team's Team
 Admins can approve team and Team Admin requests** is on. The requested team's own
 Team Admins can't approve through the plugin. Only a System Admin can approve a
-request they made themselves.
+request they made themselves or one that nominates them.
 
 <img src="images/team-admin-request/mattermost-team-admin-approval-card.png" alt="Team Admin approval card" width="720">
 
