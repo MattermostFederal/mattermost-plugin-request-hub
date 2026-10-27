@@ -202,8 +202,45 @@ func TestCanApproveStep(t *testing.T) {
 			TwoStepApproverMode:   twoStepModeUserGroup,
 			SecurityApproverGroup: "security-approvers",
 		})
-		groupName := "security-approvers"
-		api.On("GetGroupsForUser", "u2").Return([]*model.Group{{Name: &groupName}}, nil)
+		stubSyncedGroup(api, "security-approvers", "g-sec")
+		api.On("GetGroupsForUser", "u2").Return([]*model.Group{{Id: "g-sec"}}, nil)
+		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+
+	t.Run("usergroup mode: a custom group with the configured name does not qualify", func(t *testing.T) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		p := newTestPlugin(api)
+		p.setConfiguration(&configuration{
+			TwoStepApproverMode:   twoStepModeUserGroup,
+			SecurityApproverGroup: "security-approvers",
+		})
+		name := "security-approvers"
+		custom := &model.Group{Id: "g-custom", Name: &name, Source: model.GroupSourceCustom}
+		api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+		api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{custom}, nil)
+		api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{}, nil)
+		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
+		require.NoError(t, err)
+		require.False(t, ok)
+		api.AssertNotCalled(t, "GetGroupsForUser", mock.Anything)
+	})
+
+	t.Run("usergroup mode: a synced group found by display name qualifies its members", func(t *testing.T) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		p := newTestPlugin(api)
+		p.setConfiguration(&configuration{
+			TwoStepApproverMode:   twoStepModeUserGroup,
+			SecurityApproverGroup: "Security Approvers",
+		})
+		ldap := &model.Group{Id: "g-ldap", DisplayName: "Security Approvers", Source: model.GroupSourceLdap}
+		api.On("GetGroupByName", "Security Approvers").Return(nil, testAppErr("not found"))
+		api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, testAppErr("search failed"))
+		api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{ldap}, nil)
+		api.On("GetGroupsForUser", "u2").Return([]*model.Group{{Id: "g-ldap"}}, nil)
 		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -241,6 +278,12 @@ func TestCanApproveStep(t *testing.T) {
 		require.True(t, ok)
 		api.AssertNotCalled(t, "GetGroupsForUser", mock.Anything)
 	})
+}
+
+// stubSyncedGroup makes name resolve to an LDAP group with the given ID.
+func stubSyncedGroup(api *plugintest.API, name, id string) {
+	groupName := name
+	api.On("GetGroupByName", name).Return(&model.Group{Id: id, Name: &groupName, Source: model.GroupSourceLdap}, nil).Maybe()
 }
 
 func TestApplyTwoStepApproval(t *testing.T) {

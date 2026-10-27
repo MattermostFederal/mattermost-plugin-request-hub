@@ -29,23 +29,23 @@ const DOCS_URL = `/plugins/${manifest.id}/public/help/docs.html`;
 
 const overlayStyle: React.CSSProperties = {
     position: 'fixed',
-inset: 0,
-background: 'rgba(0, 0, 0, 0.5)',
+    inset: 0,
+    background: 'rgba(0, 0, 0, 0.5)',
     display: 'flex',
-alignItems: 'center',
-justifyContent: 'center',
-zIndex: 1050,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1050,
 };
 const dialogStyle: React.CSSProperties = {
     background: 'var(--center-channel-bg, #fff)',
-color: 'var(--center-channel-color, #3d3c40)',
+    color: 'var(--center-channel-color, #3d3c40)',
     borderRadius: 8,
-width: 600,
-maxWidth: '92vw',
-maxHeight: '90vh',
-overflowY: 'auto',
+    width: 600,
+    maxWidth: '92vw',
+    maxHeight: '90vh',
+    overflowY: 'auto',
     padding: 24,
-boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const gridStyle: React.CSSProperties = {
     display: 'grid',
@@ -55,8 +55,8 @@ const gridStyle: React.CSSProperties = {
 };
 const cardStyle: React.CSSProperties = {
     display: 'flex',
-flexDirection: 'column',
-gap: 6,
+    flexDirection: 'column',
+    gap: 6,
     padding: '16px 18px',
     border: '1px solid var(--center-channel-color-16, rgba(61,60,64,0.16))',
     borderRadius: 6,

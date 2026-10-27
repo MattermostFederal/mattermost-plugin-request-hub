@@ -17,6 +17,10 @@ const (
 	fieldBotDisplayName = "bot_display_name"
 	fieldBotDescription = "bot_description"
 	fieldBotOwner       = "bot_owner"
+
+	// Bounds on a requested bot username.
+	minBotUsernameLen = 3
+	maxBotUsernameLen = 22
 )
 
 // botRequest is a pending request to create a new bot account. Because bots
@@ -64,19 +68,20 @@ type botRequestInput struct {
 	OutgoingWebhookChannelID   string
 	OutgoingWebhookDisplayName string
 	OutgoingWebhookCallbackURL string
-	// ForceQueue skips System Admin bypass (slash-command dialog path).
-	ForceQueue bool
 }
 
-// submitBotRequest validates the input and either creates the bot immediately
-// (System Admins) or stores a pending request for two-step approval.
+// submitBotRequest validates the input and stores a pending request for
+// two-step approval.
 func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (string, error) {
+	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
+		return "", errors.New(botRequestsDisabledMsg)
+	}
 	username := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(input.Username, "@")))
 	if username == "" {
 		return "", errors.New("A bot username is required.")
 	}
-	if len(username) < 3 || len(username) > 22 {
-		return "", errors.New("Bot username must be 3-22 characters.")
+	if len(username) < minBotUsernameLen || len(username) > maxBotUsernameLen {
+		return "", errors.Errorf("Bot username must be %d-%d characters.", minBotUsernameLen, maxBotUsernameLen)
 	}
 	if !model.IsValidUsername(username) {
 		return "", errors.New("Bot username must be lowercase letters, numbers, and . - _ (3-22 characters).")
@@ -84,21 +89,40 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 	if strings.TrimSpace(input.DisplayName) == "" {
 		return "", errors.New("A display name is required.")
 	}
+	for _, check := range []error{
+		checkTextLen("Display name", input.DisplayName, maxDisplayNameLen),
+		checkTextLen("Description", input.Description, maxDescriptionLen),
+		checkByteLen("Incoming webhook name", input.IncomingWebhookDisplayName, maxWebhookNameBytes),
+		checkByteLen("Outgoing webhook name", input.OutgoingWebhookDisplayName, maxWebhookNameBytes),
+	} {
+		if check != nil {
+			return "", check
+		}
+	}
+	if strings.TrimSpace(input.OutgoingWebhookChannelID) != "" {
+		if err := checkCallbackURL(input.OutgoingWebhookCallbackURL); err != nil {
+			return "", err
+		}
+	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
+	}
+	if err := p.checkBotOwner(requesterID, strings.TrimSpace(input.OwnerUserID)); err != nil {
+		return "", err
 	}
 
 	incomingChID := strings.TrimSpace(input.IncomingWebhookChannelID)
 	outgoingChID := strings.TrimSpace(input.OutgoingWebhookChannelID)
 	if incomingChID != "" {
-		if _, err := p.requireWebhookTargetChannel(requester, incomingChID); err != nil {
+		if _, err := p.requireWebhookTargetChannel(requester, incomingChID, webhookTypeIncoming); err != nil {
 			return "", errors.Wrap(err, "incoming webhook channel")
 		}
 	}
 	if outgoingChID != "" {
-		if _, err := p.requireWebhookTargetChannel(requester, outgoingChID); err != nil {
+		if _, err := p.requireWebhookTargetChannel(requester, outgoingChID, webhookTypeOutgoing); err != nil {
 			return "", errors.Wrap(err, "outgoing webhook channel")
 		}
 	}
@@ -116,22 +140,6 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		OutgoingWebhookChannelID:   outgoingChID,
 		OutgoingWebhookDisplayName: strings.TrimSpace(input.OutgoingWebhookDisplayName),
 		OutgoingWebhookCallbackURL: strings.TrimSpace(input.OutgoingWebhookCallbackURL),
-	}
-
-	// System Admins can create bots without going through approval — unless
-	// ForceQueue (slash-command dialog) which always produces an approval card,
-	// or when token/webhook extras were requested (those are only fulfilled on
-	// the two-step approval path).
-	wantsExtras := req.RequestToken ||
-		req.IncomingWebhookChannelID != "" ||
-		req.OutgoingWebhookChannelID != ""
-	if !input.ForceQueue && requester.IsSystemAdmin() && !wantsExtras {
-		bot, err := p.createBotForRequest(req)
-		if err != nil {
-			return "", err
-		}
-		p.logAudit(auditDirect, fmt.Sprintf("@%s created bot @%s directly", requester.Username, bot.Username), "")
-		return fmt.Sprintf("Bot **@%s** created.", bot.Username), nil
 	}
 
 	if err := p.storeBotRequest(req); err != nil {
@@ -202,6 +210,7 @@ func (p *Plugin) postBotApprovalRequest(req *botRequest, requester *model.User) 
 	// approvers see this card without waiting for the 2m ticker.
 	go p.reconcileTwoStepApproverChannels()
 	return p.postApprovalAttachment(
+		req.ID,
 		p.botApprovalAttachment(req, requester),
 		p.botApprovalHeader(),
 		ch,
@@ -219,9 +228,9 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 	}
 
 	var details []string
-	details = append(details, fmt.Sprintf("**Display name:** %s", req.DisplayName))
+	details = append(details, fmt.Sprintf("**Display name:** %s", escapeMarkdown(req.DisplayName)))
 	if req.Description != "" {
-		details = append(details, fmt.Sprintf("**Description:** %s", req.Description))
+		details = append(details, fmt.Sprintf("**Description:** %s", escapeMarkdown(req.Description)))
 	}
 	if req.OwnerUserID != "" {
 		details = append(details, fmt.Sprintf("**Owner:** %s", p.mentionList([]string{req.OwnerUserID})))
@@ -234,14 +243,14 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 		if name == "" {
 			name = "incoming webhook"
 		}
-		details = append(details, fmt.Sprintf("**Incoming webhook:** `%s` → %s", name, p.channelDisplayRef(req.IncomingWebhookChannelID)))
+		details = append(details, fmt.Sprintf("**Incoming webhook:** %s → %s", escapeMarkdown(name), p.channelDisplayRef(req.IncomingWebhookChannelID)))
 	}
 	if req.OutgoingWebhookChannelID != "" {
 		name := req.OutgoingWebhookDisplayName
 		if name == "" {
 			name = "outgoing webhook"
 		}
-		details = append(details, fmt.Sprintf("**Outgoing webhook:** `%s` → %s (callback: `%s`)", name, p.channelDisplayRef(req.OutgoingWebhookChannelID), req.OutgoingWebhookCallbackURL))
+		details = append(details, fmt.Sprintf("**Outgoing webhook:** %s → %s (callback: %s)", escapeMarkdown(name), p.channelDisplayRef(req.OutgoingWebhookChannelID), escapeMarkdown(req.OutgoingWebhookCallbackURL)))
 	}
 
 	fields = append(fields, &model.MessageAttachmentField{
@@ -304,11 +313,28 @@ func (p *Plugin) channelDisplayRef(channelID string) string {
 	if appErr != nil {
 		return "#" + ch.Name
 	}
-	return fmt.Sprintf("#%s (Team: %s)", ch.Name, team.DisplayName)
+	return fmt.Sprintf("#%s (Team: %s)", ch.Name, escapeMarkdown(team.DisplayName))
 }
 
-// channelNamesList resolves channel IDs to ~name for approval cards. Uses the
-// raw ID when a lookup fails so reviewers still see something actionable.
+// checkBotOwner accepts an empty owner (the requester owns the bot), the
+// requester, or another active user who isn't a bot.
+func (p *Plugin) checkBotOwner(requesterID, ownerID string) error {
+	if ownerID == "" || ownerID == requesterID {
+		return nil
+	}
+	if !model.IsValidId(ownerID) {
+		return errors.New("The bot owner must be picked from the list.")
+	}
+	owner, appErr := p.API.GetUser(ownerID)
+	if appErr != nil || owner == nil || owner.DeleteAt != 0 || owner.IsBot {
+		return errors.New("The bot owner must be an active user.")
+	}
+	return nil
+}
+
+// channelNamesList resolves channel IDs to ~name for approval cards, marking
+// private channels. Uses the raw ID when a lookup fails so reviewers still
+// see something actionable.
 func (p *Plugin) channelNamesList(ids []string) string {
 	if len(ids) == 0 {
 		return ""
@@ -320,7 +346,11 @@ func (p *Plugin) channelNamesList(ids []string) string {
 			parts = append(parts, id)
 			continue
 		}
-		parts = append(parts, "~"+ch.Name)
+		name := "~" + ch.Name
+		if ch.Type == model.ChannelTypePrivate {
+			name += " (private)"
+		}
+		parts = append(parts, name)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -366,14 +396,14 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 				Type:        "text",
 				Placeholder: "my-integration-bot",
 				HelpText:    "The bot's @handle. Lowercase letters, numbers, and . - _ (3-22 characters).",
-				MaxLength:   22,
+				MaxLength:   maxBotUsernameLen,
 			},
 			{
 				DisplayName: "Display name",
 				Name:        fieldBotDisplayName,
 				Type:        "text",
 				Placeholder: "My Integration Bot",
-				MaxLength:   64,
+				MaxLength:   maxDisplayNameLen,
 			},
 			{
 				DisplayName: "Description",
@@ -381,7 +411,7 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 				Type:        "textarea",
 				Optional:    true,
 				Placeholder: "What does this bot do? What systems will it integrate with?",
-				MaxLength:   500,
+				MaxLength:   maxDescriptionLen,
 			},
 			{
 				DisplayName: "Bot owner",

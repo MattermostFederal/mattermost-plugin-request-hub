@@ -22,12 +22,13 @@ func TestAddUserToTwoStepApprovalChannels_AddsTeamAndChannelMembers(t *testing.T
 	})
 
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
 
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 	api.On("CreateTeamMember", "tid", "groot").Return(&model.TeamMember{}, nil).Twice()
 	api.On("AddChannelMember", "bot-ch", "groot").Return(&model.ChannelMember{}, nil).Once()
 	api.On("AddChannelMember", "wh-ch", "groot").Return(&model.ChannelMember{}, nil).Once()
@@ -55,17 +56,21 @@ func TestSyncTwoStepApproverChannels_SeedsSecurityGroupMembers(t *testing.T) {
 
 	secName := "security-approvers"
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
-	secGroup := &model.Group{Id: "g-sec", Name: &secName, Source: model.GroupSourceCustom, DeleteAt: 0}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	secGroup := &model.Group{Id: "g-sec", Name: &secName, Source: model.GroupSourceLdap, DeleteAt: 0}
 
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 	api.On("GetGroupByName", "security-approvers").Return(secGroup, nil)
 	api.On("GetGroupByName", "system-approvers").Return(nil, testAppErr("missing")).Maybe()
 	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
 	api.On("GetGroupsBySource", mock.Anything).Return([]*model.Group{}, nil).Maybe()
+	// The synced group is linked to the approval team and channels.
+	api.On("UpsertGroupSyncable", mock.Anything).Return(&model.GroupSyncable{}, nil).Maybe()
+	api.On("CreateDefaultSyncableMemberships", mock.Anything).Return(nil).Maybe()
 	api.On("GetGroupMemberUsers", "g-sec", 0, 100).Return([]*model.User{{Id: "groot"}, {Id: "dual"}}, nil)
 	// system-approvers missing → user-scan fallback
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
@@ -82,27 +87,20 @@ func TestSyncTwoStepApproverChannels_SeedsSecurityGroupMembers(t *testing.T) {
 	api.AssertCalled(t, "AddChannelMember", "bot-ch", "dual")
 }
 
-func TestListApproverGroupMemberIDs_FallsBackToUserScanWhenGetGroupByNameFails(t *testing.T) {
+func TestListApproverGroupMemberIDs_IgnoresCustomGroups(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
 
 	secName := "security-approvers"
-	api.On("GetGroupByName", "security-approvers").Return(nil, testAppErr("no matching group found"))
-	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
-	api.On("GetGroupsBySource", model.GroupSourceCustom).Return([]*model.Group{}, nil).Maybe()
-	api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{}, nil).Maybe()
-	api.On("GetUsers", mock.MatchedBy(func(o *model.UserGetOptions) bool { return o.Page == 0 })).
-		Return([]*model.User{{Id: "groot"}, {Id: "other"}}, nil)
-	api.On("GetGroupsForUser", "groot").Return([]*model.Group{{Name: &secName}}, nil)
-	api.On("GetGroupsForUser", "other").Return([]*model.Group{}, nil)
+	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
+	api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{custom}, nil)
+	api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{}, nil)
 
-	ids := p.listApproverGroupMemberIDs("@security-approvers", true)
-	require.Equal(t, []string{"groot"}, ids)
-
-	// Periodic reconcile must not full-scan when the group is unresolved.
-	idsLight := p.listApproverGroupMemberIDs("@security-approvers", false)
-	require.Empty(t, idsLight)
+	require.Empty(t, p.listApproverGroupMemberIDs("@security-approvers"))
+	api.AssertNotCalled(t, "GetGroupMemberUsers", mock.Anything, mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "GetUsers", mock.Anything)
 }
 
 func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
@@ -119,13 +117,14 @@ func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
 
 	secName := "security-approvers"
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
-	secGroup := &model.Group{Id: "g-sec", Name: &secName, Source: model.GroupSourceCustom, DeleteAt: 0}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	secGroup := &model.Group{Id: "g-sec", Name: &secName, Source: model.GroupSourceLdap, DeleteAt: 0}
 
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 	api.On("GetGroupByName", "security-approvers").Return(secGroup, nil)
 	api.On("GetGroupByName", "system-approvers").Return(nil, testAppErr("missing")).Maybe()
 	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
@@ -147,7 +146,7 @@ func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
 	}, nil)
 	api.On("GetUser", "readded").Return(&model.User{Id: "readded"}, nil).Maybe()
 	api.On("GetTeamMember", "tid", "readded").Return(&model.TeamMember{UserId: "readded", Roles: model.TeamUserRoleId}, nil).Maybe()
-	api.On("GetGroupsForUser", "readded").Return([]*model.Group{{Name: &secName}}, nil).Maybe()
+	api.On("GetGroupsForUser", "readded").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil).Maybe()
 
 	p.reconcileTwoStepApproverChannels()
 
@@ -170,12 +169,15 @@ func TestEvictStaleTwoStepApproverChannelMembers_RemovesDemotedKeepsAdmins(t *te
 
 	secName := "security-approvers"
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
 
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	stubSyncedGroup(api, "system-approvers", "g-sys")
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 
 	api.On("GetChannelMembers", "bot-ch", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
@@ -197,7 +199,7 @@ func TestEvictStaleTwoStepApproverChannelMembers_RemovesDemotedKeepsAdmins(t *te
 	api.On("GetTeamMember", "tid", "sysadmin").Return(&model.TeamMember{UserId: "sysadmin", Roles: model.TeamUserRoleId}, nil).Maybe()
 
 	api.On("GetGroupsForUser", "demoted").Return([]*model.Group{}, nil)
-	api.On("GetGroupsForUser", "still-in").Return([]*model.Group{{Name: &secName}}, nil)
+	api.On("GetGroupsForUser", "still-in").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil)
 	api.On("GetGroupsForUser", "teamadmin").Return([]*model.Group{}, nil).Maybe()
 
 	api.On("DeleteChannelMember", "bot-ch", "demoted").Return(nil).Once()
@@ -222,12 +224,15 @@ func TestReconcileTwoStepAccessForUser_EvictsWhenDemoted(t *testing.T) {
 	})
 
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
 
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	stubSyncedGroup(api, "system-approvers", "g-sys")
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 	api.On("GetTeamMember", "tid", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
 	api.On("GetGroupsForUser", "demoted").Return([]*model.Group{}, nil)
 	api.On("DeleteChannelMember", "bot-ch", "demoted").Return(nil).Once()
@@ -251,14 +256,17 @@ func TestEnsureTwoStepApproverChannelAccess_SecurityGroupMember(t *testing.T) {
 
 	secName := "security-approvers"
 	team := &model.Team{Id: "tid", Name: "appteam"}
-	botCh := &model.Channel{Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
-	whCh := &model.Channel{Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
+	botCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bot-ch", TeamId: "tid", Name: "mattermost-bot-requests"}
+	whCh := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "wh-ch", TeamId: "tid", Name: "mattermost-webhook-requests"}
 
-	api.On("GetGroupsForUser", "groot").Return([]*model.Group{{Name: &secName}}, nil)
+	api.On("GetGroupsForUser", "groot").Return([]*model.Group{{Id: "g-sec", Name: &secName}}, nil)
 	api.On("GetTeamMember", "tid", "groot").Return(&model.TeamMember{UserId: "groot", Roles: model.TeamUserRoleId}, nil).Maybe()
 	api.On("GetTeamByName", "appteam").Return(team, nil)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(botCh, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(whCh, nil)
+	stubApprovalTeamRecord(api)
+	stubSyncedGroup(api, "security-approvers", "g-sec")
+	stubSyncedGroup(api, "system-approvers", "g-sys")
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(botCh, nil)
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(whCh, nil)
 	api.On("CreateTeamMember", "tid", "groot").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("AddChannelMember", "bot-ch", "groot").Return(&model.ChannelMember{}, nil).Once()
 	api.On("AddChannelMember", "wh-ch", "groot").Return(&model.ChannelMember{}, nil).Once()

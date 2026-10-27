@@ -33,7 +33,7 @@ type teamGuestRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, channelIDs []string, reason string, forceQueue bool) (string, error) {
+func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, channelIDs []string, reason string) (string, error) {
 	if !p.getConfiguration().RequestEnabled(requestTypeTeamGuest) {
 		return "", errors.New(teamGuestRequestsDisabledMsg)
 	}
@@ -44,20 +44,28 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 	if len(channels) == 0 {
 		return "", errors.New("pick at least one channel the guest should access")
 	}
+	if err := checkIDList(channels, "guest channels"); err != nil {
+		return "", err
+	}
 
 	email = strings.TrimSpace(strings.ToLower(email))
-	if email == "" || !strings.Contains(email, "@") {
+	if len(email) > maxEmailLen || !model.IsValidEmail(email) {
 		return "", errors.New("a valid guest email is required")
+	}
+	if err := checkTextLen("reason", reason, maxReasonLen); err != nil {
+		return "", err
 	}
 
 	team, appErr := p.API.GetTeam(teamID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load team")
+		p.API.LogWarn("failed to load team for guest request", "team_id", teamID, "error", appErr.Error())
+		return "", errors.New("could not find that team")
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
 	}
 
 	// Guest invites are scoped to a team the requester already belongs to
@@ -68,10 +76,23 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 			return "", errors.New("you must be a member of the team to request a guest invite")
 		}
 	}
+	// Guests can only be invited to live public or private channels of this
+	// team that the requester is in themselves (System Admins: any).
 	for _, chID := range channels {
 		ch, chErr := p.API.GetChannel(chID)
 		if chErr != nil || ch == nil || ch.TeamId != teamID {
 			return "", errors.New("all guest channels must belong to the selected team")
+		}
+		if ch.Type != model.ChannelTypeOpen && ch.Type != model.ChannelTypePrivate {
+			return "", errors.New("guests can only be invited to public or private channels")
+		}
+		if ch.DeleteAt != 0 {
+			return "", errors.Errorf("~%s is archived", ch.Name)
+		}
+		if !requester.IsSystemAdmin() {
+			if _, memErr := p.API.GetChannelMember(chID, requesterID); memErr != nil {
+				return "", errors.New("you can only invite guests to channels you're a member of")
+			}
 		}
 	}
 
@@ -82,15 +103,6 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 		Email:       email,
 		ChannelIDs:  channels,
 		Reason:      strings.TrimSpace(reason),
-	}
-
-	if !forceQueue && requester.IsSystemAdmin() {
-		if inviteErr := p.fulfillTeamGuestRequest(req, requester.Id); inviteErr != nil {
-			return "", inviteErr
-		}
-		p.logAudit(auditDirect, fmt.Sprintf("@%s invited guest to team %s (email=%q)",
-			requester.Username, team.DisplayName, email), "")
-		return fmt.Sprintf("Guest invitation emailed to **%s** for team **%s**.", email, team.DisplayName), nil
 	}
 
 	if err := p.storeTeamGuestRequest(req); err != nil {
@@ -168,6 +180,7 @@ func (p *Plugin) postTeamGuestApprovalRequest(req *teamGuestRequest, requester *
 	ch := p.ensureTeamCreationApprovalChannel()
 	header := p.systemAdminMentions() + " — a guest invite request needs System Admin review."
 	return p.postApprovalAttachment(
+		req.ID,
 		p.teamGuestApprovalAttachment(req, requester, team),
 		header,
 		ch,
@@ -177,12 +190,12 @@ func (p *Plugin) postTeamGuestApprovalRequest(req *teamGuestRequest, requester *
 func (p *Plugin) teamGuestApprovalAttachment(req *teamGuestRequest, requester *model.User, team *model.Team) *model.MessageAttachment {
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
-		{Title: "Team", Value: team.DisplayName, Short: true},
-		{Title: "Guest email", Value: req.Email, Short: true},
+		{Title: "Team", Value: escapeMarkdown(team.DisplayName), Short: true},
+		{Title: "Guest email", Value: escapeMarkdown(req.Email), Short: true},
 		{Title: "Channels", Value: p.channelNamesList(req.ChannelIDs), Short: false},
 	}
 	if req.Reason != "" {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Message / reason", Value: req.Reason, Short: false})
+		fields = append(fields, &model.MessageAttachmentField{Title: "Message / reason", Value: escapeMarkdown(req.Reason), Short: false})
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
@@ -249,7 +262,7 @@ func (p *Plugin) openTeamGuestRequestDialog(triggerID, teamID string) error {
 		Title:      "Request Guest Invite",
 		IntroductionText: fmt.Sprintf(
 			"Request a guest invite for **%s**. On approval, Mattermost emails a channel-scoped guest invitation. Guest Accounts must be enabled.",
-			teamName,
+			escapeMarkdown(teamName),
 		),
 		SubmitLabel: "Submit request",
 		State:       teamID,

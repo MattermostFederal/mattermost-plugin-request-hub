@@ -147,12 +147,9 @@ The DM includes:
 
 If something failed, the DM says what couldn't be created and what to do next.
 
-Slash-command submissions always go through both approval steps. System Admins
-who submit from the **webapp Request Hub / modal** (not ForceQueue) create the
-bot immediately **only when no access token or webhook extras were requested**.
-If a token or webhook is requested, the ticket still enters the two-step
-approval queue so those extras can be fulfilled. For queued tickets, System
-Admins can fill the system step, but a security approver must still fill the
+Every bot request goes through both approval steps, including requests from
+System Admins. System Admins can fill the system step, but a security approver
+must still fill the
 other.
 
 ---

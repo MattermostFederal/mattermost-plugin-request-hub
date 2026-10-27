@@ -33,43 +33,7 @@ func TestSubmitBotRequest_RequiresDisplayName(t *testing.T) {
 	require.Contains(t, err.Error(), "display name is required")
 }
 
-func TestSubmitBotRequest_SystemAdminCreatesDirectly(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogs(api)
-	defer api.AssertExpectations(t)
-	p := newTestPlugin(api)
-
-	api.On("GetUser", "u_admin").Return(&model.User{Id: "u_admin", Username: "admin", Roles: "system_user system_admin"}, nil)
-	api.On("CreateBot", mock.Anything).Return(&model.Bot{Username: "mybot"}, nil)
-
-	msg, err := p.submitBotRequest("u_admin", botRequestInput{Username: "mybot", DisplayName: "My Bot"})
-	require.NoError(t, err)
-	require.Contains(t, msg, "mybot")
-	// No approval queue — request not stored.
-	api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
-	api.AssertCalled(t, "CreateBot", mock.Anything)
-}
-
-// TestSubmitBotRequest_SystemAdminWithOwner verifies that when an explicit
-// owner user ID is provided, CreateBot is called with that owner rather than
-// the requester.
-func TestSubmitBotRequest_SystemAdminWithOwner(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogs(api)
-	defer api.AssertExpectations(t)
-	p := newTestPlugin(api)
-
-	api.On("GetUser", "u_admin").Return(&model.User{Id: "u_admin", Username: "admin", Roles: "system_user system_admin"}, nil)
-	api.On("CreateBot", mock.MatchedBy(func(b *model.Bot) bool {
-		return b.OwnerId == "explicit-owner"
-	})).Return(&model.Bot{Username: "svc-bot"}, nil)
-
-	msg, err := p.submitBotRequest("u_admin", botRequestInput{Username: "svc-bot", DisplayName: "Service Bot", Description: "does stuff", OwnerUserID: "explicit-owner"})
-	require.NoError(t, err)
-	require.Contains(t, msg, "svc-bot")
-}
-
-func TestSubmitBotRequest_SystemAdminWithExtrasQueues(t *testing.T) {
+func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
@@ -80,8 +44,9 @@ func TestSubmitBotRequest_SystemAdminWithExtrasQueues(t *testing.T) {
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", false).
-		Return(&model.Channel{Id: "bots-ch"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", true).
+		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil)
 	api.On("GetDirectChannel", "u_admin", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 
@@ -105,8 +70,9 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 
 	// ensureBotApprovalChannel
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", false).
-		Return(&model.Channel{Id: "bots-ch"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", true).
+		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 
 	var approvalPost *model.Post
 	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {

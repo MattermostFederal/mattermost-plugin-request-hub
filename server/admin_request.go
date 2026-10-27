@@ -26,8 +26,9 @@ type adminRequest struct {
 	RequesterID string `json:"requester_id"`
 	ChannelID   string `json:"channel_id"`
 	// NomineeIDs are the users the requester wants promoted to Channel
-	// Admin. On approval each is added to the channel (if not already a
-	// member) and granted the channel_admin scheme role.
+	// Admin. They must already be channel members; on approval, those who
+	// still are get the channel_admin scheme role. Nobody is added to the
+	// channel by this flow.
 	NomineeIDs []string `json:"nominee_ids"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
@@ -38,11 +39,9 @@ type adminRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-// submitAdminRequest validates the input and either promotes the nominees
-// immediately (System Admins) or stores a pending
-// request and posts it to the approval channel. forceQueue (slash-command
-// dialog) disables the bypass so an approval card is always posted.
-func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []string, forceQueue bool) (string, error) {
+// submitAdminRequest validates the input, stores a pending request and posts
+// it to the approval channel. Requests from System Admins queue too.
+func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []string) (string, error) {
 	if strings.TrimSpace(channelID) == "" {
 		return "", errors.New("a channel is required")
 	}
@@ -51,15 +50,14 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	if len(nominees) == 0 {
 		return "", errors.New("pick at least one person to make a Channel Admin")
 	}
-
-	channel, appErr := p.API.GetChannel(channelID)
-	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load channel")
+	if err := checkIDList(nominees, "Channel Admin nominees"); err != nil {
+		return "", err
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
-		return "", errors.Wrap(appErr, "failed to load requesting user")
+		p.API.LogError("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
+		return "", errors.New("could not load your account; try again")
 	}
 
 	// The requester must belong to the channel they're nominating admins for.
@@ -68,9 +66,28 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	// membership on the server. System Admins manage every channel and are
 	// exempt. GetChannelMember returns an error for non-members (channel
 	// memberships are hard-deleted on leave, so no soft-delete check needed).
+	// Membership is checked first, and both failures share one message.
+	const noChannelMsg = "channel not found, or you are not a member of it"
 	if !requester.IsSystemAdmin() {
-		if _, appErr := p.API.GetChannelMember(channelID, requesterID); appErr != nil {
-			return "", errors.New("you must be a member of the channel to request Channel Admins for it")
+		if _, appErr = p.API.GetChannelMember(channelID, requesterID); appErr != nil {
+			return "", errors.New(noChannelMsg)
+		}
+	}
+	channel, appErr := p.API.GetChannel(channelID)
+	if appErr != nil || channel == nil {
+		return "", errors.New(noChannelMsg)
+	}
+	if channel.Type != model.ChannelTypeOpen && channel.Type != model.ChannelTypePrivate {
+		return "", errors.New("Channel Admins can only be requested for public or private channels")
+	}
+	if channel.DeleteAt != 0 {
+		return "", errors.New("that channel is archived")
+	}
+
+	// Nominees must already be members of the channel.
+	for _, id := range nominees {
+		if _, appErr = p.API.GetChannelMember(channelID, id); appErr != nil {
+			return "", errors.New("everyone you nominate must already be a member of the channel")
 		}
 	}
 
@@ -81,19 +98,10 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 		NomineeIDs:  nominees,
 	}
 
-	// Bypass approval for System Admins — unless forceQueue (slash-command
-	// dialog) which always produces an approval card.
-	if !forceQueue && requester.IsSystemAdmin() {
-		p.promoteChannelAdmins(req)
-		p.postAdminPromotionMessage(channel, req, requester)
-		p.logAudit(auditDirect, fmt.Sprintf("@%s promoted %s to Channel Admin in ~%s",
-			requester.Username, p.mentionList(req.NomineeIDs), channel.Name), "")
-		return fmt.Sprintf("Promoted %s to Channel Admin in ~%s.", p.mentionList(req.NomineeIDs), channel.Name), nil
-	}
-
 	// Store before posting so approve/deny handlers can find the request immediately.
 	if err := p.storeAdminRequest(req); err != nil {
-		return "", err
+		p.API.LogError("failed to store Channel Admin request", "error", err.Error())
+		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, err := json.Marshal(req)
 	if err != nil {
@@ -105,7 +113,8 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	if err != nil {
 		// Roll back so the stored request isn't orphaned without an approval message.
 		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)
-		return "", err
+		p.API.LogError("failed to post Channel Admin request for approval", "error", err.Error())
+		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
 
 	req.ApprovalPostID = approvalPostID
@@ -136,26 +145,29 @@ func (p *Plugin) sendAdminTicketCreatedDM(req *adminRequest, requester *model.Us
 	)
 }
 
-// promoteChannelAdmins adds each nominee to the channel (a no-op for existing
-// members) and grants them the channel_admin role. Per-user failures are
-// logged but don't abort the others — a partial promotion is better than
-// none.
-func (p *Plugin) promoteChannelAdmins(req *adminRequest) {
+// promoteChannelAdmins grants the channel_admin role to each nominee who is
+// still a member of the channel and returns the IDs actually promoted.
+// Membership is re-checked because a request can sit pending while people
+// leave or are removed; nobody is added to the channel. Per-user failures
+// are logged but don't abort the others — a partial promotion is better than
+// none, and callers report only who was promoted.
+func (p *Plugin) promoteChannelAdmins(req *adminRequest) []string {
+	promoted := make([]string, 0, len(req.NomineeIDs))
 	for _, userID := range req.NomineeIDs {
 		if userID == "" {
 			continue
 		}
-		// Ensure membership first — a user can't be a Channel Admin without
-		// being in the channel. AddChannelMember is idempotent for existing
-		// members; a failure here is logged but we still attempt the
-		// promotion in case they're already a member.
-		if _, appErr := p.API.AddChannelMember(req.ChannelID, userID); appErr != nil {
-			p.API.LogWarn("failed to add nominee to channel", "channel_id", req.ChannelID, "user_id", userID, "error", appErr.Error())
+		if _, appErr := p.API.GetChannelMember(req.ChannelID, userID); appErr != nil {
+			p.API.LogWarn("skipping nominee who is not a channel member", "channel_id", req.ChannelID, "user_id", userID)
+			continue
 		}
 		if _, appErr := p.API.UpdateChannelMemberRoles(req.ChannelID, userID, channelAdminRoleString); appErr != nil {
 			p.API.LogWarn("failed to promote nominee to channel admin", "channel_id", req.ChannelID, "user_id", userID, "error", appErr.Error())
+			continue
 		}
+		promoted = append(promoted, userID)
 	}
+	return promoted
 }
 
 // postAdminPromotionMessage posts a bot message in the channel announcing the
@@ -216,6 +228,7 @@ func (p *Plugin) loadAdminRequest(id string) (*adminRequest, []byte, error) {
 func (p *Plugin) postAdminApprovalRequest(req *adminRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(channel.TeamId)
 	return p.postApprovalAttachment(
+		req.ID,
 		p.adminApprovalAttachment(req, requester, channel),
 		teamLabel+p.adminApprovalHeader(channel),
 		approvalChannel,
@@ -287,9 +300,9 @@ func (p *Plugin) adminApproverIDs(teamID string) []string {
 func (p *Plugin) adminApprovalAttachment(req *adminRequest, requester *model.User, channel *model.Channel) *model.MessageAttachment {
 	teamName := p.teamDisplayName(channel.TeamId)
 	fields := []*model.MessageAttachmentField{
-		{Title: "Team", Value: teamName, Short: false},
+		{Title: "Team", Value: escapeMarkdown(teamName), Short: false},
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
-		{Title: "Channel", Value: fmt.Sprintf("~%s", channel.Name), Short: true},
+		{Title: "Channel", Value: escapeMarkdown(fmt.Sprintf("%s (%s)", channel.DisplayName, channel.Name)), Short: true},
 	}
 
 	title := "Channel Admin request"

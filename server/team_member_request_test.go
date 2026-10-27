@@ -12,27 +12,9 @@ import (
 func TestSubmitTeamMemberRequest_Disabled(t *testing.T) {
 	p := newTestPlugin(&plugintest.API{})
 	p.setConfiguration(&configuration{AllowTeamMemberRequests: false})
-	_, err := p.submitTeamMemberRequest("u_req", "team1", []string{"u1"}, "", false)
+	_, err := p.submitTeamMemberRequest("u_req", "team1", []string{testNomineeID}, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disabled")
-}
-
-func TestSubmitTeamMemberRequest_SystemAdminAddsDirectly(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogs(api)
-	defer api.AssertExpectations(t)
-	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{AllowTeamMemberRequests: true})
-
-	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
-	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "admin", Roles: "system_user system_admin"}, nil)
-	api.On("GetUser", "u_nom").Return(&model.User{Id: "u_nom", Username: "nommy"}, nil)
-	api.On("CreateTeamMember", "team1", "u_nom").Return(&model.TeamMember{}, nil)
-
-	msg, err := p.submitTeamMemberRequest("u_req", "team1", []string{"u_nom"}, "need access", false)
-	require.NoError(t, err)
-	require.Contains(t, msg, "Added")
-	api.AssertCalled(t, "CreateTeamMember", "team1", "u_nom")
 }
 
 func TestSubmitTeamMemberRequest_QueuesForApproval(t *testing.T) {
@@ -44,12 +26,13 @@ func TestSubmitTeamMemberRequest_QueuesForApproval(t *testing.T) {
 
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
-	api.On("GetUser", "u_nom").Return(&model.User{Id: "u_nom", Username: "nommy"}, nil)
+	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
-		Return(&model.Channel{Id: "team-req-ch", TeamId: "appteam-id"}, nil)
+	stubApprovalTeamRecord(api)
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
+		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "team-req-ch", TeamId: "appteam-id"}, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetChannelSidebarCategories", "sys1", "appteam-id").Return(&model.OrderedSidebarCategories{
@@ -65,7 +48,7 @@ func TestSubmitTeamMemberRequest_QueuesForApproval(t *testing.T) {
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "req-dm"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "dm-post-1"}, nil)
 
-	msg, err := p.submitTeamMemberRequest("u_req", "team1", []string{"u_nom"}, "need access", true)
+	msg, err := p.submitTeamMemberRequest("u_req", "team1", []string{testNomineeID}, "need access")
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted")
 }

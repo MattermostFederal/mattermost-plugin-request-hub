@@ -66,7 +66,7 @@ func TestSubmitTeamGuestRequest_RequiresMembership(t *testing.T) {
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
 	api.On("GetTeamMember", "team1", "u_req").Return(nil, testAppErr("not a member"))
 
-	_, err := p.submitTeamGuestRequest("u_req", "team1", "guest@example.com", []string{"ch1"}, "", true)
+	_, err := p.submitTeamGuestRequest("u_req", "team1", "guest@example.com", []string{testChannelID}, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "member of the team")
 }
