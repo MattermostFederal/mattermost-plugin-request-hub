@@ -618,9 +618,9 @@ func TestLinkTwoStepGroupsToChannel_SyncableFailuresAreLogged(t *testing.T) {
 func approvalChannels(api *plugintest.API) {
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "tid", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "tid", "mattermost-bot-requests", false).Return(
+	api.On("GetChannelByName", "tid", "mattermost-bot-requests", true).Return(
 		&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bot-ch", TeamId: "tid"}, nil)
-	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", false).Return(
+	api.On("GetChannelByName", "tid", "mattermost-webhook-requests", true).Return(
 		&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "wh-ch", TeamId: "tid"}, nil)
 }
 

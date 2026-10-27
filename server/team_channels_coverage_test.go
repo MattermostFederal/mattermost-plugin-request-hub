@@ -106,7 +106,7 @@ func TestEnsureRootApprovalChannel_CreatesChannelAndSeedsAdmins(t *testing.T) {
 	defer api.AssertExpectations(t)
 	expectDocsBookmarkAttempt(api)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(nil, testAppErr("not found"))
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(nil, testAppErr("not found"))
 	created := pluginChannelIn("root", "mattermost-channel-requests", "t1")
 	api.On("CreateChannel", mock.MatchedBy(func(c *model.Channel) bool {
 		return c.TeamId == "t1" && c.Name == "mattermost-channel-requests" &&
@@ -134,8 +134,8 @@ func TestEnsureRootApprovalChannel_CreatesChannelAndSeedsAdmins(t *testing.T) {
 func TestEnsureRootApprovalChannel_CreateConflictReturnsExisting(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(nil, testAppErr("not found")).Once()
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(nil, testAppErr("not found")).Once()
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("root", "mattermost-channel-requests", "t1"), nil)
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("exists"))
 
@@ -149,7 +149,7 @@ func TestEnsureRootApprovalChannel_CreateConflictReturnsExisting(t *testing.T) {
 func TestEnsureRootApprovalChannel_CreateFailureReturnsNil(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(nil, testAppErr("not found"))
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(nil, testAppErr("not found"))
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("denied"))
 
 	require.Nil(t, p.ensureRootApprovalChannel())
@@ -290,7 +290,7 @@ func TestEnsureNamedApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	defer api.AssertExpectations(t)
 	expectDocsBookmarkAttempt(api)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-bot-requests", false).Return(nil, testAppErr("not found"))
+	api.On("GetChannelByName", "t1", "mattermost-bot-requests", true).Return(nil, testAppErr("not found"))
 	created := pluginChannelIn("botch", "mattermost-bot-requests", "t1")
 	api.On("CreateChannel", mock.MatchedBy(func(c *model.Channel) bool {
 		return c.Name == "mattermost-bot-requests" && c.DisplayName == "Mattermost: Bot Requests" &&
@@ -311,8 +311,8 @@ func TestEnsureNamedApprovalChannel_CreatesAndSeeds(t *testing.T) {
 func TestEnsureNamedApprovalChannel_CreateConflictReturnsExisting(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-audit-requests", false).Return(nil, testAppErr("not found")).Once()
-	api.On("GetChannelByName", "t1", "mattermost-audit-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).Return(nil, testAppErr("not found")).Once()
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).
 		Return(pluginChannelIn("auditch", "mattermost-audit-requests", "t1"), nil)
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("exists"))
 
@@ -326,7 +326,7 @@ func TestEnsureNamedApprovalChannel_CreateConflictReturnsExisting(t *testing.T) 
 func TestEnsureNamedApprovalChannel_CreateFailureReturnsNil(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-team-requests", false).Return(nil, testAppErr("not found"))
+	api.On("GetChannelByName", "t1", "mattermost-team-requests", true).Return(nil, testAppErr("not found"))
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("denied"))
 
 	require.Nil(t, p.ensureTeamCreationApprovalChannel())
@@ -402,9 +402,9 @@ func TestEnsureAllTeamApprovalChannels_CountsEnsuredAndSkipped(t *testing.T) {
 	api.On("GetTeamMembers", "quiet", 0, 200).Return([]*model.TeamMember{}, nil)
 	api.On("GetTeamMembers", "ops", 0, 200).Return(admin, nil)
 	api.On("GetTeamMembers", "town", 0, 200).Return(admin, nil)
-	api.On("GetChannelByName", "ops", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "ops", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("opsch", "mattermost-channel-requests", "ops"), nil)
-	api.On("GetChannelByName", "town", "mattermost-channel-requests", false).Return(takenChannel("townch"), nil)
+	api.On("GetChannelByName", "town", "mattermost-channel-requests", true).Return(takenChannel("townch"), nil)
 
 	p.ensureAllTeamApprovalChannels()
 
@@ -446,15 +446,17 @@ func TestMigrateTicketChannelsToManagedCategory_PlacesEachChannelOnce(t *testing
 	api.On("KVGet", kvSidebarCategoryMigrated).Return(nil, nil)
 
 	root := pluginChannelIn("root", "mattermost-channel-requests", "t1")
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(root, nil)
+	// The per-team sweep looks the channel up again without archived ones.
 	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).Return(root, nil)
-	api.On("GetChannelByName", "t1", "mattermost-bot-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-bot-requests", true).
 		Return(pluginChannelIn("botch", "mattermost-bot-requests", "t1"), nil)
-	api.On("GetChannelByName", "t1", "mattermost-webhook-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-webhook-requests", true).
 		Return(pluginChannelIn("hookch", "mattermost-webhook-requests", "t1"), nil)
-	api.On("GetChannelByName", "t1", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-team-requests", true).
 		Return(pluginChannelIn("teamch", "mattermost-team-requests", "t1"), nil)
 	// The audit name is held by someone else's channel, so it is left out.
-	api.On("GetChannelByName", "t1", "mattermost-audit-requests", false).Return(takenChannel("other"), nil)
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).Return(takenChannel("other"), nil)
 	api.On("GetChannelByName", "t2", "mattermost-channel-requests", false).Return(nil, testAppErr("not found"))
 	// forceTicketChannelCategory for the team-requests channel: no System Admins.
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
@@ -523,7 +525,7 @@ func TestSyncTeamApprovalChannelAfterAdminChange_EnsureFailureStops(t *testing.T
 	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
 	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{{UserId: "ta1", SchemeAdmin: true}}, nil)
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).Return(takenChannel("x"), nil)
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(takenChannel("x"), nil)
 
 	p.syncTeamApprovalChannelAfterAdminChange("team1")
 
@@ -537,7 +539,7 @@ func TestSyncTeamApprovalChannelAfterAdminChange_EnsureFailureStops(t *testing.T
 func TestUserHasJoinedTeam_LooksUpSystemAdminWithoutActor(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
 	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: "system_user system_admin"}, nil)
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).Return(takenChannel("x"), nil)
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(takenChannel("x"), nil)
 
 	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{TeamId: "team1", UserId: "sa1", Roles: "team_user"}, nil)
 
@@ -550,7 +552,7 @@ func TestUserHasJoinedTeam_AddFailureSkipsSidebar(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
 	// Added by another user, so the joiner's roles are looked up.
 	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: "system_user system_admin"}, nil)
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("ch-team1", "mattermost-channel-requests", "team1"), nil)
 	api.On("AddChannelMember", "ch-team1", "sa1").Return(nil, testAppErr("denied"))
 

@@ -273,7 +273,7 @@ func TestIsPluginApprovalChannel(t *testing.T) {
 
 func TestLookupApprovalChannel_NoChannel(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
-	api.On("GetChannelByName", "t1", "approvals", false).Return(nil, testAppErr("not found"))
+	api.On("GetChannelByName", "t1", "approvals", true).Return(nil, testAppErr("not found"))
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -283,7 +283,7 @@ func TestLookupApprovalChannel_NoChannel(t *testing.T) {
 
 func TestLookupApprovalChannel_PluginChannelIsReturned(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
-	api.On("GetChannelByName", "t1", "approvals", false).Return(pluginChannel("c1", "approvals"), nil)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(pluginChannel("c1", "approvals"), nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -294,7 +294,7 @@ func TestLookupApprovalChannel_PluginChannelIsReturned(t *testing.T) {
 
 func TestLookupApprovalChannel_OtherChannelWithNameIsTaken(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
-	api.On("GetChannelByName", "t1", "approvals", false).
+	api.On("GetChannelByName", "t1", "approvals", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
@@ -302,6 +302,18 @@ func TestLookupApprovalChannel_OtherChannelWithNameIsTaken(t *testing.T) {
 	require.Nil(t, ch)
 	require.True(t, taken)
 	api.AssertCalled(t, "LogError", mock.Anything, "team_id", "t1", "channel_id", "c9", "channel_name", "approvals")
+}
+
+func TestLookupApprovalChannel_ArchivedPluginChannelIsTaken(t *testing.T) {
+	p, api := newApprovalTeamPlugin(t)
+	archived := pluginChannel("c1", "approvals")
+	archived.DeleteAt = 1
+	api.On("GetChannelByName", "t1", "approvals", true).Return(archived, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
 }
 
 // stubApprovalTeamLookup lets approvalTeam find "appteam" as t1, already recorded.
@@ -313,7 +325,7 @@ func stubApprovalTeamLookup(t *testing.T, api *plugintest.API) {
 func TestEnsureRootApprovalChannel_TakenNameIsNotUsed(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
 
 	require.Nil(t, p.ensureRootApprovalChannel())
@@ -331,7 +343,7 @@ func TestEnsureRootApprovalChannel_TeamErrorFallsBack(t *testing.T) {
 func TestEnsureNamedApprovalChannel_TakenNameIsNotUsed(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-bot-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-bot-requests", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypePrivate, CreatorId: "u1"}, nil)
 
 	require.Nil(t, p.ensureNamedApprovalChannel("mattermost-bot-requests", "Bots", "purpose"))
@@ -348,7 +360,7 @@ func TestEnsureNamedApprovalChannel_TeamErrorFallsBack(t *testing.T) {
 func TestEnsureTeamApprovalChannel_TakenNameIsAnError(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	name := p.getConfiguration().TeamChannelName()
-	api.On("GetChannelByName", "team1", name, false).
+	api.On("GetChannelByName", "team1", name, true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
 
 	ch, err := p.ensureTeamApprovalChannel("team1")

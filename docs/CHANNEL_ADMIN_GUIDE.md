@@ -163,7 +163,8 @@ requester's ticket are then closed as after a click, and when the request went
 to System Admins by direct message, every copy is closed.
 
 Requests from **System Admins** are queued for approval too. A System Admin can
-approve their own request.
+approve their own request. Anyone else can't approve a request they made or one
+that nominates them.
 
 ---
 

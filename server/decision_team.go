@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -41,8 +42,13 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 	if req == nil {
 		return decisionResult{Reply: alreadyHandledText}
 	}
-	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
-		return decisionResult{Reply: ownRequestText}
+	if approve && !actingUser.IsSystemAdmin() {
+		if req.RequesterID == actingUser.Id {
+			return decisionResult{Reply: ownRequestText}
+		}
+		if slices.Contains(req.NomineeIDs, actingUser.Id) {
+			return decisionResult{Reply: ownNominationText}
+		}
 	}
 	if msg := p.decisionRefusal(clickedPostID, req.ApprovalPostID, req.ID, requestTypeTeamAdmin, approve); msg != "" {
 		return decisionResult{Reply: msg}

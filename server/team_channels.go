@@ -784,7 +784,7 @@ func (p *Plugin) isPluginApprovalChannel(ch *model.Channel) bool {
 // didn't create it; approval cards are then not posted there, and an admin
 // is asked to rename that channel.
 func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, taken bool) {
-	existing, appErr := p.API.GetChannelByName(teamID, name, false)
+	existing, appErr := p.API.GetChannelByName(teamID, name, true)
 	if appErr != nil || existing == nil {
 		return nil, false
 	}
