@@ -153,7 +153,8 @@ card *⌛ Expired: not reviewed within N days.* and closes the requester's ticke
 as expired.
 
 Requests from **System Admins** are queued for approval too. A System Admin can
-approve their own request.
+approve their own request. Anyone else can't approve a request they made or one
+that nominates them.
 
 ---
 

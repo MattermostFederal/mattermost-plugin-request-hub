@@ -268,12 +268,17 @@ func (p *Plugin) openTeamAdminRequestDialog(triggerID, teamID string) error {
 		teamName = t.DisplayName
 	}
 
+	approvers := "a System Admin"
+	if p.getConfiguration().AllowApprovalTeamAdminsForTeamRequests {
+		approvers = "a System Admin or a Team Admin of the approval team"
+	}
+
 	dialog := model.Dialog{
 		CallbackId: teamAdminDialogCallbackID,
 		Title:      "Request Team Admin Promotion",
 		IntroductionText: fmt.Sprintf(
-			"Nominate users to become Team Admins in **%s**. System Admin approval is required because Team Admin grants broad permissions across the whole team.",
-			escapeMarkdown(teamName),
+			"Nominate users to become Team Admins in **%s**. The request must be approved by %s because Team Admin grants broad permissions across the whole team.",
+			escapeMarkdown(teamName), approvers,
 		),
 		SubmitLabel: "Submit request",
 		State:       teamID,
@@ -284,7 +289,7 @@ func (p *Plugin) openTeamAdminRequestDialog(triggerID, teamID string) error {
 				Type:        "select",
 				DataSource:  "users",
 				MultiSelect: true,
-				HelpText:    "Select one or more users to nominate for Team Admin. Nominees must already be members of the team.",
+				HelpText:    "Select one or more members of this team to nominate for Team Admin.",
 			},
 		},
 	}
