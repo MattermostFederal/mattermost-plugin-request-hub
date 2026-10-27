@@ -55,7 +55,7 @@ func TestSubmitTeamCreationRequest_StoresAndPostsRequest(t *testing.T) {
 	// ensureTeamCreationApprovalChannel routes team creation to its own channel.
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "teams-ch", TeamId: "appteam-id"}, nil)
 
 	// systemAdminMentions + forceTicketChannelCategory share GetUsers.
@@ -148,7 +148,7 @@ func TestPostTeamCreationApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *t
 
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "teams-ch", TeamId: "appteam-id"}, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
 	api.On("GetTeamMembers", "appteam-id", 0, 200).Return([]*model.TeamMember{

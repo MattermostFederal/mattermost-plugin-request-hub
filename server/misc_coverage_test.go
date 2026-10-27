@@ -29,7 +29,7 @@ func waitFor(t *testing.T, done <-chan struct{}, what string) {
 func TestLogAudit_LinksThreadAndLogsPostFailure(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
-	api.On("GetChannelByName", "t1", "mattermost-audit-requests", false).
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).
 		Return(pluginChannel("auditch", "mattermost-audit-requests"), nil)
 	stubSiteURL(api, "https://mm.example.com/")
 	api.On("GetPost", "ap").Return(&model.Post{Id: "ap", ChannelId: "appch"}, nil)
@@ -439,7 +439,7 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("KVGet", kvApprovalTeamKey).Return(approvalTeamRecordBytes(t, "appteam", "t1"), nil)
 	api.On("KVGet", kvSidebarCategoryMigrated).Return(nil, nil)
 	api.On("KVGet", mock.Anything).Return(nil, nil)
-	api.On("GetChannelByName", "t1", mock.Anything, false).Return(appch, nil)
+	api.On("GetChannelByName", "t1", mock.Anything, true).Return(appch, nil)
 	api.On("GetChannel", "appch").Return(appch, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1", Roles: "system_user system_admin"}}, nil)
 	api.On("AddChannelMember", mock.Anything, "sa1").Return(&model.ChannelMember{}, nil).Maybe()
