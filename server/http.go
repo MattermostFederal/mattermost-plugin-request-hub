@@ -907,9 +907,15 @@ func (p *Plugin) handleAdminAction(w http.ResponseWriter, r *http.Request, appro
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "You don't have permission to approve or deny this Channel Admin request. Contact a Team Admin of the channel's team or a System Admin."})
 		return
 	}
-	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
-		return
+	if approve && !actingUser.IsSystemAdmin() {
+		if req.RequesterID == actingUser.Id {
+			writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
+			return
+		}
+		if slices.Contains(req.NomineeIDs, actingUser.Id) {
+			writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownNominationText})
+			return
+		}
 	}
 
 	requester, _ := p.API.GetUser(req.RequesterID) // best-effort for notify + audit
@@ -1141,9 +1147,15 @@ func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, a
 		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: alreadyHandledText})
 		return
 	}
-	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
-		return
+	if approve && !actingUser.IsSystemAdmin() {
+		if req.RequesterID == actingUser.Id {
+			writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownRequestText})
+			return
+		}
+		if slices.Contains(req.NomineeIDs, actingUser.Id) {
+			writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: ownNominationText})
+			return
+		}
 	}
 	if p.refuseAction(w, request.PostId, req.ApprovalPostID, req.ID, requestTypeTeamAdmin, approve) {
 		return
@@ -2448,6 +2460,10 @@ const alreadyHandledText = "This request has already been handled."
 // ownRequestText is the private reply when a requester who isn't a System
 // Admin clicks Approve on their own request.
 const ownRequestText = "You can't approve your own request. Another approver has to review it."
+
+// ownNominationText is the private reply when a nominee who isn't a System
+// Admin clicks Approve on a request that would promote them.
+const ownNominationText = "You can't approve a request that nominates you. Another approver has to review it."
 
 // claimLostPendingText is the private reply to a click that lost the claim
 // on a request that is still pending.

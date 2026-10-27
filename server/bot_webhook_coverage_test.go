@@ -90,7 +90,7 @@ func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	stubRequester(api)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-bot-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(nil, testAppErr("post failed"))
 	var deleted string

@@ -104,7 +104,8 @@ teams, including the approval team, can't act on it.
 - **Deny** — the request is closed and the requester is notified by DM.
 
 Requests from **System Admins** are queued for approval too. A System Admin can
-approve their own request.
+approve their own request. Anyone else can't approve a request they made or one
+that nominates them.
 
 ---
 
