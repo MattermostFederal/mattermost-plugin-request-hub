@@ -94,9 +94,10 @@ test.describe('plugin entry point', () => {
     test('channel-scoped menu items show only in public and private channels', async ({mount, page}) => {
         await mount(<IndexHarness/>);
         const r = await recorded(page);
-        for (const text of ['Request Channel Admin', 'Request Guest Invite', 'Request Incoming Webhook', 'Request Outgoing Webhook']) {
+        for (const text of ['Request Channel Admin', 'Request Guest Invite', 'Request Incoming Webhook']) {
             expect(menu(r, text)?.shouldRender, text).toEqual(realChannelsOnly);
         }
+        expect(menu(r, 'Request Outgoing Webhook')?.shouldRender).toEqual({O: true, P: false, D: false, G: false, unknown: false});
         expect(menu(r, 'Request a Channel')?.shouldRender).toBeUndefined();
         expect(menu(r, 'Request a Bot')?.shouldRender).toBeUndefined();
     });

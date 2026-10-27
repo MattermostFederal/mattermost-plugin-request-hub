@@ -122,6 +122,18 @@ test.describe('RequestHubModal', () => {
         });
     }
 
+    test('hides the Outgoing Webhook tile in a private channel', async ({mount, page}) => {
+        await routeConfig(page);
+        await mount(
+            <StoreHarness
+                pluginState={open}
+                entities={{channels: {currentChannelId: 'p1', channels: {p1: {display_name: 'Ops', type: 'P'}}}}}
+            ><RequestHubModal/></StoreHarness>,
+        );
+        await configLoaded(page);
+        await expect.poll(() => tiles(page)).toEqual(ALL_TILES.filter((t) => t !== 'Request Outgoing Webhook'));
+    });
+
     test('hides the webhook tiles with no current team', async ({mount, page}) => {
         await routeConfig(page);
         await mount(

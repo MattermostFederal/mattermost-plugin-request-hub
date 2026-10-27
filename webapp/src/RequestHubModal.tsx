@@ -92,6 +92,9 @@ type RequestItem = {
     /** When true, only show in public/private channels (not DM/GM). */
     requiresTeamChannel?: boolean;
 
+    /** When true, only show in public channels. */
+    requiresPublicChannel?: boolean;
+
     /** When true, only show when a team is selected (any team — not just the approval team). */
     requiresTeam?: boolean;
 
@@ -227,8 +230,10 @@ export const RequestHubModal = () => {
             description: 'Send channel messages to an external endpoint.',
             action: openOutgoingWebhookModal,
             enabled: enabled.webhook,
+
+            // Outgoing webhooks can only watch public channels.
             requiresTeam: true,
-            requiresTeamChannel: true,
+            requiresPublicChannel: true,
         },
     ];
 
@@ -236,6 +241,7 @@ export const RequestHubModal = () => {
         !item.hidden &&
         item.enabled &&
         (!item.requiresTeamChannel || inTeamChannel) &&
+        (!item.requiresPublicChannel || channelType === 'O') &&
         (!item.requiresTeam || Boolean(teamId)),
     );
 

@@ -118,6 +118,24 @@ test.describe('channelCreationOverride', () => {
             expect(await recorded(page)).toEqual({actions: [{type: OPEN_REQUEST_MODAL}], escapes: 1});
         });
 
+        test('relabels a native item that appears after the injected one', async ({mount, page}) => {
+            await mount(<DomInjectorHarness
+                injector='channelCreation'
+                markup={menuWithoutNative}
+                state={member}
+                        />);
+            await harnessInstalled(page);
+            await expect(page.getByTestId('channelRequestsInjectedItem')).toBeVisible();
+
+            // The injected <li> carries the mark but its <a> doesn't; the <a>
+            // must not pass for the native item and block the relabel.
+            await page.locator('ul[role="menu"]').evaluate((el) => el.insertAdjacentHTML('beforeend', '<li><button><span>Create new channel</span></button></li>'));
+            const native = page.locator('ul[role="menu"] li:last-child button');
+            await expect(native).toHaveText('Request new channel');
+            await native.click();
+            expect((await recorded(page)).actions).toEqual([{type: OPEN_REQUEST_MODAL}]);
+        });
+
         test('points an injected link nowhere', async ({mount, page}) => {
             const markup = '<nav role="menu"><a href="/browse">Browse channels</a><a href="/dm">Open a direct message</a></nav>';
             await mount(<DomInjectorHarness

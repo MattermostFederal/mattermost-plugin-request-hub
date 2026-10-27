@@ -122,8 +122,9 @@ function findNativeCreateItem(root: ParentNode): HTMLElement | null {
         const label = (item.textContent ?? '').trim();
 
         // A native item found by text was relabeled on an earlier scan, so
-        // match the new label too, as long as it isn't our injected copy.
-        if (label === NATIVE_LABEL || (label === REQUEST_LABEL && !item.hasAttribute(INJECTED_MARK))) {
+        // match the new label too, as long as it isn't our injected copy or
+        // inside it (the mark sits on the cloned item, not its children).
+        if (label === NATIVE_LABEL || (label === REQUEST_LABEL && !item.closest(`[${INJECTED_MARK}]`))) {
             return item;
         }
     }

@@ -282,6 +282,6 @@ Report the before/after coverage delta per file and overall from the merged cove
 - **Using the wrong plugin ID in route mocks**: it is `com.mattermostfederal.mattermost-plugin-request-hub`, from `plugin.json`. API calls will not be intercepted with the wrong path.
 - **CSS selector fragility**: prefer semantic locators (`getByRole`, `getByText`, `getByTestId`) over CSS class selectors.
 - **Missing cleanup in afterEach**: tracked state must be cleaned up to prevent test pollution.
-- **Running tests before `make apply`**: `src/manifest.ts` is generated and gitignored, so a fresh checkout cannot resolve `manifest` until it runs.
+- **Running tests before `make apply`**: `src/manifest.ts` is generated and gitignored, so a fresh checkout cannot resolve `manifest` until it runs. `make coverage-frontend` runs it first; calling the npm scripts directly does not.
 - **Testing implementation details**: don't assert on internal state or React hooks. Test what the user sees and what callbacks fire.
 - **Locator scoping mistakes**: when a component returns a bare element, use `page.locator()` not `component.locator()` to find the root element itself.
