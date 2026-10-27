@@ -65,7 +65,7 @@ func TestSubmitTeamAdminRequest_StoresAndPostsRequest(t *testing.T) {
 	// ensureTeamCreationApprovalChannel → ensureNamedApprovalChannel.
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "team-req-ch", TeamId: "appteam-id"}, nil)
 	// systemAdminMentions + forceTicketChannelCategory share GetUsers.
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
@@ -137,7 +137,7 @@ func TestPromoteTeamAdmins_ReseedsPerTeamApprovalChannel(t *testing.T) {
 	}, nil)
 
 	existing := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-req", TeamId: "team1", Name: "mattermost-channel-requests"}
-	api.On("GetChannelByName", "team1", "mattermost-channel-requests", false).Return(existing, nil)
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(existing, nil)
 	api.On("AddChannelMember", "ch-req", "u1").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "u1", "team1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
@@ -179,7 +179,7 @@ func TestPostTeamAdminApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *test
 
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", DisplayName: "App Team"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", false).
+	api.On("GetChannelByName", "appteam-id", "mattermost-team-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "teams-ch", TeamId: "appteam-id"}, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
 	api.On("GetTeamMembers", "appteam-id", 0, 200).Return([]*model.TeamMember{
@@ -210,7 +210,7 @@ func TestPostTeamAdminApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *test
 	require.Equal(t, "teams-ch", channelID)
 	require.Contains(t, approvalPost.Message, "@lead")
 	api.AssertNotCalled(t, "AddChannelMember", "teams-ch", "member1")
-	api.AssertNotCalled(t, "GetChannelByName", "team1", "mattermost-channel-requests", false)
+	api.AssertNotCalled(t, "GetChannelByName", "team1", "mattermost-channel-requests", true)
 }
 
 // runTeamAdminAction clicks Approve or Deny on request r1's card as userID.
@@ -289,6 +289,27 @@ func TestHandleTeamAdminAction_ApprovalTeamAdminCannotApproveOwnRequest(t *testi
 	api.AssertNotCalled(t, "UpdateTeamMemberRoles", mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestHandleTeamAdminAction_ApprovalTeamAdminCannotApproveOwnNomination(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{AllowTeamAdminRequests: true, AllowApprovalTeamAdminsForTeamRequests: true, ApprovalTeam: "appteam"})
+
+	// Someone else asked to promote appta, who then clicks Approve.
+	raw, err := json.Marshal(&teamAdminRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: []string{testNomineeID, "appta"}, ApprovalPostID: "post1"})
+	require.NoError(t, err)
+	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead", Roles: "system_user"}, nil)
+	stubApprovalTeamAdmin(api, "appta")
+	api.On("KVGet", kvTeamAdminRequestPrefix+"r1").Return(raw, nil)
+
+	resp := runTeamAdminAction(t, p, "appta", true)
+
+	require.Equal(t, ownNominationText, resp.EphemeralText)
+	api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "UpdateTeamMemberRoles", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestHandleTeamAdminAction_ApprovalTeamAdminApproves(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
@@ -315,7 +336,7 @@ func TestHandleTeamAdminAction_ApprovalTeamAdminApproves(t *testing.T) {
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVDelete", mock.Anything).Return(nil).Maybe()
 	// The approval team resolves, so the audit post looks for its channel; skip it.
-	api.On("GetChannelByName", "appteam-id", mock.Anything, false).Return(nil, testAppErr("no channel")).Maybe()
+	api.On("GetChannelByName", "appteam-id", mock.Anything, true).Return(nil, testAppErr("no channel")).Maybe()
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("no channel")).Maybe()
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "req-dm"}, nil).Maybe()
 	api.On("GetPost", mock.Anything).Return(nil, testAppErr("no post")).Maybe()
