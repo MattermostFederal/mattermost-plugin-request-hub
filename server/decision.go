@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -263,8 +264,13 @@ func (p *Plugin) decideAdminRequest(actingUserID, requestID, clickedPostID strin
 	if !p.canApproveAdminRequest(actingUser, req.ChannelID) {
 		return decisionResult{Reply: "You don't have permission to approve or deny this Channel Admin request. Contact a Team Admin of the channel's team or a System Admin."}
 	}
-	if approve && req.RequesterID == actingUser.Id && !actingUser.IsSystemAdmin() {
-		return decisionResult{Reply: ownRequestText}
+	if approve && !actingUser.IsSystemAdmin() {
+		if req.RequesterID == actingUser.Id {
+			return decisionResult{Reply: ownRequestText}
+		}
+		if slices.Contains(req.NomineeIDs, actingUser.Id) {
+			return decisionResult{Reply: ownNominationText}
+		}
 	}
 
 	// Best-effort for notify and audit; approve checks requesterErr.

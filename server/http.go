@@ -1350,6 +1350,10 @@ const alreadyHandledText = "This request has already been handled."
 // Admin clicks Approve on their own request.
 const ownRequestText = "You can't approve your own request. Another approver has to review it."
 
+// ownNominationText is the private reply when a nominee who isn't a System
+// Admin clicks Approve on a request that would promote them.
+const ownNominationText = "You can't approve a request that nominates you. Another approver has to review it."
+
 // claimLostPendingText is the private reply to a click that lost the claim
 // on a request that is still pending.
 const claimLostPendingText = "This request was just updated. Please click Approve or Deny again."
