@@ -135,7 +135,7 @@ func TestEnsureAllTeamApprovalChannels_SeedsApprovalTeamAdminsIntoRootChannel(t 
 		{TeamId: "team-hq", UserId: "u_tadmin", SchemeAdmin: true},
 		{TeamId: "team-hq", UserId: "u_member", Roles: "team_user"},
 	}, nil)
-	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "ch-root", TeamId: "team-hq", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}, nil)
 	api.On("AddChannelMember", "ch-root", "u_tadmin").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
@@ -164,7 +164,7 @@ func TestEnsureAllTeamApprovalChannels_LeavesOtherTeamsExistingChannels(t *testi
 	api.On("GetTeamMembers", "team-eng", 0, 200).Return([]*model.TeamMember{
 		{TeamId: "team-eng", UserId: "u_tadmin", SchemeAdmin: true},
 	}, nil)
-	api.On("GetChannelByName", "team-eng", "mattermost-channel-requests", false).
+	api.On("GetChannelByName", "team-eng", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "ch-eng", TeamId: "team-eng"}, nil)
 
 	p.ensureAllTeamApprovalChannels()
