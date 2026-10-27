@@ -639,7 +639,7 @@ func TestHandleAction_AuditRendersDisplayNameAsText(t *testing.T) {
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
 	stubApprovalTeamRecord(api)
-	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", false).Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "audit1"}, nil)
+	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", true).Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "audit1"}, nil)
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil).Maybe()
 	api.On("GetPost", "post1").Return(nil, testAppErr("no post"))
@@ -972,6 +972,35 @@ func TestHandleAdminAction_UnknownRequestRepliesPrivately(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Nil(t, resp.Update)
 	api.AssertNotCalled(t, "GetPost", mock.Anything)
+}
+
+func TestHandleAdminAction_NomineeCannotApproveOwnNomination(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{AllowChannelRequests: true, AllowChannelAdminRequests: true})
+
+	// u_req nominated u_ta, a Team Admin of the channel's team.
+	areq := &adminRequest{ID: "areq1", ApprovalPostID: "post1", RequesterID: "u_req", ChannelID: "chX", NomineeIDs: []string{"u_ta"}}
+	raw, err := json.Marshal(areq)
+	require.NoError(t, err)
+
+	api.On("GetUser", "u_ta").Return(&model.User{Id: "u_ta", Username: "lead", Roles: "system_user"}, nil)
+	api.On("KVGet", kvAdminRequestPrefix+"areq1").Return(raw, nil)
+	api.On("GetChannel", "chX").Return(&model.Channel{Id: "chX", TeamId: "team1"}, nil)
+	api.On("GetTeamMember", "team1", "u_ta").Return(&model.TeamMember{Roles: "team_user team_admin"}, nil)
+
+	r := httptest.NewRequest(http.MethodPost, routeApproveAdmin, strings.NewReader(actionBody(t, "areq1")))
+	r.Header.Set(headerUserID, "u_ta")
+	w := httptest.NewRecorder()
+	p.handleAdminAction(w, r, true)
+
+	var resp model.PostActionIntegrationResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, ownNominationText, resp.EphemeralText)
+	api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "UpdateChannelMemberRoles", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandleAdminAction_RequesterCannotApproveOwnRequest(t *testing.T) {
@@ -1584,7 +1613,7 @@ func TestHandleAction_UnknownRequesterSkipsWelcomeAndAuditsByID(t *testing.T) {
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{AllowChannelRequests: true, ApprovalTeam: "appteam"})
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id"}, nil)
-	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", false).Return(pluginChannel("audit", "mattermost-audit-requests"), nil)
+	api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", true).Return(pluginChannel("audit", "mattermost-audit-requests"), nil)
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
 
 	pending := &channelRequest{ID: "req1", ApprovalPostID: "post1", RequesterID: "u_req", TeamID: "team1", Name: "team-x", DisplayName: "X", ChannelType: "O"}
