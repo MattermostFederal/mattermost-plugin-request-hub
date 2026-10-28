@@ -46,8 +46,8 @@ func mustMarshal(t *testing.T, record any) []byte {
 	return raw
 }
 
-// approvalCard is the bot's approval card "post1" in the approval channel.
-func approvalCard() *model.Post {
+// requestCardPost is the bot's approval card "post1" in the approval channel.
+func requestCardPost() *model.Post {
 	post := &model.Post{Id: "post1", ChannelId: "appr-ch", UserId: "bot-user-id", Message: "needs review"}
 	model.ParseMessageAttachment(post, []*model.MessageAttachment{{
 		Title:   "Request",
@@ -62,7 +62,7 @@ func approvalCard() *model.Post {
 func stubTicketClose(api *plugintest.API) {
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil).Maybe()
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "created"}, nil).Maybe()
-	api.On("GetPost", "post1").Return(approvalCard(), nil).Maybe()
+	api.On("GetPost", "post1").Return(requestCardPost(), nil).Maybe()
 }
 
 func TestNewerActionHandlers_UnusableClickReplies(t *testing.T) {
@@ -112,21 +112,33 @@ func TestNewerActionHandlers_ApproveOnDeletedTeamLeavesRequestPending(t *testing
 		{"team member", teamMemberActionHandler, kvTeamMemberRequestPrefix, &teamMemberRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", ApprovalPostID: "post1"}},
 		{"team guest", teamGuestActionHandler, kvTeamGuestRequestPrefix, &teamGuestRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", ApprovalPostID: "post1"}},
 	}
+	teams := []struct {
+		name string
+		team *model.Team
+		err  *model.AppError
+		want string
+	}{
+		{"deleted", nil, notFoundErr(), "The team no longer exists. Deny this request instead."},
+		{"archived", &model.Team{Id: "team1", DeleteAt: 1}, nil, "The team has been archived. Deny this request instead."},
+		{"lookup fails", nil, testAppErr("db down"), approvalCheckRetryText},
+	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			api := &plugintest.API{}
-			stubLogs(api)
-			p := newTestPlugin(api)
-			stubSystemAdmin(api)
-			api.On("KVGet", tc.kvPrefix+"r1").Return(mustMarshal(t, tc.record), nil)
-			api.On("GetTeam", "team1").Return(nil, testAppErr("deleted"))
+		for _, team := range teams {
+			t.Run(tc.name+"/"+team.name, func(t *testing.T) {
+				api := &plugintest.API{}
+				stubLogs(api)
+				p := newTestPlugin(api)
+				stubSystemAdmin(api)
+				api.On("KVGet", tc.kvPrefix+"r1").Return(mustMarshal(t, tc.record), nil)
+				api.On("GetTeam", "team1").Return(team.team, team.err)
 
-			resp := runAsAdmin(t, p, tc.handler, true)
+				resp := runAsAdmin(t, p, tc.handler, true)
 
-			require.Equal(t, "Could not load the team; it may have been deleted.", resp.EphemeralText)
-			require.Nil(t, resp.Update)
-			api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
-		})
+				require.Equal(t, team.want, resp.EphemeralText)
+				require.Nil(t, resp.Update)
+				api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
+			})
+		}
 	}
 }
 
@@ -142,6 +154,8 @@ func TestHandleTeamAdminAction_ApprovePromotesNominees(t *testing.T) {
 	api.On("GetUser", "n1").Return(&model.User{Id: "n1", Username: "nommy"}, nil)
 	api.On("KVGet", kvTeamAdminRequestPrefix+"r1").Return(raw, nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Sales"}, nil)
+	stubActiveTeamMember(api, "team1", "u_req")
+	stubActiveTeamMember(api, "team1", "n1")
 	api.On("KVCompareAndDelete", kvTeamAdminRequestPrefix+"r1", raw).Return(true, nil).Once()
 	api.On("CreateTeamMember", "team1", "n1").Return(&model.TeamMember{}, nil)
 	api.On("UpdateTeamMemberRoles", "team1", "n1", teamAdminRoles).Return(&model.TeamMember{}, nil)
@@ -260,11 +274,14 @@ func TestHandleTeamGuestAction_ApproveSendsInvite(t *testing.T) {
 	stubSiteURL(api, ts.URL)
 
 	raw := mustMarshal(t, &teamGuestRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", Email: "g@example.com", ChannelIDs: []string{"ch1"}, ApprovalPostID: "post1"})
+	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	stubSystemAdmin(api)
 	stubApproverSession(api)
 	stubRequester(api)
 	api.On("KVGet", kvTeamGuestRequestPrefix+"r1").Return(raw, nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
+	stubActiveTeamMember(api, "team1", "u_req")
 	api.On("KVCompareAndDelete", kvTeamGuestRequestPrefix+"r1", raw).Return(true, nil).Once()
 	stubTicketClose(api)
 
@@ -291,6 +308,7 @@ func TestHandleTeamGuestAction_InviteFailureRestoresRequest(t *testing.T) {
 	stubRequester(api)
 	api.On("KVGet", kvTeamGuestRequestPrefix+"r1").Return(raw, nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
+	stubActiveTeamMember(api, "team1", "u_req")
 	api.On("KVCompareAndDelete", kvTeamGuestRequestPrefix+"r1", raw).Return(true, nil).Once()
 	api.On("KVSet", kvTeamGuestRequestPrefix+"r1", raw).Return(nil).Once()
 
@@ -313,6 +331,7 @@ func TestHandleTeamGuestAction_DenySendsNoInvite(t *testing.T) {
 	stubRequester(api)
 	api.On("KVGet", kvTeamGuestRequestPrefix+"r1").Return(raw, nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
+	stubActiveTeamMember(api, "team1", "u_req")
 	api.On("KVCompareAndDelete", kvTeamGuestRequestPrefix+"r1", raw).Return(true, nil).Once()
 	stubTicketClose(api)
 
@@ -406,7 +425,7 @@ func TestRepaintedApprovalPost_PostLoadFailureKeepsMessageOnly(t *testing.T) {
 func TestRepaintedApprovalPost_ReplacesAttachment(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 
 	post := p.repaintedApprovalPost("post1", "header", &model.MessageAttachment{Title: "repainted"})
 
@@ -424,7 +443,7 @@ func TestTwoStepApproveBlock_BlankUsernameIsSomeone(t *testing.T) {
 func TestRespondTwoStepApproveBlocked_RepaintsCardAndSendsChannelEphemeral(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 	api.On("SendEphemeralPost", "u1", mock.MatchedBy(func(post *model.Post) bool {
 		return post.ChannelId == "appr-ch" && post.Message == "blocked" && post.RootId == "" && post.UserId == ""
 	})).Return(&model.Post{}).Once()

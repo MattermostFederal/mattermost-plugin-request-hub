@@ -1,4 +1,4 @@
-# Admin Guide — Mattermost Request Hub Plugin
+# Admin Guide: Mattermost Request Hub Plugin
 
 This guide covers plugin configuration, the approval workflow, and how each request type is handled. For end-user guides, see the linked request-type docs at the bottom.
 
@@ -53,7 +53,7 @@ Create and assign attributes in **System Console → User Management → Attribu
 
 | Setting | Purpose |
 |---------|---------|
-| **Channel domain prefixes** | **Required** for channel requests. At least one prefix must be configured — an empty list rejects every channel-creation request. Requesters pick a prefix from a dropdown; the final URL is `<prefix><suffix>`. |
+| **Channel domain prefixes** | **Required** for channel requests. At least one prefix must be configured. An empty list rejects every channel-creation request. Requesters pick a prefix from a dropdown; the final URL is `<prefix><suffix>`. |
 
 ### Optional settings
 
@@ -62,25 +62,31 @@ Create and assign attributes in **System Console → User Management → Attribu
 | **Team Admins can approve requests** | When on, Team Admins of the approval team can approve or deny channel creation requests. Channel Admin requests are always reviewed by System Admins and the Team Admins of the channel's team, whatever this is set to. |
 | **Approval team's Team Admins can approve team and Team Admin requests** | Default off. When on, Team Admins of the approval team can approve or deny team creation and Team Admin requests and are added to `mattermost-team-requests`. They can then make anyone a Team Admin on any team, which is close to System Admin trust. Turn it on only where System Admins are scarce and you trust those Team Admins fully. |
 | **Per-team approval channels** | Default **on**. Auto-creates `mattermost-channel-requests` in each team that has a Team Admin or System Admin member. Channel / Channel Admin requests from that team go there (not the primary approval team's root channel). All ticket channels (including **Mattermost: Team Requests**) are kept in a managed sidebar category **Mattermost: Request Hub**. |
-| **Offer tools to Agents** | Default **off**. Lets the Mattermost Agents plugin list prefixes and file requests of every type on a user's behalf (see [Agents tools](#agents-tools)). Takes effect on save. |
+| **Offer tools to Agents** | Default **off**. Lets the Mattermost Agents plugin list prefixes, file requests of every type on a user's behalf and look up pending ones (see [Agents tools](#agents-tools)). Takes effect on save. |
 | **Pending requests per user** | Default **5**, up to 1000; 0 means no limit. How many requests of each type one user can have waiting for review; each type is counted separately. A second pending request for the same thing is refused: the same channel name in a team, the same nominees in the same channel or team (Channel Admin, Team Admin, team members), the same team URL, the same guest email in a team, the same bot username, or a webhook of the same type and name in the same channel. |
 | **Request expiry (days)** | Default **30**, at most 3650; 0 means requests never expire. Pending requests of any type older than this can no longer be approved: clicking Approve or Deny marks the card expired and closes the requester's ticket. Bot and webhook requests count from submission, even after one approval step. Applies to requests already pending too. |
+| **Bot token lifetime** | **1 to 12 months**, default **12**. How long an access token issued with an approved bot request lasts. The token DM gives the expiry date, and the requester gets reminders before it (see [Token expiry reminders](#token-expiry-reminders)). Only affects tokens issued after the change. Not the same as Request expiry. |
+| **Enable exercise mode** | Default **off**. **Do not enable in production.** Lets System Admins run `/mattermost-request-hub exercise populate`, `teardown` and `status` to seed and remove marked exercise data in a team: persona accounts nobody can sign in as, channels, and pending requests of every type on real approval cards. Populate needs **Allow channel requests**, at least one prefix, and the setting for each other type the scenario seeds (the built-in scenario seeds all eight). Approving a seeded request does the real thing, marked EXERCISE: a channel, team, bot or webhook, a Team Admin or team member change for a persona, or a guest invite. Teardown deletes the webhooks and bots, archives the teams and channels, and undoes the personas' team changes. Personas and guest invites use `exercise.invalid` email addresses, so a server or team that restricts email domains, or a guest domain list, must allow that domain, and guest access must be on for a scenario with guest invites. A guest invite can't be withdrawn; it reaches nobody and expires on its own. |
+| **Exercise scenario (JSON)** | Optional. Blank uses the built-in fictional scenario. Paste a scenario to seed your own; it is stored only in this server's configuration. The format is on the plugin's built-in `slash.html#exercise-scenario` page. |
 
 ### Agents tools
 
 **Offer tools to Agents** needs the Mattermost Agents plugin and Mattermost 11.3 or later. Once it's on, its tools appear in the Agents plugin's own settings, where you choose which of them agents may use. Each tool acts as the user the agent is talking to, with the same checks as the form for its type, and follows that type's toggle. Every request goes to the approvers, System Admins' included. There are no approve or deny tools.
 
-| Tool | Requests |
-|------|----------|
-| `list_prefixes` | Nothing; lists the channel prefixes for `request_channel` |
-| `request_channel` | A new channel |
-| `request_channel_admin` | Channel Admin for members of a channel |
-| `request_team` | A new team |
-| `request_team_admin` | Team Admin for members of a team |
-| `request_team_member` | People added to a team |
-| `request_team_guest` | A guest invite to channels of a team |
-| `request_bot` | A bot account (account fields only; tokens and webhooks for the bot are in the form) |
-| `request_webhook` | An incoming or outgoing webhook |
+| Tool | Does |
+|------|------|
+| `list_prefixes` | Lists the channel prefixes for `request_channel` |
+| `request_channel` | Requests a new channel |
+| `request_channel_admin` | Requests Channel Admin for members of a channel |
+| `request_team` | Requests a new team |
+| `request_team_admin` | Requests Team Admin for members of a team |
+| `request_team_member` | Requests that people be added to a team |
+| `request_team_guest` | Requests a guest invite to channels of a team |
+| `request_bot` | Requests a bot account (account fields only; tokens and webhooks for the bot are in the form) |
+| `request_webhook` | Requests an incoming or outgoing webhook |
+| `list_my_requests` | Lists the user's pending requests of every type |
+| `list_requests_to_approve` | Lists the pending requests the user can approve now (read only) |
+| `get_request_status` | Looks up one pending request of any type by ID |
 
 ### Locking down native channel creation
 
@@ -104,6 +110,8 @@ The plugin creates and manages five dedicated private channels in the configured
 | `mattermost-webhook-requests` | Standalone incoming and outgoing webhook requests |
 | `mattermost-audit-requests` | Audit log |
 
+Each channel gets a **Request Hub docs** bookmark that links to the built-in guide. The plugin bot joins the channel to add it. Channels that existed before the upgrade get the bookmark once, on the next activation that has **Site URL** set. If you remove the bookmark, the plugin doesn't add it back.
+
 If one of these channels is archived, the plugin doesn't recreate it: the archived channel still holds the name. Unarchive it (or rename it, so the plugin can create a new one). Until then, cards for that channel are DM'd to System Admins, and channel requests for a per-team channel go to the root channel.
 
 ---
@@ -125,7 +133,7 @@ People who aren't members of a channel can't see its cards. The requester gets t
 - **Bot:** `mattermost-bot-requests`. **Webhook:** `mattermost-webhook-requests`.
 - **No channel available** (for example, **Approval team** is blank, missing or archived): the card is DM'd to every System Admin instead, and the message relay isn't available for that request. The requester sees an error only if no System Admin could be reached.
 
-Approve and Deny work only on the cards the plugin posted for that request.
+The Approve and Deny buttons work only on the cards the plugin posted for that request. Approvers can also use `/mattermost-request-hub approve <request ID>` or `deny <request ID>` from any channel, for every request type, with the same checks as the buttons. `/mattermost-request-hub list approvals` lists the requests they can approve, with their IDs.
 
 ### Who can approve
 
@@ -162,7 +170,7 @@ Bot and webhook cards use **two-step** approval. The card shows security and sys
 | Request type | On Approve |
 |--------------|-----------|
 | **Channel creation** | Creates the channel, adds members, promotes Channel Admins, places in sidebar category if requested |
-| **Channel Admin** | Promotes the nominees to Channel Admin. Nominees must already be channel members when the request is made; anyone who has left by approval is skipped |
+| **Channel Admin** | Promotes the nominees to Channel Admin. Nominees must already be channel members when the request is made. Approve is refused if a nominee has since left the channel or been deactivated |
 | **Team Admin** | Promotes the nominees to Team Admin on that team. Nominees must already be team members. From the Request Hub or More actions the nominee is the requester; the slash command and its form can name other team members |
 | **Team creation** | Creates the team, adds the requester, optionally promotes to Team Admin |
 | **Bot account** | After both steps: creates the bot, optional token/webhooks; secrets go to a DM that auto-deletes in 72h |
@@ -180,7 +188,7 @@ When a request is submitted, the bot sends the requester a DM with a thread for 
 - A reply in the **approval thread** is relayed to the requester's **DM thread** as `Message from @reviewer: …`.
 - A reply in the requester's **DM thread** is relayed to the **approval thread** as `Reply from @requester: …`.
 
-This lets reviewers ask clarifying questions (for example, *Why do you need this new team?*) and get responses without leaving the approval channel, and without the requester needing access to the approval channel. Conversation happens in Mattermost's **Thread** right-hand sidebar (Reply on the card) — not as new top-level posts. Threads remain linked after approve/deny for follow-up. Root-level DMs to the bot (outside a ticket thread) get a nudge to reply inside the specific request.
+This lets reviewers ask clarifying questions (for example, *Why do you need this new team?*) and get responses without leaving the approval channel, and without the requester needing access to the approval channel. Conversation happens in Mattermost's **Thread** right-hand sidebar (Reply on the card), not as new top-level posts. Threads remain linked after approve/deny for follow-up. Root-level DMs to the bot (outside a ticket thread) get a nudge to reply inside the specific request.
 
 ![Approver asks in the Thread RHS](images/shared/mattermost-thread-approver-ask.png)
 
@@ -206,7 +214,13 @@ Bot requests need a **security** approval and a **system** approval from two dif
 
 ### Token delivery
 
-Access tokens are generated at approve-time through a short-lived session for the final approver, which is revoked right after; no credential is stored. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token itself does not expire unless revoked.
+Access tokens are generated at approve-time through a short-lived session for the final approver, which is revoked right after; no credential is stored. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token expires after **Bot token lifetime** (1 to 12 months, default 12), and the DM gives the date.
+
+### Token expiry reminders
+
+For each token it issues, the plugin keeps the bot, the requester and the expiry date. It never keeps the token value. From a month before the expiry the requester gets a weekly direct message naming the bot and the date, then a daily one in the last week, and one last message once the token has expired. If the requester's account is deactivated or deleted, every System Admin gets the reminders instead. Reminders stop when the bot is deleted or disabled.
+
+The reminders say how to get a new token: a System Admin creates one under **Integrations → Bot Accounts**, or the requester asks for a new bot. Tokens issued before reminders were added, or created outside Request Hub, get none.
 
 If a token is suspected compromised, revoke it in **System Console → User Management → Bot Accounts → {bot name}** and issue a new one.
 
@@ -214,7 +228,7 @@ If a token is suspected compromised, revoke it in **System Console → User Mana
 
 ## Webhook approvals in detail
 
-Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call — never stored.
+Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call and is never stored.
 
 **Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different system approver (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
 
@@ -227,9 +241,9 @@ If you set channel domain prefixes, requesters must pick a prefix from a dropdow
 [Screenshot: The domain-prefix editor with several rows filled in]
 
 Each row has:
-- **Prefix** — the fixed URL segment (e.g. `ops-`, `prod-`)
-- **Description** — shown in the dropdown to help requesters choose
-- **Max suffix length** — caps how many characters the requester can append (2–48; presets default to 48)
+- **Prefix**: the fixed URL segment (e.g. `ops-`, `prod-`)
+- **Description**: shown in the dropdown to help requesters choose
+- **Max suffix length**: caps how many characters the requester can append (2–48; presets default to 48)
 
 Use **Load preset** to populate from a starter pack. The **Live preview** at the bottom shows what a given prefix and suffix combination produces.
 
@@ -259,7 +273,7 @@ for current members. A category from an earlier version named
 **Mattermost: Request Hub**.
 
 > Upgrades that already saved `PerTeamApprovalChannels = false` keep that
-> value — turn the setting back **on** in System Console if channel requests
+> value. Turn the setting back **on** in System Console if channel requests
 > are still landing only in the primary team.
 
 ---
@@ -314,9 +328,9 @@ Every request is queued for approval, including requests from System Admins.
 
 ## Related guides
 
-- [Channel Requests — User Guide](CHANNEL_CREATION_GUIDE.md)
-- [Channel Admin Requests — User Guide](CHANNEL_ADMIN_GUIDE.md)
-- [Team Requests — User Guide](TEAM_REQUEST_GUIDE.md)
-- [Team Membership & Guests — User Guide](TEAM_MEMBERSHIP_GUIDE.md)
-- [Bot Account Requests — User Guide](BOT_REQUEST_GUIDE.md)
-- [Webhook Requests — User Guide](WEBHOOK_REQUEST_GUIDE.md)
+- [Channel Requests: User Guide](CHANNEL_CREATION_GUIDE.md)
+- [Channel Admin Requests: User Guide](CHANNEL_ADMIN_GUIDE.md)
+- [Team Requests: User Guide](TEAM_REQUEST_GUIDE.md)
+- [Team Membership & Guests: User Guide](TEAM_MEMBERSHIP_GUIDE.md)
+- [Bot Account Requests: User Guide](BOT_REQUEST_GUIDE.md)
+- [Webhook Requests: User Guide](WEBHOOK_REQUEST_GUIDE.md)

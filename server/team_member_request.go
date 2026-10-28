@@ -25,6 +25,8 @@ type teamMemberRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -104,6 +106,10 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 		p.API.LogError("failed to post team member request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindTeamMember, req.ID)
+	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
 
@@ -166,7 +172,10 @@ func exceptIDs(all, exclude []string) []string {
 
 func (p *Plugin) postTeamMemberApprovalRequest(req *teamMemberRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a team member request needs System Admin review."
+	header := exerciseMarker + ": a team member request needs System Admin review."
+	if !req.Exercise {
+		header = p.systemAdminMentions() + " — a team member request needs System Admin review."
+	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamMemberApprovalAttachment(req, requester, team),
@@ -186,9 +195,10 @@ func (p *Plugin) teamMemberApprovalAttachment(req *teamMemberRequest, requester 
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Team member request",
+		Title:   exerciseLabel(req.Exercise) + "Team member request",
 		Color:   "#F4A221",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.teamMemberApprovalActions(req.ID, siteURL),
 	}
 }

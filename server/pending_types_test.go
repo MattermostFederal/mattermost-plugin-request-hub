@@ -230,9 +230,10 @@ func TestEveryRequestTypeExpires(t *testing.T) {
 				lists[pendingListKey(kinds[tc.name], "u_req")] = entriesJSON(t, newPendingEntry(record))
 
 				stubSystemAdmin(api)
-				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
-				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Maybe()
-				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Maybe()
+				// Every approve-time check would fail too; expiry comes first.
+				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req", DeleteAt: 1}, nil).Maybe()
+				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops", DeleteAt: 1}, nil).Maybe()
+				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town", DeleteAt: 1}, nil).Maybe()
 				api.On("KVGet", tc.kvPrefix+"r1").Return(raw, nil)
 				api.On("KVCompareAndDelete", tc.kvPrefix+"r1", raw).Return(true, nil).Once()
 				stubTicketClose(api)
@@ -265,7 +266,7 @@ func TestExpiredTwoStepRequestNeedsAnApprover(t *testing.T) {
 	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other"}, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 	api.On("KVGet", kvBotRequestPrefix+"r1").Return(raw, nil)
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 
 	resp := clickAction(t, p, botActionHandler, "u_other", actionBody(t, "r1"), false)
 
@@ -285,7 +286,7 @@ func TestCreateFailureKeepsPendingEntry(t *testing.T) {
 	stubSystemAdmin(api)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 	api.On("KVGet", kvTeamRequestPrefix+"r1").Return(raw, nil)
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 	api.On("KVCompareAndDelete", kvTeamRequestPrefix+"r1", raw).Return(true, nil)
 	api.On("CreateTeam", mock.Anything).Return(nil, testAppErr("name taken"))
 	api.On("KVSet", kvTeamRequestPrefix+"r1", mock.Anything).Return(nil)

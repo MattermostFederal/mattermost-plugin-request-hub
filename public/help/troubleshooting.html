@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troubleshooting (Mattermost Request Hub)</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <h2>Mattermost Request Hub</h2>
+            <span class="version">In-app documentation</span>
+        </div>
+        <nav>
+            <span class="nav-section">Start here</span>
+            <a href="docs.html">Overview</a>
+            <a href="open.html">How to open requests</a>
+            <a href="messaging.html">Messaging threads</a>
+            <span class="nav-section">Request types</span>
+            <a href="channel.html">Channels</a>
+            <a href="channel-admin.html">Channel Admin</a>
+            <a href="team.html">Teams</a>
+            <a href="team-member.html">Team members</a>
+            <a href="team-guest.html">Guest invites</a>
+            <a href="bot.html">Bots</a>
+            <a href="webhook.html">Webhooks</a>
+            <span class="nav-section">Also</span>
+            <a href="approving.html">Approving</a>
+            <a href="slash.html">Slash commands</a>
+            <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html" class="active">Troubleshooting</a>
+        </nav>
+    </aside>
+
+    <main class="content">
+        <div class="breadcrumb">
+            <span>Docs</span>
+            <span class="separator">/</span>
+            Troubleshooting
+        </div>
+
+
+        <h1>Troubleshooting</h1>
+        <p class="tagline">What a message means, and what to do about it.</p>
+
+        <h2 id="not-configured">"Channel requests aren't configured yet"</h2>
+        <p>
+            <code>/mattermost-request-hub channel</code>, <code>/mattermost-request-hub prefixes</code> and the Agents <code>list_prefixes</code> tool
+            show <em>Channel requests aren't configured yet. Ask a System Admin to define at least one channel
+            prefix in System Console → Plugins → Mattermost Request Hub.</em> A channel request submitted from
+            the form or the Agents <code>request_channel</code> tool is refused with <em>plugin is not
+            configured: an admin must define at least one channel prefix</em>.
+        </p>
+        <p>
+            <strong>Cause:</strong> no channel domain prefix is defined. Every channel request needs one.
+            <strong>Fix:</strong> a System Admin adds at least one prefix under <em>Channel domain prefixes</em>,
+            for example with <em>Load preset</em>.
+        </p>
+
+        <h2 id="disabled">"... requests are currently disabled by an administrator"</h2>
+        <p>
+            <strong>Cause:</strong> a System Admin turned that request type off in the plugin settings (for
+            example <em>Allow channel requests</em> or <em>Allow channel admin requests</em>). The type is hidden from the
+            Request Hub and the server refuses it from every entry point.
+            <strong>Fix:</strong> ask a System Admin to turn it on if you need it.
+        </p>
+        <p>
+            A request filed before its type was turned off stays pending. Approve on it replies <em>Requests of
+            this type are turned off. Deny this request instead.</em>
+        </p>
+
+        <h2 id="requests-in-dms">Requests arrive as direct messages to System Admins</h2>
+        <p>
+            <strong>Cause:</strong> the request's approval channel couldn't be used. Rather than drop the request,
+            the plugin sends it by direct message to every active System Admin. This happens for every request type:
+        </p>
+        <ul>
+            <li>Channel and Channel Admin requests: the request's team has no per-team approval channel, and
+                <em>Approval team</em> isn't set or can't be found. The server log has the warning <em>no approval
+                channel available</em>.</li>
+            <li>Team, Team Admin, team member, guest, bot and webhook requests: <em>Approval team</em> isn't set or
+                can't be found. When it names a team that can't be found, the server log has <em>cannot ensure named
+                approval channel</em>.</li>
+        </ul>
+        <p>
+            <strong>Fix:</strong> set <em>Approval team</em> in the plugin settings to the name of an existing
+            team. The plugin creates its approval channels there. Any one System Admin can act on a DMed request;
+            after that, the other copies are closed with the outcome. A copy sent before the plugin was upgraded
+            to this version keeps its buttons, which reply <em>This request has already been handled.</em>
+        </p>
+        <p>
+            If no System Admin can receive the message either, the requester sees <em>could not send your
+            request to the approvers; try again or contact a System Admin</em>.
+        </p>
+
+        <h2 id="expired">"This request has expired"</h2>
+        <p>
+            <strong>Cause:</strong> the request wasn't reviewed within <em>Request expiry (days)</em>. Bot and
+            webhook requests count from submission, even after one approval step. Approve and Deny, on the card or with the slash command, both reply <em>This request has expired.</em>, the card is marked
+            <em>⌛ Expired: not reviewed within N days.</em>, and the requester's ticket is closed as expired.
+        </p>
+        <p>
+            <strong>Fix:</strong> the requester submits it again. Raising the expiry also applies to requests
+            already pending; <code>0</code> turns expiry off. See <a href="approving.html#expired">Expired requests</a>.
+        </p>
+
+        <h2 id="pending-limit">"You have N pending requests waiting for review"</h2>
+        <p>
+            <strong>Cause:</strong> the requester is at <em>Pending requests per user</em> for that kind of
+            request (each request type is counted separately). Expired requests no longer count.
+        </p>
+        <p>
+            <strong>Fix:</strong> wait for an approver to act on some, or for them to expire. A System Admin can
+            raise the limit, or set it to <code>0</code> for no limit.
+        </p>
+        <p>
+            A related message starting <em>you already have a pending</em>, such as <em>you already have a
+            pending request for ~name in this team</em>, means the same request is already waiting. It doesn't
+            need to be submitted twice. Each request type's page lists its exact wording.
+        </p>
+
+        <h2 id="requester-left">Approve says someone or something is no longer valid</h2>
+        <p>
+            Approve checks the request again before acting. You'll see a private message, and the request stays
+            pending with its buttons:
+        </p>
+        <ul>
+            <li><em>The requester's account is no longer active. Deny this request instead.</em></li>
+            <li><em>The requester is no longer a member of the team. Deny this request instead.</em></li>
+            <li><em>The requester is no longer a member of the channel. Deny this request instead.</em></li>
+            <li><em>@name is no longer a member of the channel. Deny this request instead.</em> (a nominee)</li>
+            <li><em>The channel name no longer matches the configured prefixes. Deny this request and ask the requester to submit it again.</em></li>
+        </ul>
+        <p>
+            Every request type is checked, including its team, channels, nominees and bot owner, and each message
+            tells you to deny the request. The full list is in
+            <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>.
+        </p>
+        <p>
+            <strong>Fix:</strong> deny the request. Deny is never blocked. See <a href="approving.html">Approving</a>.
+        </p>
+        <p>
+            For a Channel Admin request, Approve refuses if a nominee has left the channel. Only if the nominees
+            leave in the moment after that check does the card say <em>nobody was promoted: the nominees are no
+            longer members</em>, and the requester is told.
+        </p>
+
+        <h2 id="cant-approve">Approve says you can't</h2>
+        <p>
+            These replies are private, and the request stays pending for another approver:
+        </p>
+        <ul>
+            <li><em>You can't approve your own request. Another approver has to review it.</em> Only a System Admin
+                can approve their own channel or Channel Admin request.</li>
+            <li><em>You created this request</em> on a bot or webhook card: nobody can approve either step of their
+                own bot or webhook request, System Admins included. The card shows the reminder for everyone.</li>
+            <li><em>Security review required first.</em> on a bot or webhook card: a security approver has to approve
+                before a system approver can finish it.</li>
+            <li><em>You've already approved your step. This request needs a different approver to complete it.</em>
+                The two steps of a bot or webhook card need two different people.</li>
+            <li><em>You don't have permission to approve or deny this channel request.</em>, <em>... this Channel Admin
+                request.</em> or <em>Only System Admins can approve or deny ... requests.</em> See
+                <a href="approving.html#who-sees-what">Who sees and approves what</a>.</li>
+            <li><em>This button doesn't belong to that request's card.</em> The button was on a post the plugin
+                didn't record for that request. Use the buttons on the request's own card.</li>
+        </ul>
+        <p>
+            <code>/mattermost-request-hub approve</code> gives the same replies for every request type. From the
+            command, the bot and webhook replies start with ⚠️ and give the reason in full, and no card is
+            changed.
+        </p>
+        <p>
+            <strong>Fix:</strong> ask an approver who can act on it.
+        </p>
+
+        <h2 id="try-again">"Try again" messages</h2>
+        <p>
+            <em>Could not check the requester right now. Try again in a moment.</em>, <em>Could not check this
+            request right now. Try again in a moment.</em>, <em>Couldn't check this card. Try again in a
+            moment.</em>, <em>could not load your account; try again</em> and <em>could not save your request; try
+            again</em> mean a lookup or save failed for a moment. <em>This request was just updated. Please click
+            Approve or Deny again.</em>, <em>This request was just updated. Please run the command again.</em> and <em>This request was just updated by someone else. Please try
+            again.</em> mean another approver acted at the same moment; the request may already be handled.
+        </p>
+        <p>
+            <strong>Fix:</strong> try again. If it keeps happening, check the server log for an error from the
+            plugin.
+        </p>
+
+        <h2 id="audit-missing">No cards in the audit channel</h2>
+        <p>
+            <strong>Cause:</strong> the plugin posts every approve, deny and expiry to the private
+            <code>mattermost-audit-requests</code> channel it creates in the approval team. Without an
+            <em>Approval team</em>, or when the team can't be found, there is no audit channel and nothing is
+            posted. In the second case the server log has <em>cannot ensure named approval channel</em>; when the
+            setting is empty, nothing is logged. If the channel exists
+            but a post fails, the log has <em>audit post failed</em> with the reason.
+        </p>
+        <p>
+            <strong>Fix:</strong> set <em>Approval team</em> to an existing team. System Admins are added to the
+            audit channel automatically.
+        </p>
+
+        <h2 id="agents-missing">Agents tools not showing</h2>
+        <p>If an agent doesn't offer to file requests, check, in order:</p>
+        <ul>
+            <li><em>Offer tools to Agents</em> is on in the Mattermost Request Hub settings. It's off by default.</li>
+            <li>The Mattermost Agents plugin is installed and enabled, on Mattermost 11.3 or later.</li>
+            <li>The setting for the request type is on; a tool for a type that's off refuses with the disabled message.</li>
+            <li>
+                The tools are allowed in the Agents plugin's settings. They're listed with this plugin's prefix:
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__list_prefixes</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_channel</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_channel_admin</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_team</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_team_admin</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_team_member</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_team_guest</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_bot</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__request_webhook</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__list_my_requests</code>,
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__list_requests_to_approve</code> and
+                <code>com_mattermostfederal_mattermost-plugin-request-hub__get_request_status</code>.
+            </li>
+        </ul>
+        <p>
+            See <a href="agents.html">AI agents</a> for what each one does.
+        </p>
+
+        <h2 id="exercise">Exercise mode</h2>
+        <p>
+            These are replies to <a href="slash.html#exercise"><code>/mattermost-request-hub exercise</code></a>.
+        </p>
+        <p>
+            <strong>"Exercise mode is off"</strong>: turn on <em>Enable exercise mode</em> in System Console →
+            Plugins → Mattermost Request Hub. Only System Admins can run the command.
+        </p>
+        <p>
+            <strong>"exercise mode seeds channel requests, which are turned off"</strong> or <strong>"this scenario
+            seeds ... requests, which are turned off"</strong>: populate files the same requests a user would, so it
+            needs <em>Allow channel requests</em> on, and the setting for every other type the scenario seeds. The
+            built-in scenario seeds all eight types. Nothing was created. <code>status</code> and
+            <code>teardown</code> don't need any of these settings.
+        </p>
+        <p>
+            <strong>"The username @exercise-... is taken by an account that isn't exercise data"</strong>: a real
+            account has a persona's username. Populate creates nothing in that case. Rename that account, or
+            change the persona's <code>role</code> in the <a href="slash.html#exercise-scenario">exercise
+            scenario</a>.
+        </p>
+        <p>
+            <strong>"This server or team only allows accounts with email addresses at ..."</strong>: personas use
+            addresses at <code>exercise.invalid</code>, a domain that never receives mail, and Mattermost only lets
+            accounts from the allowed domains join a team. While you run the exercise, add
+            <code>exercise.invalid</code> to <em>Restrict account creation to specified email domains</em> in the
+            System Console, or to the team's allowed domains, whichever the reply names.
+        </p>
+        <p>
+            <strong>"A team with the URL name exercise-... already exists"</strong> or <strong>"the username
+            @ex-... is taken"</strong>: a team or account already has a name the scenario's team or bot request
+            needs. Populate creates nothing in that case. Rename it, or change the scenario's suffix. A team or bot
+            left from an earlier exercise is removed by its teardown.
+        </p>
+        <p>
+            <strong>"This scenario seeds guest invite requests, but guest accounts are off"</strong> or
+            <strong>"guests can only be invited from ..."</strong>: approving a guest invite request would fail, so
+            populate refuses first. Turn on <em>Enable Guest Access</em> in System Console → Authentication → Guest
+            Access, and add <code>exercise.invalid</code> to the guest domain list if there is one, or use a
+            scenario without guest invites.
+        </p>
+        <p>
+            <strong>"A channel named ~... already exists in this team"</strong>: a channel, archived or not, already
+            has a name the scenario needs. Rename it, or change the scenario's suffix.
+        </p>
+        <p>
+            <strong>Status says the exercise is <em>populating</em></strong> when no populate is running: an earlier
+            populate stopped partway. The server log has <em>failed to populate exercise data</em> with the reason.
+            Run <code>/mattermost-request-hub exercise teardown</code>, which removes whatever it created, then
+            populate again. For five minutes after a populate stops, teardown answers <em>a populate is still
+            running in this team</em>, since it can't tell a stopped populate from a slow one. Wait and run it
+            again.
+        </p>
+        <p>
+            <strong>Teardown says some items could not be removed</strong>, or status says <em>a teardown started
+            but didn't finish</em>: the record of the exercise is kept, so run teardown again. The server log names
+            each item that failed. A request stored under an exercise request's ID that isn't exercise data is
+            always left alone and reported this way.
+        </p>
+
+    </main>
+</div>
+</body>
+</html>

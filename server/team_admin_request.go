@@ -18,8 +18,9 @@ const (
 
 // teamAdminRequest is a pending request to promote one or more users to Team
 // Admin on a specific team. Because Team Admin grants broad permissions across
-// the whole team, these requests always route to the root approval channel and
-// can only be approved by System Admins.
+// the whole team, these requests go to the team requests channel in the root
+// approval team (or to every System Admin by direct message when that channel
+// isn't available) and can only be approved by System Admins.
 type teamAdminRequest struct {
 	ID          string   `json:"id"`
 	RequesterID string   `json:"requester_id"`
@@ -28,6 +29,8 @@ type teamAdminRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
@@ -110,6 +113,10 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 		p.API.LogError("failed to post team admin request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindTeamAdmin, req.ID)
+	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
 
@@ -166,7 +173,7 @@ func (p *Plugin) postTeamAdminApprovalRequest(req *teamAdminRequest, requester *
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamAdminApprovalAttachment(req, requester, team),
-		p.teamScopeApprovalHeader(ch, "Team Admin request"),
+		p.teamScopeApprovalHeader(ch, "Team Admin request", req.Exercise),
 		ch,
 	)
 }
@@ -187,9 +194,10 @@ func (p *Plugin) teamAdminApprovalAttachment(req *teamAdminRequest, requester *m
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Team Admin request",
+		Title:   exerciseLabel(req.Exercise) + "Team Admin request",
 		Color:   "#F4A221",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.teamAdminApprovalActions(req.ID, siteURL),
 	}
 }

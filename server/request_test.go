@@ -414,7 +414,10 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
-	stubPendingLists(api)
+	// Pending lists only: the card record write must reach the failing mock below.
+	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", isPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVCompareAndDelete", isPendingListKey, mock.Anything).Return(true, nil).Maybe()
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{
@@ -458,6 +461,7 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api := &plugintest.API{}
 			stubLogs(api)
 			stubPendingLists(api)
+			stubSubmittedRequestExists(api, kvRequestPrefix)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
 			p.setConfiguration(&configuration{
@@ -1014,13 +1018,15 @@ func TestPostApprovalAttachment_FallsBackToSystemAdminDMs(t *testing.T) {
 	api.On("GetDirectChannel", "a2", "bot-user-id").Return(&model.Channel{Id: "dm2"}, nil)
 	api.On("GetDirectChannel", "a3", "bot-user-id").Return(&model.Channel{Id: "dm3"}, nil)
 	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm2" })).Return(nil, testAppErr("post failed"))
-	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm3" })).Return(&model.Post{}, nil)
+	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm3" })).Return(&model.Post{Id: "post3"}, nil)
 
 	// No approval channel resolved: the card goes to System Admin DMs.
 	postID, channelID, err := p.postApprovalAttachment("r1", &model.MessageAttachment{Title: "x"}, "header", nil)
 	require.NoError(t, err)
 	require.Empty(t, postID)
 	require.Empty(t, channelID)
+	// Only the copies that were created are recorded.
+	api.AssertCalled(t, "KVSet", kvApprovalCardsPrefix+"r1", []byte(`["post3"]`))
 	// The bot never DMs itself.
 	api.AssertNotCalled(t, "GetDirectChannel", "bot-user-id", "bot-user-id")
 }

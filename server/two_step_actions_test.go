@@ -117,6 +117,7 @@ func TestTwoStepActionHandlers_FinalClaimErrorChangesNothing(t *testing.T) {
 			stubSystemAdmin(api)
 			stubRequester(api)
 			api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Maybe()
+			api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			api.On("KVGet", tc.kvPrefix+"r1").Return(raw, nil)
 			api.On("KVCompareAndDelete", tc.kvPrefix+"r1", raw).Return(false, testAppErr("kv down"))
 			tc.guard(t, api, p)
@@ -142,13 +143,13 @@ func TestTwoStepActionHandlers_RequesterApproveIsShownOnCard(t *testing.T) {
 		{
 			name: "bot", handler: botActionHandler, kvPrefix: kvBotRequestPrefix,
 			record: &botRequest{ID: "r1", RequesterID: "admin1", Username: "svcbot", ApprovalPostID: "post1"},
-			header: (&Plugin{}).botApprovalHeader(),
+			header: (&Plugin{}).botApprovalHeader(false),
 			stub:   func(*plugintest.API) {},
 		},
 		{
 			name: "webhook", handler: webhookActionHandler, kvPrefix: kvWebhookRequestPrefix,
 			record: &webhookRequest{ID: "r1", RequesterID: "admin1", WebhookType: webhookTypeIncoming, ChannelID: "ch1", ApprovalPostID: "post1"},
-			header: (&Plugin{}).webhookApprovalHeader(),
+			header: (&Plugin{}).webhookApprovalHeader(false),
 			stub: func(api *plugintest.API) {
 				// The target channel is gone; the card still renders.
 				api.On("GetChannel", "ch1").Return(nil, testAppErr("gone"))
@@ -163,7 +164,7 @@ func TestTwoStepActionHandlers_RequesterApproveIsShownOnCard(t *testing.T) {
 			stubSystemAdmin(api)
 			tc.stub(api)
 			api.On("KVGet", tc.kvPrefix+"r1").Return(mustMarshal(t, tc.record), nil)
-			api.On("GetPost", "post1").Return(approvalCard(), nil)
+			api.On("GetPost", "post1").Return(requestCardPost(), nil)
 			api.On("SendEphemeralPost", "admin1", mock.MatchedBy(func(post *model.Post) bool {
 				return post.ChannelId == "appr-ch"
 			})).Return(&model.Post{}).Once()
@@ -179,6 +180,10 @@ func TestTwoStepActionHandlers_RequesterApproveIsShownOnCard(t *testing.T) {
 			require.NotEmpty(t, att.Fields)
 			require.Equal(t, "🚫 Requester cannot approve:", att.Fields[0].Title)
 			require.Contains(t, att.Fields[0].Value, "**@admin**")
+			if tc.name == "webhook" {
+				// The missing channel falls back to its ID.
+				require.Contains(t, att.Fields, &model.MessageAttachmentField{Title: "Target channel", Value: "~ch1", Short: true})
+			}
 			api.AssertNotCalled(t, "KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything)
 			api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
 			api.AssertNotCalled(t, "UpdatePost", mock.Anything)
@@ -239,8 +244,9 @@ func TestTwoStepActionHandlers_SecondClickBySameApproverIsEphemeralOnly(t *testi
 			stubSystemAdmin(api)
 			stubRequester(api)
 			api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Maybe()
+			api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			api.On("KVGet", tc.kvPrefix+"r1").Return(mustMarshal(t, tc.record), nil)
-			api.On("GetPost", "post1").Return(approvalCard(), nil)
+			api.On("GetPost", "post1").Return(requestCardPost(), nil)
 			api.On("SendEphemeralPost", "admin1", mock.Anything).Return(&model.Post{}).Once()
 
 			resp := runAsAdmin(t, p, tc.handler, true)
@@ -272,6 +278,7 @@ func TestTwoStepActionHandlers_PartialApprovalLostToConcurrentUpdate(t *testing.
 			stubSystemAdmin(api)
 			stubRequester(api)
 			api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Maybe()
+			api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			api.On("KVGet", tc.kvPrefix+"r1").Return(raw, nil)
 			api.On("KVCompareAndSet", tc.kvPrefix+"r1", raw, mock.Anything).Return(false, nil).Once()
 
@@ -293,8 +300,8 @@ func TestTwoStepActionHandlers_PartialApprovalRecordsStepAndRepaintsCard(t *test
 		record   any
 		header   string
 	}{
-		{"bot", botActionHandler, kvBotRequestPrefix, pendingBotRequest(twoStepState{}), (&Plugin{}).botApprovalHeader()},
-		{"webhook", webhookActionHandler, kvWebhookRequestPrefix, pendingWebhookRequest(twoStepState{}), (&Plugin{}).webhookApprovalHeader()},
+		{"bot", botActionHandler, kvBotRequestPrefix, pendingBotRequest(twoStepState{}), (&Plugin{}).botApprovalHeader(false)},
+		{"webhook", webhookActionHandler, kvWebhookRequestPrefix, pendingWebhookRequest(twoStepState{}), (&Plugin{}).webhookApprovalHeader(false)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,9 +310,9 @@ func TestTwoStepActionHandlers_PartialApprovalRecordsStepAndRepaintsCard(t *test
 			p := newTestPlugin(api)
 			raw := mustMarshal(t, tc.record)
 			stubSystemAdmin(api)
-			// Requester and target channel are gone; the card falls back to IDs.
-			api.On("GetUser", "u_req").Return(nil, testAppErr("gone"))
-			api.On("GetChannel", "ch1").Return(nil, testAppErr("gone")).Maybe()
+			stubRequester(api)
+			api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Maybe()
+			api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			api.On("KVGet", tc.kvPrefix+"r1").Return(raw, nil)
 			var stored []byte
 			api.On("KVCompareAndSet", tc.kvPrefix+"r1", raw, mock.Anything).Run(func(args mock.Arguments) {
@@ -314,7 +321,8 @@ func TestTwoStepActionHandlers_PartialApprovalRecordsStepAndRepaintsCard(t *test
 			// Progress card for the requester, then the repainted approval card.
 			api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
 			api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "progress"}, nil)
-			api.On("GetPost", "post1").Return(approvalCard(), nil)
+			api.On("GetPost", "post1").Return(requestCardPost(), nil)
+			api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil)
 
 			resp := runAsAdmin(t, p, tc.handler, true)
 
@@ -325,7 +333,7 @@ func TestTwoStepActionHandlers_PartialApprovalRecordsStepAndRepaintsCard(t *test
 			att := extractFirstAttachment(resp.Update)
 			require.NotNil(t, att)
 			require.NotEmpty(t, att.Fields)
-			require.Equal(t, "@user u_req", att.Fields[0].Value)
+			require.Equal(t, "@reqer", att.Fields[0].Value)
 			var state twoStepState
 			require.NoError(t, json.Unmarshal(stored, &state))
 			require.Equal(t, "admin1", state.SecurityApproverID)
@@ -364,13 +372,14 @@ func TestHandleBotAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) {
 	p := newTestPlugin(api)
 	raw := mustMarshal(t, pendingBotRequest(securityStepDone()))
 	stubSystemAdmin(api)
-	api.On("GetUser", "u_req").Return(nil, testAppErr("gone"))
+	stubRequester(api)
 	api.On("GetUser", "sec1").Return(&model.User{Id: "sec1", Username: "sec"}, nil)
 	api.On("KVGet", kvBotRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvBotRequestPrefix+"r1", raw).Return(true, nil).Once()
 	api.On("CreateBot", mock.Anything).Return(nil, testAppErr("name taken"))
 	api.On("KVSet", kvBotRequestPrefix+"r1", raw).Return(nil).Once()
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
+	api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil)
 
 	resp := runAsAdmin(t, p, botActionHandler, true)
 
@@ -395,7 +404,7 @@ func finalBot(t *testing.T, api *plugintest.API, req *botRequest) {
 	api.On("CreateBot", mock.MatchedBy(func(bot *model.Bot) bool {
 		return bot.Username == "svcbot" && bot.OwnerId == "u_req"
 	})).Return(&model.Bot{UserId: "new-bot-id", Username: "svcbot"}, nil).Once()
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 	api.On("GetPost", "dm-root").Return(nil, testAppErr("no root")).Maybe()
 }
 
@@ -406,6 +415,9 @@ func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	p := newTestPlugin(api)
 	api.On("GetConfig").Return(&model.Config{})
 	finalBot(t, api, finalBotApproval(botRequest{RequestToken: true, IncomingWebhookChannelID: "ch1", DMChannelID: "dm1", DMRootPostID: "dm-root"}))
+	// Only the approve-time check loads the extras channel.
+	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Once()
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	api.On("CreateSession", mock.Anything).Return(nil, testAppErr("no session"))
 	replies := extrasReply(api)
 
@@ -417,7 +429,7 @@ func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	require.Contains(t, all, "token/webhook extras were skipped because an admin session could not be created")
 	require.Contains(t, all, "webhook extras were skipped because SiteURL is not configured")
 	api.AssertNotCalled(t, "RevokeSession", mock.Anything)
-	api.AssertNotCalled(t, "GetChannel", "ch1")
+	api.AssertNumberOfCalls(t, "GetChannel", 1)
 }
 
 func TestHandleBotAction_ExtrasFailuresAreReported(t *testing.T) {
@@ -436,7 +448,9 @@ func TestHandleBotAction_ExtrasFailuresAreReported(t *testing.T) {
 	api.On("CreateSession", mock.Anything).Return(&model.Session{Id: "sess1", Token: "tok1"}, nil)
 	api.On("RevokeSession", "sess1").Return(testAppErr("revoke failed")).Once()
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team1"}, nil)
-	api.On("GetChannel", "ch2").Return(&model.Channel{Id: "ch2", TeamId: "team1"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
+	api.On("GetChannel", "ch2").Return(&model.Channel{Id: "ch2", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+	api.On("GetChannelMember", "ch2", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("GetTeamMember", "team1", "new-bot-id").Return(&model.TeamMember{}, nil)
 	api.On("AddChannelMember", "ch1", "new-bot-id").Return(&model.ChannelMember{}, nil)
 	replies := extrasReply(api)
@@ -467,6 +481,10 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 	api.On("RevokeSession", "sess1").Return(nil)
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm9"}, nil)
 	api.On("KVGet", tokenPostRegistryKey).Return(nil, nil)
+	var tracked botTokenExpiry
+	api.On("KVSet", botTokenExpiryKey("tok-id"), mock.Anything).Run(func(args mock.Arguments) {
+		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &tracked))
+	}).Return(nil)
 	var tokenReply string
 	api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
 		if post := args.Get(0).(*model.Post); post.ChannelId == "dm9" && strings.Contains(post.Message, "Access Token") {
@@ -479,6 +497,11 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 	require.NotNil(t, resp.Update)
 	require.Contains(t, resp.Update.Message, "Bot **@svcbot** created.")
 	require.Contains(t, tokenReply, "tok-value")
+	// The expiry is kept for the reminders; the token value is not.
+	require.Equal(t, "new-bot-id", tracked.BotUserID)
+	require.Equal(t, "svcbot", tracked.BotUsername)
+	require.Equal(t, "u_req", tracked.RequesterID)
+	require.Positive(t, tracked.ExpiresAt)
 	api.AssertCalled(t, "KVCompareAndDelete", kvBotRequestPrefix+"r1", mock.Anything)
 	api.AssertNotCalled(t, "PermanentDeleteBot", mock.Anything)
 }
@@ -526,6 +549,7 @@ func TestHandleBotAction_UndeliverableIncomingWebhookIsRemoved(t *testing.T) {
 			api.On("CreateSession", mock.Anything).Return(&model.Session{Id: "sess1", Token: "tok1"}, nil)
 			api.On("RevokeSession", "sess1").Return(nil)
 			api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team1"}, nil)
+			api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			api.On("GetTeamMember", "team1", "new-bot-id").Return(&model.TeamMember{}, nil)
 			api.On("AddChannelMember", "ch1", "new-bot-id").Return(&model.ChannelMember{}, nil)
 			api.On("GetDirectChannel", "u_req", "bot-user-id").Return(nil, testAppErr("no dm"))
@@ -559,6 +583,8 @@ func finalWebhook(t *testing.T, api *plugintest.API, req *webhookRequest) []byte
 	stubSystemAdmin(api)
 	api.On("KVGet", kvWebhookRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvWebhookRequestPrefix+"r1", raw).Return(true, nil).Once()
+	// The requester is still in the target channel at approve time.
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	return raw
 }
 
@@ -573,6 +599,7 @@ func TestHandleWebhookAction_DenyClosesTicket(t *testing.T) {
 	stubSystemAdmin(api)
 	stubRequester(api)
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("KVGet", kvWebhookRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvWebhookRequestPrefix+"r1", raw).Return(true, nil).Once()
 	stubTicketClose(api)
@@ -603,6 +630,7 @@ func TestHandleWebhookAction_ApproveCreatesWebhookAfterReopeningDM(t *testing.T)
 	finalWebhook(t, api, pendingWebhookRequest(securityStepDone()))
 	stubRequester(api)
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm9"}, nil)
 	var dmCard *model.MessageAttachment
 	api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
@@ -610,7 +638,7 @@ func TestHandleWebhookAction_ApproveCreatesWebhookAfterReopeningDM(t *testing.T)
 			dmCard = extractFirstAttachment(post)
 		}
 	}).Return(&model.Post{Id: "created"}, nil)
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 
 	resp := runAsAdmin(t, p, webhookActionHandler, true)
 
@@ -631,12 +659,14 @@ func TestHandleWebhookAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) 
 	p := newTestPlugin(api)
 	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) { return "", "", errors.New("hooks are off") }
 	raw := finalWebhook(t, api, pendingWebhookRequest(securityStepDone()))
-	api.On("GetUser", "u_req").Return(nil, testAppErr("gone"))
+	stubRequester(api)
 	api.On("GetUser", "sec1").Return(&model.User{Id: "sec1", Username: "sec"}, nil)
-	api.On("GetChannel", "ch1").Return(nil, testAppErr("gone"))
+	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("KVSet", kvWebhookRequestPrefix+"r1", raw).Return(nil).Once()
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 
+	api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil).Maybe()
 	resp := runAsAdmin(t, p, webhookActionHandler, true)
 
 	require.Contains(t, resp.EphemeralText, "Couldn't create the webhook: hooks are off.")
@@ -665,8 +695,9 @@ func TestHandleWebhookAction_UndeliverableURLRemovalFailureAsksAdmin(t *testing.
 	finalWebhook(t, api, pendingWebhookRequest(securityStepDone()))
 	stubRequester(api)
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(nil, testAppErr("no dm"))
-	api.On("GetPost", "post1").Return(approvalCard(), nil)
+	api.On("GetPost", "post1").Return(requestCardPost(), nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "archive"}, nil)
 
 	resp := runAsAdmin(t, p, webhookActionHandler, true)

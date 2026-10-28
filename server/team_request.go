@@ -30,6 +30,11 @@ type teamCreationRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
+	// ExerciseTeamID is the team whose exercise data records what
+	// approving this request creates.
+	ExerciseTeamID string `json:"exercise_team_id,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -124,6 +129,10 @@ func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error)
 		p.API.LogError("failed to post team request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindTeam, req.ID)
+	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
 
@@ -185,7 +194,7 @@ func (p *Plugin) postTeamCreationApprovalRequest(req *teamCreationRequest, reque
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamCreationApprovalAttachment(req, requester),
-		p.teamScopeApprovalHeader(ch, "team creation request"),
+		p.teamScopeApprovalHeader(ch, "team creation request", req.Exercise),
 		ch,
 	)
 }
@@ -194,10 +203,19 @@ func (p *Plugin) postTeamCreationApprovalRequest(req *teamCreationRequest, reque
 // card in the team requests channel ch, mentioning the users who can act on
 // it (see canApproveTeamRequest). With AllowApprovalTeamAdminsForTeamRequests
 // on, the approval team's Team Admins are added to ch first so they can see
-// the card.
-func (p *Plugin) teamScopeApprovalHeader(ch *model.Channel, kind string) string {
-	if ch != nil && p.getConfiguration().AllowApprovalTeamAdminsForTeamRequests {
+// the card. Exercise cards mention nobody.
+func (p *Plugin) teamScopeApprovalHeader(ch *model.Channel, kind string, exercise bool) string {
+	teamAdmins := ch != nil && p.getConfiguration().AllowApprovalTeamAdminsForTeamRequests
+	if teamAdmins {
 		p.addTeamApproversToChannel(ch.TeamId, ch.Id)
+	}
+	if exercise {
+		if teamAdmins {
+			return exerciseMarker + ": a " + kind + " needs your review."
+		}
+		return exerciseMarker + ": a " + kind + " needs System Admin review."
+	}
+	if teamAdmins {
 		if mentions := p.mentionList(p.adminApproverIDs(ch.TeamId)); mentions != "" {
 			return mentions + " — a " + kind + " needs your review."
 		}
@@ -241,9 +259,10 @@ func (p *Plugin) teamCreationApprovalAttachment(req *teamCreationRequest, reques
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Team creation request",
+		Title:   exerciseLabel(req.Exercise) + "Team creation request",
 		Color:   "#6A33C2",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Text:    strings.Join(details, "\n"),
 		Actions: p.teamCreationApprovalActions(req.ID, siteURL),
 	}

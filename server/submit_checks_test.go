@@ -68,12 +68,14 @@ func newQueuePlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	stubPendingLists(api)
+	stubNewerSubmittedRequestsExist(api)
 	p := newTestPlugin(api)
 	return p, api
 }
 
 func TestSystemAdminChannelRequestQueues(t *testing.T) {
 	p, api := newQueuePlugin(t)
+	stubSubmittedRequestExists(api, kvRequestPrefix)
 	cfg := *p.getConfiguration()
 	cfg.prefixes = []channelPrefix{{Prefix: "team-"}}
 	p.setConfiguration(&cfg)
@@ -89,6 +91,7 @@ func TestSystemAdminChannelRequestQueues(t *testing.T) {
 
 func TestSystemAdminChannelAdminRequestQueues(t *testing.T) {
 	p, api := newQueuePlugin(t)
+	stubSubmittedRequestExists(api, kvAdminRequestPrefix)
 	stubSystemAdminQueue(api)
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "ops", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
 	api.On("GetChannelMember", "ch1", testNomineeID).Return(&model.ChannelMember{}, nil)
@@ -545,14 +548,20 @@ func TestSubmitTeamGuestRequest_Refusals(t *testing.T) {
 		reason   string
 	}
 	ok := input{teamID: "team1", email: "guest@example.com", channels: []string{testChannelID}}
-	withChannel := func(ch *model.Channel) func(api *plugintest.API) {
+	inChannel := func(ch *model.Channel, memberErr *model.AppError) func(api *plugintest.API) {
 		return func(api *plugintest.API) {
 			stubTeam1(api)
 			stubRequester(api)
 			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
 			api.On("GetChannel", testChannelID).Return(ch, nil)
+			if memberErr != nil {
+				api.On("GetChannelMember", testChannelID, "u_req").Return(nil, memberErr)
+			} else {
+				api.On("GetChannelMember", testChannelID, "u_req").Return(&model.ChannelMember{}, nil).Maybe()
+			}
 		}
 	}
+	withChannel := func(ch *model.Channel) func(api *plugintest.API) { return inChannel(ch, nil) }
 	cases := []struct {
 		submitCase
 		in input
@@ -585,10 +594,10 @@ func TestSubmitTeamGuestRequest_Refusals(t *testing.T) {
 		}, wantErr: "must belong to the selected team"}, ok},
 		{submitCase{name: "group message channel", setup: withChannel(&model.Channel{Id: testChannelID, TeamId: "team1", Type: model.ChannelTypeGroup}), wantErr: "public or private channels"}, ok},
 		{submitCase{name: "archived channel", setup: withChannel(&model.Channel{Id: testChannelID, Name: "old", TeamId: "team1", Type: model.ChannelTypeOpen, DeleteAt: 1}), wantErr: "~old is archived"}, ok},
-		{submitCase{name: "requester not in channel", setup: func(api *plugintest.API) {
-			withChannel(&model.Channel{Id: testChannelID, TeamId: "team1", Type: model.ChannelTypePrivate})(api)
-			api.On("GetChannelMember", testChannelID, "u_req").Return(nil, testAppErr("not a member"))
-		}, wantErr: "channels you're a member of"}, ok},
+		{submitCase{name: "requester not in channel", setup: inChannel(&model.Channel{Id: testChannelID, TeamId: "team1", Type: model.ChannelTypePrivate}, testAppErr("not a member")), wantErr: "channels you're a member of"}, ok},
+		// Membership is checked first, so the reply doesn't depend on the channel's state.
+		{submitCase{name: "requester not in archived channel", setup: inChannel(&model.Channel{Id: testChannelID, Name: "old", TeamId: "team1", Type: model.ChannelTypePrivate, DeleteAt: 1}, testAppErr("not a member")), wantErr: "channels you're a member of"}, ok},
+		{submitCase{name: "requester not in group message", setup: inChannel(&model.Channel{Id: testChannelID, TeamId: "team1", Type: model.ChannelTypeGroup}, testAppErr("not a member")), wantErr: "channels you're a member of"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in

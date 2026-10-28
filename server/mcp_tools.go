@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost-plugin-agents/v2/external/pluginmcp"
 	"github.com/mattermost/mattermost/server/public/model"
@@ -15,8 +17,11 @@ import (
 // the same submit function as the form for its type, which owns validation
 // and membership checks. Every request, a System Admin's included, is
 // queued for approval. Each tool honors the same per-type setting as the
-// slash command and the forms. Approving and denying are deliberately not
-// tools: they are the human checkpoint.
+// slash command and the forms. list_my_requests, list_requests_to_approve
+// and get_request_status use the same listOwnRequests,
+// listApprovableRequests and requestStatus as the list subcommand.
+// Approving and denying are deliberately not tools: they are the human
+// checkpoint, on the approval card and the slash command.
 
 type ListPrefixesArgs struct{}
 
@@ -91,53 +96,119 @@ type MCPMessageOutput struct {
 	Message string `json:"message" jsonschema:"What happened: the request was submitted for approval"`
 }
 
+type ListMyRequestsArgs struct{}
+
+type ListRequestsToApproveArgs struct{}
+
+type GetRequestStatusArgs struct {
+	RequestID string `json:"request_id" jsonschema:"The request ID, from list_my_requests, list_requests_to_approve or the approval card"`
+}
+
+type MCPRequest struct {
+	ID        string `json:"id" jsonschema:"The request ID"`
+	Kind      string `json:"kind" jsonschema:"The request type: channel, channel_admin, team, team_admin, team_member, team_guest, bot or webhook"`
+	Summary   string `json:"summary" jsonschema:"What was requested and where, in Markdown"`
+	State     string `json:"state" jsonschema:"pending while it waits for an approver, or expired when it was not reviewed in time and an approver can close it"`
+	CreatedAt string `json:"created_at,omitempty" jsonschema:"When it was submitted, in RFC 3339"`
+	ExpiresAt string `json:"expires_at,omitempty" jsonschema:"When it expires, in RFC 3339. Absent when requests don't expire"`
+}
+
+type ListMyRequestsOutput struct {
+	Requests []MCPRequest `json:"requests" jsonschema:"The user's pending requests, oldest first, at most 50. Approved and denied requests are not kept"`
+	More     int          `json:"more,omitempty" jsonschema:"How many more pending requests there are beyond the ones listed"`
+}
+
+type ListRequestsToApproveOutput struct {
+	Requests []MCPRequest `json:"requests" jsonschema:"Pending requests the user can approve now, oldest first, at most 50. The user's own requests are not included"`
+	More     int          `json:"more,omitempty" jsonschema:"How many more such requests there are beyond the ones listed"`
+}
+
 var errNoMCPUser = errors.New("no user is associated with this request")
 
+// errMCPInternal is what a tool returns when its handler panicked.
+var errMCPInternal = errors.New("internal error")
+
+// addTool registers a tool with guardTool around its handler, so every
+// tool gets the same recovery.
+func addTool[In, Out any](p *Plugin, server *pluginmcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out]) {
+	pluginmcp.AddTool(server, tool, guardTool(p, tool.Name, handler))
+}
+
+// guardTool turns a panic in a tool handler into an "internal error"
+// result and a log line, instead of a failed call to the Agents plugin.
+func guardTool[In, Out any](p *Plugin, name string, handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, out Out, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				p.API.LogError("MCP tool failed", "tool", name, "panic", fmt.Sprint(r))
+				var zero Out
+				result, out, err = nil, zero, errMCPInternal
+			}
+		}()
+		return handler(ctx, req, in)
+	}
+}
+
 func (p *Plugin) registerMCPTools(server *pluginmcp.Server) {
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "list_prefixes",
 		Description: "List the channel prefixes a channel request can use, with what each is for and any rule for the rest of the name.",
 	}, p.listPrefixesTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_channel",
 		Description: "Request a new channel on the user's behalf. The request is posted for admin approval. Call list_prefixes first for the prefix.",
 	}, p.requestChannelTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_channel_admin",
 		Description: "Request that existing members of a channel be made Channel Admins, on the user's behalf. The request is posted for admin approval.",
 	}, p.requestChannelAdminTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_team",
 		Description: "Request a new team on the user's behalf. The request is posted for admin approval.",
 	}, p.requestTeamTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_team_admin",
 		Description: "Request that existing members of a team be made Team Admins, on the user's behalf. The request is posted for admin approval.",
 	}, p.requestTeamAdminTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_team_member",
 		Description: "Request that people be added to a team, on the user's behalf. The request is posted for admin approval.",
 	}, p.requestTeamMemberTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_team_guest",
 		Description: "Request a guest invite by email to channels of a team, on the user's behalf. The request is posted for admin approval.",
 	}, p.requestTeamGuestTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_bot",
 		Description: "Request a new bot account on the user's behalf. The request is posted for admin approval.",
 	}, p.requestBotTool)
 
-	pluginmcp.AddTool(server, &mcp.Tool{
+	addTool(p, server, &mcp.Tool{
 		Name:        "request_webhook",
 		Description: "Request an incoming or outgoing webhook for a channel, on the user's behalf. The request is posted for admin approval.",
 	}, p.requestWebhookTool)
+
+	addTool(p, server, &mcp.Tool{
+		Name:        "list_my_requests",
+		Description: "List the user's own pending requests of every type, with each one's ID, state and expiry. Approved and denied requests are not listed; the user gets a direct message with each outcome.",
+	}, p.listMyRequestsTool)
+
+	addTool(p, server, &mcp.Tool{
+		Name:        "list_requests_to_approve",
+		Description: "List the pending requests of every type that the user can approve now, with each one's ID, state and expiry. This only reads: approving and denying are done by the user, on the approval card or with the slash command.",
+	}, p.listRequestsToApproveTool)
+
+	addTool(p, server, &mcp.Tool{
+		Name:        "get_request_status",
+		Description: "Look up one pending request of any type by ID. Works for the user's own requests and for requests the user can approve. A request that is no longer pending, or that the user can't see, is reported as not found.",
+	}, p.getRequestStatusTool)
 }
 
 func (p *Plugin) listPrefixesTool(ctx context.Context, _ *mcp.CallToolRequest, _ ListPrefixesArgs) (*mcp.CallToolResult, ListPrefixesOutput, error) {
@@ -318,4 +389,87 @@ func mcpMessage(message string, err error) (*mcp.CallToolResult, MCPMessageOutpu
 		return nil, MCPMessageOutput{}, err
 	}
 	return nil, MCPMessageOutput{Message: message}, nil
+}
+
+func (p *Plugin) listMyRequestsTool(ctx context.Context, _ *mcp.CallToolRequest, _ ListMyRequestsArgs) (*mcp.CallToolResult, ListMyRequestsOutput, error) {
+	userID := pluginmcp.GetUserID(ctx)
+	if userID == "" {
+		return nil, ListMyRequestsOutput{}, errNoMCPUser
+	}
+	if len(enabledPendingKinds(p.getConfiguration())) == 0 {
+		return nil, ListMyRequestsOutput{}, errors.New(listRequestsDisabledMsg)
+	}
+
+	requests, more, err := p.listOwnRequests(userID, maxListedRequests)
+	if err != nil {
+		p.API.LogError("failed to list pending requests", "user_id", userID, "error", err.Error())
+		return nil, ListMyRequestsOutput{}, errors.New("could not load your requests; try again")
+	}
+	out := ListMyRequestsOutput{Requests: make([]MCPRequest, 0, len(requests)), More: more}
+	for _, req := range requests {
+		out.Requests = append(out.Requests, mcpRequest(req))
+	}
+	return nil, out, nil
+}
+
+func (p *Plugin) listRequestsToApproveTool(ctx context.Context, _ *mcp.CallToolRequest, _ ListRequestsToApproveArgs) (*mcp.CallToolResult, ListRequestsToApproveOutput, error) {
+	userID := pluginmcp.GetUserID(ctx)
+	if userID == "" {
+		return nil, ListRequestsToApproveOutput{}, errNoMCPUser
+	}
+	if len(enabledPendingKinds(p.getConfiguration())) == 0 {
+		return nil, ListRequestsToApproveOutput{}, errors.New(listRequestsDisabledMsg)
+	}
+
+	requests, more, err := p.listApprovableRequests(userID, maxListedRequests)
+	if err != nil {
+		p.API.LogError("failed to list requests to approve", "user_id", userID, "error", err.Error())
+		return nil, ListRequestsToApproveOutput{}, errors.New("could not load the requests; try again")
+	}
+	out := ListRequestsToApproveOutput{Requests: make([]MCPRequest, 0, len(requests)), More: more}
+	for _, req := range requests {
+		out.Requests = append(out.Requests, mcpRequest(req))
+	}
+	return nil, out, nil
+}
+
+func (p *Plugin) getRequestStatusTool(ctx context.Context, _ *mcp.CallToolRequest, in GetRequestStatusArgs) (*mcp.CallToolResult, MCPRequest, error) {
+	userID := pluginmcp.GetUserID(ctx)
+	if userID == "" {
+		return nil, MCPRequest{}, errNoMCPUser
+	}
+
+	req, err := p.requestStatus(userID, in.RequestID)
+	if errors.Is(err, errNoVisibleRequest) {
+		return nil, MCPRequest{}, err
+	}
+	if err != nil {
+		p.API.LogError("failed to load request status", "user_id", userID, "request_id", in.RequestID, "error", err.Error())
+		return nil, MCPRequest{}, errors.New("could not load that request; try again")
+	}
+	return nil, mcpRequest(*req), nil
+}
+
+// mcpRequest converts a summary for the tools.
+func mcpRequest(s requestSummary) MCPRequest {
+	state := "pending"
+	if s.Expired {
+		state = "expired"
+	}
+	return MCPRequest{
+		ID:        s.ID,
+		Kind:      pendingKindRequestType(s.Kind),
+		Summary:   s.Summary,
+		State:     state,
+		CreatedAt: rfc3339(s.CreatedAt),
+		ExpiresAt: rfc3339(s.ExpiresAt),
+	}
+}
+
+// rfc3339 renders a millisecond time, or "" for 0.
+func rfc3339(millis int64) string {
+	if millis <= 0 {
+		return ""
+	}
+	return model.GetTimeForMillis(millis).UTC().Format(time.RFC3339)
 }

@@ -340,7 +340,7 @@ func TestBotExtrasReply_ShowsOutgoingWebhookNameAsTyped(t *testing.T) {
 		reply = args.Get(0).(*model.Post)
 	}).Return(&model.Post{Id: "reply1"}, nil)
 
-	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1", OutgoingWebhookDisplayName: markupText}, "", "", true, nil)
+	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1", OutgoingWebhookDisplayName: markupText}, "", 0, "", true, nil)
 
 	require.NotNil(t, reply)
 	requireShownAsTyped(t, reply.Message)
@@ -419,7 +419,7 @@ func TestBotExtrasReply_TokenAndURLAreScheduledForDeletion(t *testing.T) {
 	api.On("KVGet", tokenPostRegistryKey).Return(nil, nil)
 	api.On("KVCompareAndSet", tokenPostRegistryKey, []byte(nil), mock.Anything).Return(true, nil)
 
-	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1"}, "tok-value", "https://chat.example.com/hooks/h1", true, []string{"one thing failed"})
+	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1"}, "tok-value", 0, "https://chat.example.com/hooks/h1", true, []string{"one thing failed"})
 
 	require.NotNil(t, reply)
 	require.Contains(t, reply.Message, "tok-value")
@@ -428,11 +428,41 @@ func TestBotExtrasReply_TokenAndURLAreScheduledForDeletion(t *testing.T) {
 	require.Contains(t, reply.Message, "one thing failed")
 }
 
+func TestBotExtrasReply_TokenExpiryDate(t *testing.T) {
+	for name, tc := range map[string]struct {
+		expiresAt int64
+		want      string
+	}{
+		"expiring token names the date": {time.Date(2027, time.October, 26, 15, 0, 0, 0, time.UTC).UnixMilli(), "expires on **October 26, 2027 (UTC)**"},
+		"token that never expires":      {0, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			var reply *model.Post
+			api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
+				reply = args.Get(0).(*model.Post)
+			}).Return(&model.Post{Id: "reply1"}, nil)
+			api.On("KVGet", tokenPostRegistryKey).Return(nil, nil)
+			api.On("KVCompareAndSet", tokenPostRegistryKey, []byte(nil), mock.Anything).Return(true, nil)
+
+			p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1"}, "tok-value", tc.expiresAt, "", false, nil)
+
+			require.NotNil(t, reply)
+			if tc.want == "" {
+				require.NotContains(t, reply.Message, "expires on")
+			} else {
+				require.Contains(t, reply.Message, tc.want)
+			}
+		})
+	}
+}
+
 func TestBotExtrasReply_NothingToSayPostsNothing(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
 
-	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1"}, "", "", false, nil)
+	p.sendBotExtrasReply(&botRequest{DMChannelID: "dm1"}, "", 0, "", false, nil)
 
 	api.AssertNotCalled(t, "CreatePost", mock.Anything)
 }
@@ -444,7 +474,7 @@ func TestBotExtrasReply_PostFailureIsLogged(t *testing.T) {
 	api.On("CreatePost", mock.Anything).Return(nil, testAppErr("post failed"))
 	api.On("LogError", "failed to send bot extras reply", "user_id", "u_req", "error", mock.Anything).Once()
 
-	p.sendBotExtrasReply(&botRequest{RequesterID: "u_req", DMChannelID: "dm1"}, "tok-value", "", false, nil)
+	p.sendBotExtrasReply(&botRequest{RequesterID: "u_req", DMChannelID: "dm1"}, "tok-value", 0, "", false, nil)
 }
 
 func TestRequireWebhookTargetChannel_ChannelRequired(t *testing.T) {

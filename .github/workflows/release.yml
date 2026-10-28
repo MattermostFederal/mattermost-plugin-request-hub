@@ -136,8 +136,8 @@ jobs:
           echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
 
       # Push CodeQL findings to the Security tab for this release ref.
-      # Best-effort per-language — a webapp-only or server-only plugin
-      # won't produce both SARIFs.
+      # This plugin has a server and a webapp, so both SARIFs are produced,
+      # and the publish job requires both.
       - name: Upload Go CodeQL SARIF to code scanning
         if: always() && hashFiles('dist/codeql-go.sarif') != ''
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
@@ -188,12 +188,14 @@ jobs:
           name: release-files
 
       - name: Sign and checksum the bundles
+        id: sign
         env:
           PLUGIN_SIGNING_KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
           PLUGIN_SIGNING_KEY_PASSPHRASE: ${{ secrets.PLUGIN_SIGNING_KEY_PASSPHRASE }}
           BUNDLES: ${{ needs.build.outputs.bundle_name }}
         run: |
           set -euo pipefail
+          [ -n "${BUNDLES// }" ] || { echo "::error::No release bundle name."; exit 1; }
           key_id=""
           if [ -n "$PLUGIN_SIGNING_KEY" ]; then
             GNUPGHOME="$(mktemp -d)"
@@ -214,6 +216,21 @@ jobs:
             fi
             sha256sum "$bundle" > "$bundle.sha256"
           done
+          # List exactly the files to attach, so a missing one fails the
+          # release. The .sig is listed only when the bundle was signed.
+          {
+            echo "files<<EOF"
+            for bundle in $BUNDLES; do
+              echo "dist/$bundle"
+              echo "dist/$bundle.sha256"
+              if [ -n "$key_id" ]; then echo "dist/$bundle.sig"; fi
+            done
+            echo "dist/sbom/server-sbom.json"
+            echo "dist/sbom/webapp-sbom.json"
+            echo "dist/codeql-go.sarif"
+            echo "dist/codeql-js.sarif"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -222,15 +239,8 @@ jobs:
           # so the action's default (github.ref) would target the wrong ref.
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ needs.build.outputs.plugin_name }} v${{ needs.build.outputs.plugin_version }}
-          files: |
-            dist/${{ needs.build.outputs.bundle_name }}
-            dist/${{ needs.build.outputs.bundle_name }}.sha256
-            dist/${{ needs.build.outputs.bundle_name }}.sig
-            dist/sbom/server-sbom.json
-            dist/sbom/webapp-sbom.json
-            dist/codeql-go.sarif
-            dist/codeql-js.sarif
-          fail_on_unmatched_files: false
+          files: ${{ steps.sign.outputs.files }}
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(env.RELEASE_TAG, '-rc') || contains(env.RELEASE_TAG, '-beta') || contains(env.RELEASE_TAG, '-alpha') }}

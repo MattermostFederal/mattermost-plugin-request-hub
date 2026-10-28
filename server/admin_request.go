@@ -32,6 +32,8 @@ type adminRequest struct {
 	NomineeIDs []string `json:"nominee_ids"`
 	// CreatedAt is when the request was submitted, in milliseconds.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
 	// Used by the MessageHasBeenPosted hook to route thread replies in both directions.
@@ -127,6 +129,10 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 		p.API.LogError("failed to post Channel Admin request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindAdmin, req.ID)
+	}
 
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
@@ -158,10 +164,11 @@ func (p *Plugin) sendAdminTicketCreatedDM(req *adminRequest, requester *model.Us
 
 // promoteChannelAdmins grants the channel_admin role to each nominee who is
 // still a member of the channel and returns the IDs actually promoted.
-// Membership is re-checked because a request can sit pending while people
-// leave or are removed; nobody is added to the channel. Per-user failures
-// are logged but don't abort the others — a partial promotion is better than
-// none, and callers report only who was promoted.
+// Approve refuses a request whose nominees have left (adminApprovalBlocker),
+// but someone can still leave between that check and this loop, so
+// membership is checked again here; nobody is added to the channel. Per-user
+// failures are logged but don't abort the others, and callers report only
+// who was promoted.
 func (p *Plugin) promoteChannelAdmins(req *adminRequest) []string {
 	promoted := make([]string, 0, len(req.NomineeIDs))
 	for _, userID := range req.NomineeIDs {
@@ -235,15 +242,15 @@ func (p *Plugin) loadAdminRequest(id string) (*adminRequest, []byte, error) {
 // buttons) to the reviewers. It reuses postApprovalAttachment, which posts to
 // the resolved approval channel and falls back to DMing every System Admin when
 // none is available, exactly as the channel-creation flow does. Returns the
-// created post ID and channel ID; both empty in fallback mode.
+// created post ID and channel ID; both empty in fallback mode. Exercise
+// requests mention nobody, so seeding doesn't notify the approvers.
 func (p *Plugin) postAdminApprovalRequest(req *adminRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(channel.TeamId)
-	return p.postApprovalAttachment(
-		req.ID,
-		p.adminApprovalAttachment(req, requester, channel),
-		teamLabel+p.adminApprovalHeader(channel),
-		approvalChannel,
-	)
+	header := exerciseMarker + ": a Channel Admin request needs your review."
+	if !req.Exercise {
+		header = p.adminApprovalHeader(channel)
+	}
+	return p.postApprovalAttachment(req.ID, p.adminApprovalAttachment(req, requester, channel), teamLabel+header, approvalChannel)
 }
 
 // adminApprovalHeader builds the message that leads the approval post,
@@ -335,15 +342,16 @@ func (p *Plugin) adminApprovalAttachment(req *adminRequest, requester *model.Use
 
 	title := "Channel Admin request"
 	if teamName != "" && teamName != "(unknown team)" {
-		title = fmt.Sprintf("Channel Admin request — %s", teamName)
+		title = fmt.Sprintf("Channel Admin request — %s", escapeMarkdown(teamName))
 	}
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   title,
+		Title:   exerciseLabel(req.Exercise) + title,
 		Color:   "#0058CC",
 		Fields:  fields,
 		Text:    fmt.Sprintf("**Proposed Channel Admins:** %s", p.mentionList(req.NomineeIDs)),
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.adminApprovalActions(req.ID, siteURL),
 	}
 }

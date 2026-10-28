@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Channel Admin — Mattermost Request Hub</title>
+    <title>Channel Admin (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -30,6 +30,7 @@
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
             <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -91,7 +92,9 @@
         <p>
             System Admins and the Team Admins of the channel's team can approve or deny. Team Admins of other
             teams, including the approval team, can't. Only a System Admin can approve a request they made themselves.
-            Nominees who have left the channel since the request was made are skipped.
+            Approve checks the request again first: if the requester or a nominee has left the channel or been
+            deactivated, the approver gets a private message saying so and the request stays pending, so it can
+            be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>).
             An expired request can't be approved (see <a href="approving.html#expired">Expired requests</a>).
         </p>
 

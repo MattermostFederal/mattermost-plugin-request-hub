@@ -45,6 +45,11 @@ type botRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
+	// ExerciseTeamID is the team whose exercise data records what
+	// approving this request creates.
+	ExerciseTeamID string `json:"exercise_team_id,omitempty"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
@@ -170,6 +175,10 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		p.API.LogError("failed to post bot request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindBot, req.ID)
+	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
 
@@ -226,13 +235,20 @@ func (p *Plugin) postBotApprovalRequest(req *botRequest, requester *model.User) 
 	return p.postApprovalAttachment(
 		req.ID,
 		p.botApprovalAttachment(req, requester),
-		p.botApprovalHeader(),
+		p.botApprovalHeader(req.Exercise),
 		ch,
 	)
 }
 
-func (p *Plugin) botApprovalHeader() string {
-	return "@channel — a bot account request needs review (requires a security approval and a system approval)."
+// botApprovalHeader is the bot card's header. Exercise cards mention
+// nobody, so seeding doesn't notify the channel.
+func (p *Plugin) botApprovalHeader(exercise bool) string {
+	return cardMention(exercise) + "a bot account request needs review (requires a security approval and a system approval)."
+}
+
+// botRetryHeader is the bot card's header after a failed final approval.
+func botRetryHeader(exercise bool) string {
+	return cardMention(exercise) + "a bot account request needs review (a previous approval attempt failed)."
 }
 
 func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *model.MessageAttachment {
@@ -273,9 +289,10 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Bot account request",
+		Title:   exerciseLabel(req.Exercise) + "Bot account request",
 		Color:   "#8B008B",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Text:    strings.Join(details, "\n"),
 		Actions: p.botApprovalActions(req.ID, siteURL),
 	}

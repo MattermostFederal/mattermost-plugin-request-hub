@@ -250,3 +250,16 @@ func TestHandleTeamAction_ApprovalTeamAdminCannotApproveOwnRequest(t *testing.T)
 	api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
 	api.AssertNotCalled(t, "CreateTeam", mock.Anything)
 }
+
+func TestTeamScopeApprovalHeader_ExerciseMentionsNobody(t *testing.T) {
+	api := &plugintest.API{}
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam"})
+	ch := &model.Channel{Id: "teams-ch", TeamId: "appteam-id"}
+
+	header := p.teamScopeApprovalHeader(ch, "Team Admin request", true)
+
+	require.Equal(t, exerciseMarker+": a Team Admin request needs System Admin review.", header)
+	api.AssertNotCalled(t, "GetUsers", mock.Anything)
+}

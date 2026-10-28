@@ -339,6 +339,11 @@ ifneq ($(HAS_WEBAPP),)
 	cd webapp && $(NPM) run test;
 endif
 
+## Builds the bundle and runs the Playwright e2e suite against Mattermost in Docker (needs Node from e2e/.nvmrc).
+.PHONY: e2e
+e2e: dist
+	cd e2e && $(NPM) ci && npx playwright install chromium && $(NPM) test
+
 ## Prints Go code coverage summary to terminal.
 .PHONY: coverage-backend
 coverage-backend: apply
@@ -526,21 +531,25 @@ deploy: docker-deploy
 # SBOM & Vulnerability Scanning
 # ====================================================================================
 
+CYCLONEDX_GOMOD_VERSION ?= v1.12.0
+CYCLONEDX_NPM_VERSION ?= 6.0.1
+GRYPE_VERSION ?= v0.120.1
+
 ## Install SBOM generation tools
 .PHONY: install-sbom-tools
 install-sbom-tools:
 	@echo "Installing SBOM generation tools..."
-	$(GO) install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+	$(GO) install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_GOMOD_VERSION)
 
 ## Install Grype vulnerability scanner
 .PHONY: install-grype
 install-grype:
-	@if [ ! -x "$(GOBIN)/grype" ]; then \
-		echo "Installing Grype via go install (cross-platform, no anchore install.sh)..."; \
-		mkdir -p $(GOBIN); \
-		GOBIN=$(GOBIN) $(GO) install github.com/anchore/grype/cmd/grype@latest; \
+	@if $(GO) version -m "$(GOBIN)/grype" 2>/dev/null | grep -q "^[[:space:]]*mod[[:space:]]*github.com/anchore/grype[[:space:]]*$(GRYPE_VERSION)[[:space:]]"; then \
+		echo "Grype $(GRYPE_VERSION) already installed"; \
 	else \
-		echo "Grype already installed"; \
+		echo "Installing Grype $(GRYPE_VERSION) via go install (cross-platform, no anchore install.sh)..."; \
+		mkdir -p $(GOBIN); \
+		GOBIN=$(GOBIN) $(GO) install github.com/anchore/grype/cmd/grype@$(GRYPE_VERSION); \
 	fi
 
 ## Generate Software Bill of Materials (SBOM) in CycloneDX JSON format
@@ -556,7 +565,7 @@ ifneq ($(HAS_WEBAPP),)
 	# --omit dev: the plugin bundle ships only production deps; the dev/build
 	# toolchain (eslint, webpack, babel) is never in webapp/dist, so its CVEs
 	# must not gate releases. Grype still blocks HIGH/CRITICAL in shipped deps.
-	cd webapp && npx @cyclonedx/cyclonedx-npm --omit dev --ignore-npm-errors --output-file ../dist/sbom/webapp-sbom.json
+	cd webapp && npx --yes @cyclonedx/cyclonedx-npm@$(CYCLONEDX_NPM_VERSION) --omit dev --ignore-npm-errors --output-file ../dist/sbom/webapp-sbom.json
 endif
 	@echo "SBOMs generated in dist/sbom/"
 	@ls -la dist/sbom/
@@ -596,7 +605,10 @@ endif
 # CodeQL Security Analysis
 # ====================================================================================
 
-CODEQL_VERSION ?= 2.20.1
+## CodeQL bundle, checked against its published SHA-256.
+CODEQL_VERSION := 2.20.1
+CODEQL_SHA256_linux64 := 790f5c109f15d26cf67d266591868e21fd6357211bbdbc4601921291a490b164
+CODEQL_SHA256_osx64 := d97cf7ae727338dd9f09068386c612f386ebb8bf63327c300b7e370a269c88c9
 CODEQL_DIR := $(PWD)/build/codeql
 CODEQL := $(CODEQL_DIR)/codeql/codeql
 CODEQL_DB_DIR := $(PWD)/build/codeql-db
@@ -604,15 +616,25 @@ CODEQL_DB_DIR := $(PWD)/build/codeql-db
 ## Install CodeQL CLI
 .PHONY: install-codeql
 install-codeql:
-	@if [ ! -f "$(CODEQL)" ]; then \
+	@set -e; \
+	if [ ! -f "$(CODEQL)" ]; then \
 		echo "Installing CodeQL CLI v$(CODEQL_VERSION)..."; \
 		mkdir -p $(CODEQL_DIR); \
 		if [ "$$(uname)" = "Darwin" ]; then \
-			CODEQL_PLATFORM="osx64"; \
+			CODEQL_PLATFORM="osx64"; sum=$(CODEQL_SHA256_osx64); \
 		else \
-			CODEQL_PLATFORM="linux64"; \
+			CODEQL_PLATFORM="linux64"; sum=$(CODEQL_SHA256_linux64); \
 		fi; \
-		curl -sSL "https://github.com/github/codeql-action/releases/download/codeql-bundle-v$(CODEQL_VERSION)/codeql-bundle-$$CODEQL_PLATFORM.tar.gz" | tar -xz -C $(CODEQL_DIR); \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		curl -sSfL -o "$$tmp/codeql.tar.gz" "https://github.com/github/codeql-action/releases/download/codeql-bundle-v$(CODEQL_VERSION)/codeql-bundle-$$CODEQL_PLATFORM.tar.gz"; \
+		if command -v sha256sum >/dev/null; then \
+			echo "$$sum  $$tmp/codeql.tar.gz" | sha256sum -c -; \
+		else \
+			echo "$$sum  $$tmp/codeql.tar.gz" | shasum -a 256 -c -; \
+		fi; \
+		tar -xzf "$$tmp/codeql.tar.gz" -C "$$tmp"; \
+		rm -rf $(CODEQL_DIR)/codeql; \
+		mv "$$tmp/codeql" $(CODEQL_DIR)/; \
 		echo "CodeQL CLI installed"; \
 	else \
 		echo "CodeQL CLI already installed"; \

@@ -89,6 +89,8 @@ type channelRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	// CategoryName is the optional sidebar category the requester wants the
 	// new channel placed in on approval. Matched case-insensitively; if no
@@ -356,6 +358,7 @@ type nomineeRules struct {
 	allowBots   bool
 	allowGuests bool
 	teamID      string // when set, nominees must be active members of this team
+	channelID   string // when set, nominees must be members of this channel (approve only)
 }
 
 // checkNominees loads each nominee and returns a user-facing error for the
@@ -475,6 +478,10 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		p.API.LogError("failed to post channel request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindChannel, req.ID)
 	}
 
 	req.ApprovalPostID = approvalPostID
@@ -728,14 +735,14 @@ func (p *Plugin) loadRequest(id string) (*channelRequest, []byte, error) {
 // postApprovalRequest posts a channel-creation request (with Approve/Deny buttons) for an admin to
 // act on. Returns the created post's ID and channel ID, which are empty in fallback mode (when the
 // request is DM'd to system admins instead of posted to a channel).
+// Exercise requests mention nobody, so seeding doesn't notify the channel.
 func (p *Plugin) postApprovalRequest(req *channelRequest, requester *model.User) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(req.TeamID)
-	return p.postApprovalAttachment(
-		req.ID,
-		p.approvalAttachment(req, requester),
-		teamLabel+"@channel — a new channel request needs your review.",
-		approvalChannel,
-	)
+	header := "@channel — a new channel request needs your review."
+	if req.Exercise {
+		header = exerciseMarker + ": a new channel request needs your review."
+	}
+	return p.postApprovalAttachment(req.ID, p.approvalAttachment(req, requester), teamLabel+header, approvalChannel)
 }
 
 // postApprovalAttachment delivers an approval attachment to the reviewers. When approvalChannel is
@@ -854,17 +861,24 @@ func (p *Plugin) approvalAttachment(req *channelRequest, requester *model.User) 
 
 	title := "Channel creation request"
 	if teamName != "" && teamName != "(unknown team)" {
-		title = fmt.Sprintf("Channel creation request — %s", teamName)
+		title = fmt.Sprintf("Channel creation request — %s", escapeMarkdown(teamName))
 	}
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   title,
+		Title:   exerciseLabel(req.Exercise) + title,
 		Color:   "#0058CC",
 		Fields:  fields,
 		Text:    strings.Join(details, "\n"),
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.approvalActions(req.ID, siteURL),
 	}
+}
+
+// requestIDFooter names the request on its approval card, so an approver
+// can act on it with the approve or deny subcommand.
+func requestIDFooter(requestID string) string {
+	return "Request ID: " + requestID
 }
 
 // teamDisplayName returns the team's display name for approval cards.

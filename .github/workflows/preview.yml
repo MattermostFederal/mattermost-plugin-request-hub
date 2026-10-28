@@ -1,10 +1,10 @@
 # Label a PR `preview` to deploy its bundle to a throwaway Mattermost
 # server; removing the label or closing the PR tears it down. Thin copy of
-# the shared workflow in MattermostFederal/pr-preview (pinned to its v1 tag),
-# matching mattermost-plugin-template. It never checks out PR code: it waits
-# for build.yml to pass on the PR head and deploys the plugin-bundle artifact
-# that run uploaded, so build.yml must keep uploading exactly one
-# dist/*.tar.gz under that name.
+# the shared workflow in MattermostFederal/pr-preview (pinned to the commit
+# its v1 tag points at), matching mattermost-plugin-template. It never checks
+# out PR code: it waits for build.yml to pass on the PR head and deploys the
+# plugin-bundle artifact that run uploaded, so build.yml must keep uploading
+# exactly one dist/*.tar.gz under that name.
 #
 # It also packs .preview/ from the PR's base commit (never the head) as the
 # deploy hook, matching mattermost-plugin-opscenter.
@@ -17,7 +17,9 @@ on:
 permissions: {}
 
 env:
-  PR_PREVIEW_REF: refs/tags/v1
+  # Dependabot can't update this. To move to the latest v1, look up the
+  # commit with: gh api repos/MattermostFederal/pr-preview/git/ref/tags/v1
+  PR_PREVIEW_REF: 35847bf5448b51e886521a08b18df0d0f0cd8f85 # v1
   PREVIEW_APP: ""
   PREVIEW_MM_IMAGE_TAG: ""
 

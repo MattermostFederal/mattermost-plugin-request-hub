@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Teams — Mattermost Request Hub</title>
+    <title>Teams (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -30,6 +30,7 @@
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
             <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -52,7 +53,7 @@
             <li><strong>Team rail +:</strong> the + under teams opens Request a Team for non–System Admins</li>
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request a Team</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request a Team</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub team</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub team</code> opens the form; add arguments to skip it (see <a href="slash.html#team">Slash commands</a>)</li>
             <li><strong>Agent:</strong> when <em>Offer tools to Agents</em> is on, ask an AI agent to file it for you (see <a href="agents.html">AI agents</a>)</li>
         </ul>
         <div class="entry-shots">
@@ -77,6 +78,10 @@
         <h2 id="new-team-form">New team: form &amp; approve</h2>
         <img src="images/team-request/mattermost-team-modal.png" alt="Request a New Team form">
         <img src="images/team-request/mattermost-team-approval-card.png" alt="Team creation approval card">
+        <p>
+            Approve first checks that the requester's account is still active; if it isn't, the approver gets a
+            private message and the request stays pending, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>).
+        </p>
 
         <div class="alert alert-info">
             <div class="alert-title">Limits</div>
@@ -97,7 +102,7 @@
             <li><strong>Native:</strong> team sidebar → <strong>Request Team Admin</strong></li>
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request Team Admin</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request Team Admin</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub team-admin</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub team-admin</code> opens the form; add arguments to skip it (see <a href="slash.html#team-admin">Slash commands</a>)</li>
             <li><strong>Agent:</strong> when <em>Offer tools to Agents</em> is on, ask an AI agent to file it for you (see <a href="agents.html">AI agents</a>)</li>
         </ul>
         <div class="entry-shots">
@@ -118,6 +123,11 @@
         <h2 id="team-admin-form">Team Admin: form</h2>
         <img src="images/team-admin-request/mattermost-team-admin-modal.png" alt="Request Team Admin confirmation">
         <img src="images/team-admin-request/mattermost-team-admin-approval-card.png" alt="Team Admin approval card">
+        <p>
+            Approve first checks that the team, the requester and every nominee still qualify (nominees must
+            still be active members of the team and not bots or guests). If not, the approver gets a private
+            message and the request stays pending, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>).
+        </p>
 
         <div class="alert alert-info">
             <div class="alert-title">Limits</div>

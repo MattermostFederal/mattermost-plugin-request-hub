@@ -19,12 +19,42 @@ var isPendingListKey = mock.MatchedBy(func(key string) bool { return strings.Has
 // isNotPendingListKey matches every other KV key.
 var isNotPendingListKey = mock.MatchedBy(func(key string) bool { return !strings.HasPrefix(key, kvPendingPrefix) })
 
+// isApprovalCardsKey matches the KV key of any request's recorded
+// approval cards.
+var isApprovalCardsKey = mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvApprovalCardsPrefix) })
+
+// stubApprovalPosts lets production code record approval cards freely:
+// none are recorded to start with and every write succeeds.
+func stubApprovalPosts(api *plugintest.API) {
+	api.On("KVGet", isApprovalCardsKey).Return(nil, nil).Maybe()
+	api.On("KVSet", isApprovalCardsKey, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", isApprovalCardsKey).Return(nil).Maybe()
+}
+
 // stubPendingLists lets production code read and update pending lists
-// freely: every list starts empty and every write succeeds.
+// freely: every list starts empty and every write succeeds. Recorded
+// approval posts are stubbed the same way, since the same paths save and
+// resolve them.
 func stubPendingLists(api *plugintest.API) {
+	stubApprovalPosts(api)
 	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", isPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVCompareAndDelete", isPendingListKey, mock.Anything).Return(true, nil).Maybe()
+}
+
+// stubSubmittedRequestExists makes any request stored under prefix read
+// back as present, for the check submit makes after recording the
+// approval posts.
+func stubSubmittedRequestExists(api *plugintest.API, prefix string) {
+	api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, prefix) })).Return([]byte("{}"), nil).Maybe()
+}
+
+// stubNewerSubmittedRequestsExist is stubSubmittedRequestExists for every
+// request type other than channel and Channel Admin.
+func stubNewerSubmittedRequestsExist(api *plugintest.API) {
+	for _, prefix := range []string{kvTeamRequestPrefix, kvTeamAdminRequestPrefix, kvTeamMemberRequestPrefix, kvTeamGuestRequestPrefix, kvBotRequestPrefix, kvWebhookRequestPrefix} {
+		stubSubmittedRequestExists(api, prefix)
+	}
 }
 
 // storedRequests makes the given request IDs exist (and only those) under
@@ -54,6 +84,11 @@ func approvableConfig() *configuration {
 // stubActiveTeamMember makes userID an active member of teamID.
 func stubActiveTeamMember(api *plugintest.API, teamID, userID string) {
 	api.On("GetTeamMember", teamID, userID).Return(&model.TeamMember{TeamId: teamID, UserId: userID}, nil).Maybe()
+}
+
+// stubLiveTeam lets approve-time checks find teamID live.
+func stubLiveTeam(api *plugintest.API, teamID string) {
+	api.On("GetTeam", teamID).Return(&model.Team{Id: teamID, Name: teamID, DisplayName: "Team " + teamID}, nil).Maybe()
 }
 
 const day = millisPerDay
@@ -671,6 +706,7 @@ func recordJSON(t *testing.T, v any) []byte {
 // fakePendingLists backs the pending-list KV calls with a map, so tests
 // can check what ends up stored.
 func fakePendingLists(api *plugintest.API) map[string][]byte {
+	stubApprovalPosts(api)
 	store := map[string][]byte{}
 	api.On("KVGet", isPendingListKey).Return(func(key string) ([]byte, *model.AppError) {
 		return store[key], nil

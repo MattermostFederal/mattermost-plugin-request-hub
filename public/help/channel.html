@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Channels — Mattermost Request Hub</title>
+    <title>Channels (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -30,6 +30,7 @@
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
             <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -110,10 +111,10 @@
         <h2 id="on-approve">On approve</h2>
         <p>Approval card → Approve creates the channel and posts a welcome message.</p>
         <p>
-            Approve checks the request again first. If the requester's account is no longer active, they've
-            left the team, or the channel name no longer matches the configured prefixes, the approver gets a
-            private message saying so; the request stays pending and the card keeps its buttons, so it can be
-            denied. An expired request can't be approved (see <a href="approving.html#expired">Expired requests</a>).
+            Approve checks the request again first. If the team has been archived, the requester's account is
+            no longer active, they've left the team, or the channel name no longer matches the configured
+            prefixes, the approver gets a private message saying so; the request stays pending and the card
+            keeps its buttons, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>). An expired request can't be approved (see <a href="approving.html#expired">Expired requests</a>).
         </p>
         <img src="images/channel-request/mattermost-creation-approval-card.png" alt="Channel creation approval card">
         <img src="images/channel-request/mattermost-creation-welcome.png" alt="Welcome message in the new channel">

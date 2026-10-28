@@ -1,4 +1,4 @@
-# Webhook Requests — User Guide
+# Webhook Requests: User Guide
 
 Use this guide when you need an **incoming** or **outgoing webhook** but don't
 need a new bot account. Standalone webhook requests use **two-step approval**
@@ -13,24 +13,24 @@ need a new bot account. Standalone webhook requests use **two-step approval**
 >
 > In Mattermost: **`/mattermost-request-hub docs`** opens the full HTML guide.
 
-**Incoming webhook** — an external system POSTs messages into a Mattermost
+**Incoming webhook**: an external system POSTs messages into a Mattermost
 channel. You get a URL to call.
 
-**Outgoing webhook** — Mattermost forwards messages from a channel to your
+**Outgoing webhook**: Mattermost forwards messages from a channel to your
 external URL (useful for keyword-triggered pipelines).
 
 This guide covers:
 
-- [Requesting a webhook](#requesting-a-webhook) — any member
-- [Messaging while a request is pending](#messaging-while-a-request-is-pending) — two-way threads
-- [Approving requests](#approving-requests) — security + system approvers
-- [Admin setup](#admin-setup) — system admins
+- [Requesting a webhook](#requesting-a-webhook): any member
+- [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
+- [Approving requests](#approving-requests): security + system approvers
+- [Admin setup](#admin-setup): system admins
 
 ---
 
 ## Requesting a webhook
 
-Webhook menu items appear only in **public and private channels** — not in DMs
+Webhook menu items appear only in **public and private channels**, not in DMs
 or group messages (those can't be webhook targets).
 
 ### How to open
@@ -52,7 +52,7 @@ or group messages (those can't be webhook targets).
 <img src="images/webhook-request/mattermost-webhook-hub.png" alt="Request Hub" width="440">
 </p>
 
-### Incoming webhook — form
+### Incoming webhook: form
 
 <img src="images/webhook-request/mattermost-webhook-incoming-modal.png" alt="Incoming webhook form" width="480">
 
@@ -62,7 +62,7 @@ or group messages (those can't be webhook targets).
 | **Display name** | Label shown on the Integrations page. |
 | **Description** | Optional. What system posts here and why. |
 
-### Outgoing webhook — form
+### Outgoing webhook: form
 
 <img src="images/webhook-request/mattermost-webhook-integrations-outgoing.png" alt="Integrations (outgoing)" width="720">
 
@@ -96,7 +96,7 @@ message saying so.
 ## Messaging while a request is pending
 
 Webhook tickets use the same **two-way thread relay**. Open the **Thread** RHS
-from the card — not a new top-level channel or DM message.
+from the card, not a new top-level channel or DM message.
 
 - **Approver:** ask in the approval Thread
 - **Requester:** see `Message from @admin:` in your DM Thread with the bot
@@ -108,7 +108,7 @@ from the card — not a new top-level channel or DM message.
 <img src="images/shared/mattermost-thread-relay-back.png" alt="Relay back" width="300">
 </p>
 
-Always reply inside the ticket DM Thread — not a new root message to the bot.
+Always reply inside the ticket DM Thread, not a new root message to the bot.
 Threads stay open after approve/deny for follow-ups.
 
 ---
@@ -120,6 +120,12 @@ All standalone webhook requests post to
 system, two different people). The card shows both status lines.
 
 <img src="images/webhook-request/mattermost-webhook-approval-card.png" alt="Webhook approval card" width="720">
+
+Before either step, Approve checks that the requester is still active, the
+channel still exists and isn't archived, the requester is still in it (System
+Admins excepted), and an outgoing webhook's channel is still public. If not, you'll get a private message saying so (for
+example *~town has been archived. Deny this request instead.*) and the request
+and its steps stay as they were, so deny it.
 
 When both steps are filled, the final approval creates the webhook. On success
 the requester gets a DM with:

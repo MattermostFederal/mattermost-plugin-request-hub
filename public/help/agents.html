@@ -30,6 +30,7 @@
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
             <a href="agents.html" class="active">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -60,12 +61,15 @@
                 <tr><td><code>list_prefixes</code></td><td>Lists the channel prefixes you can use, like <code>/mattermost-request-hub prefixes</code>.</td></tr>
                 <tr><td><code>request_channel</code></td><td>Requests a new channel, like the <a href="channel.html">form</a> or <a href="slash.html#channel-without-form"><code>/mattermost-request-hub channel &lt;prefix&gt; &lt;Channel name&gt; ...</code></a>.</td></tr>
                 <tr><td><code>request_channel_admin</code></td><td>Asks for channel members to be made Channel Admins, like the <a href="channel-admin.html">form</a> or <a href="slash.html#channel-admin-without-form"><code>/mattermost-request-hub channel-admin @user ...</code></a>.</td></tr>
-                <tr><td><code>request_team</code></td><td>Requests a new team, like the <a href="team.html#new-team-open">form</a> or <a href="slash.html#other-without-form"><code>/mattermost-request-hub team &lt;Team name&gt; ...</code></a>.</td></tr>
-                <tr><td><code>request_team_admin</code></td><td>Asks for team members to be made Team Admins, like the <a href="team.html#team-admin-open">form</a> or <a href="slash.html#other-without-form"><code>/mattermost-request-hub team-admin @user ...</code></a>.</td></tr>
-                <tr><td><code>request_team_member</code></td><td>Asks for people to be added to a team, like the <a href="team-member.html">form</a> or <a href="slash.html#other-without-form"><code>/mattermost-request-hub team-member @user ...</code></a>.</td></tr>
-                <tr><td><code>request_team_guest</code></td><td>Asks for a guest invite to channels of a team, like the <a href="team-guest.html">form</a> or <a href="slash.html#other-without-form"><code>/mattermost-request-hub team-guest &lt;email&gt; ...</code></a>.</td></tr>
-                <tr><td><code>request_bot</code></td><td>Requests a bot account, like <a href="slash.html#other-without-form"><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; ...</code></a>. Like the slash command, it covers the account only; ask for an access token or webhooks for the bot in the <a href="bot.html">form</a>.</td></tr>
-                <tr><td><code>request_webhook</code></td><td>Requests an incoming or outgoing webhook for a channel, like the <a href="webhook.html">forms</a> or <a href="slash.html#other-without-form"><code>/mattermost-request-hub webhook-incoming ...</code></a>.</td></tr>
+                <tr><td><code>request_team</code></td><td>Requests a new team, like the <a href="team.html#new-team-open">form</a> or <a href="slash.html#team"><code>/mattermost-request-hub team &lt;Team name&gt; ...</code></a>.</td></tr>
+                <tr><td><code>request_team_admin</code></td><td>Asks for team members to be made Team Admins, like the <a href="team.html#team-admin-open">form</a> or <a href="slash.html#team-admin"><code>/mattermost-request-hub team-admin @user ...</code></a>.</td></tr>
+                <tr><td><code>request_team_member</code></td><td>Asks for people to be added to a team, like the <a href="team-member.html">form</a> or <a href="slash.html#team-member"><code>/mattermost-request-hub team-member @user ...</code></a>.</td></tr>
+                <tr><td><code>request_team_guest</code></td><td>Asks for a guest invite to channels of a team, like the <a href="team-guest.html">form</a> or <a href="slash.html#team-guest"><code>/mattermost-request-hub team-guest &lt;email&gt; ...</code></a>.</td></tr>
+                <tr><td><code>request_bot</code></td><td>Requests a bot account, like <a href="slash.html#bot"><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; ...</code></a>. Like the slash command, it covers the account only; ask for an access token or webhooks for the bot in the <a href="bot.html">form</a>.</td></tr>
+                <tr><td><code>request_webhook</code></td><td>Requests an incoming or outgoing webhook for a channel, like the <a href="webhook.html">forms</a> or <a href="slash.html#webhook-incoming"><code>/mattermost-request-hub webhook-incoming ...</code></a>.</td></tr>
+                <tr><td><code>list_my_requests</code></td><td>Lists your pending requests of every type, like <a href="slash.html#list"><code>/mattermost-request-hub list</code></a>.</td></tr>
+                <tr><td><code>list_requests_to_approve</code></td><td>Lists the pending requests you can approve now, like <a href="slash.html#list-approvals"><code>/mattermost-request-hub list approvals</code></a>. It only reads; you still approve or deny yourself.</td></tr>
+                <tr><td><code>get_request_status</code></td><td>Looks up one pending request of any type by ID. It finds your own requests, and requests you can approve; anything else reads as not found.</td></tr>
             </tbody>
         </table>
 
@@ -77,7 +81,9 @@
         <div class="alert alert-info">
             <div class="alert-title">Agents can't approve</div>
             <p>
-                No agent can approve or deny a request. Those buttons stay with the people in the approval channel.
+                No agent can approve or deny a request. That stays with the approvers, on the approval card or with
+                <a href="slash.html#approve"><code>/mattermost-request-hub approve</code></a> and
+                <a href="slash.html#deny"><code>deny</code></a>.
             </p>
         </div>
 
@@ -87,7 +93,8 @@
             It is off by default and takes effect on save. It needs the Mattermost Agents plugin and Mattermost
             11.3 or later. Once it's on, the tools above appear in the Agents plugin's own settings, where
             you choose which of them agents may use. Each tool follows its request type's toggle, so a type
-            that is turned off can't be requested through an agent either.
+            that is turned off can't be requested through an agent either. If an agent doesn't offer them, see
+            <a href="troubleshooting.html#agents-missing">Agents tools not showing</a>.
         </p>
 
     </main>

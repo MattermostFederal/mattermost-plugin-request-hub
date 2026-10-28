@@ -42,6 +42,6 @@ for role in team_user system_user; do
 done
 
 config="$(mm_api GET /config | jq -c --arg id "$id" --arg team "$APPROVAL_TEAM" --arg channel "$APPROVAL_CHANNEL" \
-  '.PluginSettings.Plugins[$id] = ((.PluginSettings.Plugins[$id] // {}) + {approvalteam: $team, approvalchannel: $channel})')"
+  '.PluginSettings.Plugins[$id] = ((.PluginSettings.Plugins[$id] // {}) + {approvalteam: $team, approvalchannel: $channel, enableexercise: true})')"
 mm_api PUT /config "$config" >/dev/null
-echo "configured ${id}: approvals post to ~${APPROVAL_CHANNEL} in ${APPROVAL_TEAM}; non-admins request channels instead of creating them"
+echo "configured ${id}: approvals post to ~${APPROVAL_CHANNEL} in ${APPROVAL_TEAM}; non-admins request channels instead of creating them; exercise mode is on"

@@ -127,6 +127,8 @@ func stubActivation(t *testing.T, api *plugintest.API, p *Plugin, config *config
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()
+	api.On("GetConfig").Return(&model.Config{}).Maybe()
+	stubTokenReminderJob(api)
 }
 
 func TestSyncMCPServer_DoesNothingBeforeActivation(t *testing.T) {
@@ -387,5 +389,8 @@ func TestMCP_ListsOnlyTheRequestTools(t *testing.T) {
 		mcpToolPrefix + "request_team_guest",
 		mcpToolPrefix + "request_bot",
 		mcpToolPrefix + "request_webhook",
+		mcpToolPrefix + "list_my_requests",
+		mcpToolPrefix + "list_requests_to_approve",
+		mcpToolPrefix + "get_request_status",
 	}, names)
 }

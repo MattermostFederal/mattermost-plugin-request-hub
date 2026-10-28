@@ -36,6 +36,8 @@ type webhookRequest struct {
 	// CreatedAt is when the request was submitted, in milliseconds.
 	// Requests saved by older versions get it from migratePendingRequests.
 	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -157,6 +159,10 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 		p.API.LogError("failed to post webhook request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindWebhook, req.ID)
+	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
 
@@ -176,7 +182,7 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 
 	msg := "Your webhook request has been submitted for approval. It needs a security approval and a system approval."
 	if requester.IsSystemAdmin() {
-		msg = "Your webhook request has been posted for two-step approval. A security approver must sign off first; then you (or another System Admin) can fill the system step."
+		msg = "Your webhook request has been posted for two-step approval. A security approver must sign off first, then another System Admin fills the system step."
 	}
 	return msg, nil
 }
@@ -368,13 +374,20 @@ func (p *Plugin) postWebhookApprovalRequest(req *webhookRequest, requester *mode
 	return p.postApprovalAttachment(
 		req.ID,
 		p.webhookApprovalAttachment(req, requester, channel),
-		p.webhookApprovalHeader(),
+		p.webhookApprovalHeader(req.Exercise),
 		webhookCh,
 	)
 }
 
-func (p *Plugin) webhookApprovalHeader() string {
-	return "@channel — a webhook request needs review (requires a security approval and a system approval)."
+// webhookApprovalHeader is the webhook card's header. Exercise cards mention
+// nobody, so seeding doesn't notify the channel.
+func (p *Plugin) webhookApprovalHeader(exercise bool) string {
+	return cardMention(exercise) + "a webhook request needs review (requires a security approval and a system approval)."
+}
+
+// webhookRetryHeader is the webhook card's header after a failed final approval.
+func webhookRetryHeader(exercise bool) string {
+	return cardMention(exercise) + "a webhook request needs review (a previous approval attempt failed)."
 }
 
 func (p *Plugin) webhookApprovalAttachment(req *webhookRequest, requester *model.User, channel *model.Channel) *model.MessageAttachment {
@@ -401,9 +414,10 @@ func (p *Plugin) webhookApprovalAttachment(req *webhookRequest, requester *model
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Webhook request",
+		Title:   exerciseLabel(req.Exercise) + "Webhook request",
 		Color:   "#FF6B35",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Text:    strings.Join(details, "\n"),
 		Actions: p.webhookApprovalActions(req.ID, siteURL),
 	}

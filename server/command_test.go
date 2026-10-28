@@ -398,6 +398,9 @@ func TestGetAutocompleteData_MatchesDispatcherAndHelp(t *testing.T) {
 	}
 	require.Contains(t, names, subcommandPrefixes)
 	require.Contains(t, names, "help")
+	require.Contains(t, names, subcommandList)
+	require.Contains(t, names, subcommandApprove)
+	require.Contains(t, names, subcommandDeny)
 
 	// Every listed subcommand is handled, none falls through to the
 	// unknown-subcommand reply.

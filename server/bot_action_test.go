@@ -84,6 +84,8 @@ func TestHandleBotAction_UserGroupDualRoleFillsOnlySecurity(t *testing.T) {
 	}, nil)
 	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil)
 
+	// No other card copies to redraw.
+	api.On("KVGet", kvApprovalCardsPrefix+"bot-req-1").Return(nil, nil)
 	// repaintedApprovalPost + stepStatusLine GetUser for dual
 	api.On("GetPost", "post1").Return(&model.Post{Id: "post1", ChannelId: "bot-ch"}, nil)
 

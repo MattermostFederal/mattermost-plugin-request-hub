@@ -10,6 +10,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-agents/v2/external/pluginmcp"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 )
 
@@ -38,6 +39,9 @@ type Plugin struct {
 
 	// twoStepSyncStop cancels the periodic two-step channel reconciler.
 	twoStepSyncStop chan struct{}
+
+	// tokenReminderJob sends the bot token expiry reminders.
+	tokenReminderJob *cluster.Job
 
 	// Test seams for webhook create/delete side effects (nil in production).
 	createWebhookFn func(req *webhookRequest, adminUserID string) (dmMsg, hookID string, err error)
@@ -111,9 +115,13 @@ func (p *Plugin) OnActivate() error {
 		// "Mattermost: Request Hub" sidebar category for all current members
 		// (also renames a short-lived "Mattermost Requests" category if present).
 		p.migrateTicketChannelsToManagedCategory()
+		// One-shot: bookmark the docs in request channels created before
+		// channels were bookmarked on creation.
+		p.bookmarkDocsInExistingChannels()
 	}()
 
 	p.startTwoStepChannelReconciler()
+	p.startTokenReminderJob()
 
 	// Delete any token DM posts whose 72-hour window lapsed while the plugin
 	// was not running, and re-arm in-process timers for the remainder.
@@ -124,6 +132,7 @@ func (p *Plugin) OnActivate() error {
 
 func (p *Plugin) OnDeactivate() error {
 	p.stopTwoStepChannelReconciler()
+	p.stopTokenReminderJob()
 	p.stopMCPServer()
 	return nil
 }

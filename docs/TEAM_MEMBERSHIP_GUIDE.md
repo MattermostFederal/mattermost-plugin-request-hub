@@ -1,7 +1,7 @@
-# Team Membership & Guest Invites — User Guide
+# Team Membership & Guest Invites: User Guide
 
 Mattermost Request Hub lets members **request adding existing users to a team**
-and **request a guest invite** for a team — without granting everyone the
+and **request a guest invite** for a team, without granting everyone the
 permission to manage membership directly. Both ticket types route to the
 plugin-managed **`mattermost-team-requests`** channel for System Admin approval.
 
@@ -19,11 +19,11 @@ plugin-managed **`mattermost-team-requests`** channel for System Admin approval.
 
 This guide covers:
 
-- [Requesting team members](#requesting-team-members) — add existing users to a team
-- [Requesting a guest invite](#requesting-a-guest-invite) — channel-scoped guest email
-- [Messaging while a request is pending](#messaging-while-a-request-is-pending) — two-way threads
-- [Approving requests](#approving-requests) — System Admins
-- [Admin setup](#admin-setup) — system admins
+- [Requesting team members](#requesting-team-members): add existing users to a team
+- [Requesting a guest invite](#requesting-a-guest-invite): channel-scoped guest email
+- [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
+- [Approving requests](#approving-requests): System Admins
+- [Admin setup](#admin-setup): system admins
 
 ---
 
@@ -31,15 +31,15 @@ This guide covers:
 
 Use this when you need **existing Mattermost users or bots added to a team**
 (full membership). Any authenticated user can nominate people or bots onto a
-team — you do **not** need to already be a member of that team. System Admin
+team: you do **not** need to already be a member of that team. System Admin
 approval is the access-control gate.
 
 **Bots use the same process:** after the bot account exists (Request a Bot),
 open **Request Team Members**, search for the bot username, and submit. Approvers
 treat it like any other team-add ticket.
 
-Hub tile label: **Request Team Members** — “Ask to add existing users or bots to
-your current team.” If that tile is missing, turn on **Allow team member requests**
+Hub tile label: **Request Team Members** (“Ask to add existing users or bots to
+your current team.”). If that tile is missing, turn on **Allow team member requests**
 in System Console (see [Admin setup](#admin-setup)).
 
 ### How to open
@@ -67,7 +67,7 @@ you need a different one.
 
 | Field | What it does |
 |-------|--------------|
-| **Users or bots to add** | Type a name — suggestions populate as you type (same picker as channel requests). Results are users **or bots** not already on this team. |
+| **Users or bots to add** | Type a name and suggestions populate as you type (same picker as channel requests). Results are users **or bots** not already on this team. |
 | **Reason** | Optional. Context for reviewers. |
 
 Click **Submit request**. You'll get a DM when a System Admin responds.
@@ -77,13 +77,13 @@ Click **Submit request**. You'll get a DM when a System Admin responds.
 ## Requesting a guest invite
 
 Use this when an **external person** should join as a **guest** with access to
-specific channels — not as a regular team member. You must already be a
+specific channels, not as a regular team member. You must already be a
 **member of the target team** (System Admins may invite for any team).
 
 Guest Accounts must be enabled in System Console for the emailed invite to
 succeed on approve.
 
-Hub tile label: **Request Guest Invite**. Guest invites **default off** — enable
+Hub tile label: **Request Guest Invite**. Guest invites **default off**. Enable
 **Allow team guest requests** or the tile and menu items stay hidden.
 
 ### How to open
@@ -135,7 +135,7 @@ you'll get a direct message saying so.
 ## Messaging while a request is pending
 
 Team member and guest requests use the same **two-way Thread relay** as other
-Request Hub tickets. Open the **Thread** RHS from the card (**Reply**) — don't
+Request Hub tickets. Open the **Thread** RHS from the card (**Reply**). Don't
 post a new top-level message.
 
 - **Approver:** ask in the approval Thread
@@ -159,9 +159,14 @@ can Approve or Deny.
 
 <img src="images/team-user-request/mattermost-team-member-approval-card.png" alt="Team member approval card" width="720">
 
-- **Approve** — each nominee is added to the target team. The requester is
+- **Approve**: each nominee is added to the target team. The requester is
   notified by DM. Partial failures are listed in the outcome message.
-- **Deny** — closes the request and notifies the requester by DM.
+- **Deny**: closes the request and notifies the requester by DM.
+
+Approve first checks that the team still exists, isn't archived and isn't
+managed by groups, and that the requester and every nominee are still active. If
+not, you'll get a private message saying so and the request stays pending, so
+deny it.
 
 Requests from System Admins are queued for approval too.
 
@@ -169,9 +174,15 @@ Requests from System Admins are queued for approval too.
 
 <img src="images/team-user-request/mattermost-team-guest-approval-card.png" alt="Guest invite approval card" width="720">
 
-- **Approve** — Mattermost emails a **channel-scoped guest invitation** to the
+- **Approve**: Mattermost emails a **channel-scoped guest invitation** to the
   address on the ticket. The requester is notified by DM.
-- **Deny** — closes the request and notifies the requester by DM.
+- **Deny**: closes the request and notifies the requester by DM.
+
+Approve first checks that the team and each channel still exist and aren't
+archived, that each channel is still in the team, and that the requester is still active, on the team and in each
+channel (System Admins excepted). If not, you'll get a private message saying so
+(for example *~town has been archived. Deny this request instead.*) and the
+request stays pending, so deny it.
 
 Requests from System Admins are queued for approval too.
 

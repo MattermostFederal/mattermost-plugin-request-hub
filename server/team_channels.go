@@ -162,6 +162,7 @@ func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
 	}
 
 	p.addSystemAdminsToChannel(ch.Id)
+	p.bookmarkDocs(ch)
 
 	return ch
 }
@@ -326,6 +327,7 @@ func (p *Plugin) ensureNamedApprovalChannel(name, displayName, purpose string) *
 	// members are seeded separately via syncTwoStepApproverChannels (activate /
 	// config change / login) to avoid an init cycle with ensure* helpers.
 	p.addSystemAdminsToChannel(ch.Id)
+	p.bookmarkDocs(ch)
 
 	return ch
 }
@@ -440,6 +442,7 @@ func (p *Plugin) ensureTeamApprovalChannel(teamID string) (*model.Channel, error
 
 	p.addTeamApproversToChannel(teamID, ch.Id)
 	p.postChannelWelcomeMessage(ch, team)
+	p.bookmarkDocs(ch)
 
 	return ch, nil
 }
@@ -512,6 +515,7 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 		p.API.LogWarn("failed to list teams for approval-channel sweep", "error", appErr.Error())
 		return
 	}
+	approvalTeam := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
 	created := 0
 	skipped := 0
 	for _, team := range teams {
@@ -519,10 +523,18 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 			skipped++
 			continue
 		}
-		if _, err := p.ensureTeamApprovalChannel(team.Id); err != nil {
+		ch, err := p.ensureTeamApprovalChannel(team.Id)
+		if err != nil {
 			p.API.LogWarn("failed to ensure approval channel for team",
 				"team_id", team.Id, "team_name", team.Name, "error", err.Error())
 			continue
+		}
+		// In the approval team this is also the root approval channel, which
+		// ensureRootApprovalChannel creates with System Admins only, so the
+		// fast path above never seeds the team's Team Admins. Re-sync them,
+		// the same way OnActivate re-syncs System Admins.
+		if team.Name == approvalTeam {
+			p.addTeamApproversToChannel(team.Id, ch.Id)
 		}
 		created++
 	}
@@ -540,6 +552,22 @@ func (p *Plugin) migrateTicketChannelsToManagedCategory() {
 		return
 	}
 
+	channels := p.requestChannels()
+	placed := 0
+	for _, ch := range channels {
+		placed += p.placeChannelMembersInManagedCategory(ch)
+	}
+
+	_ = p.API.KVSet(kvSidebarCategoryMigrated, []byte("1"))
+	p.API.LogInfo("sidebar migration: ticket channels forced into Mattermost: Request Hub category",
+		"channels", len(channels), "member_placements", placed)
+}
+
+// requestChannels returns every plugin ticket/approval channel: root, bot,
+// webhook, team-creation, audit and each team's own channel, without
+// duplicates (in the approval team the per-team channel is the root one).
+// The shared channels are created if missing.
+func (p *Plugin) requestChannels() []*model.Channel {
 	channelName := p.getConfiguration().TeamChannelName()
 	var channels []*model.Channel
 
@@ -562,22 +590,19 @@ func (p *Plugin) migrateTicketChannelsToManagedCategory() {
 			}
 		}
 	} else {
-		p.API.LogWarn("sidebar migration: failed to list teams", "error", appErr.Error())
+		p.API.LogWarn("failed to list teams for the request channel sweep", "error", appErr.Error())
 	}
 
 	seen := map[string]bool{}
-	placed := 0
+	out := channels[:0]
 	for _, ch := range channels {
 		if ch == nil || ch.Id == "" || seen[ch.Id] {
 			continue
 		}
 		seen[ch.Id] = true
-		placed += p.placeChannelMembersInManagedCategory(ch)
+		out = append(out, ch)
 	}
-
-	_ = p.API.KVSet(kvSidebarCategoryMigrated, []byte("1"))
-	p.API.LogInfo("sidebar migration: ticket channels forced into Mattermost: Request Hub category",
-		"channels", len(seen), "member_placements", placed)
+	return out
 }
 
 // placeChannelMembersInManagedCategory walks channel members and ensures each

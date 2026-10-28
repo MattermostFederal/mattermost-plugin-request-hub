@@ -427,7 +427,8 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		stubSiteURL(api, ts.URL)
 		token, err := p.createBotToken("tok", "bot1", "desc")
 		require.NoError(t, err)
-		require.Equal(t, "secret-value", token)
+		require.Equal(t, "secret-value", token.Token)
+		require.Equal(t, "t1", token.Id)
 		require.Equal(t, []string{"POST /api/v4/users/bot1/tokens"}, srv.seen())
 	})
 
@@ -441,6 +442,35 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "create token")
 	})
+}
+
+func TestCreateBotToken_Lifetime(t *testing.T) {
+	for name, months := range map[string]int{
+		"default of one year": 12,
+		"one month":           1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var sent model.UserAccessToken
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(mustMarshal(t, model.UserAccessToken{Id: "t1", Token: "secret-value", ExpiresAt: sent.ExpiresAt}))
+			}))
+			t.Cleanup(ts.Close)
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			p.getConfiguration().tokenLifetimeMonths = months
+			stubSiteURL(api, ts.URL)
+
+			before := time.Now()
+			token, err := p.createBotToken("tok", "bot1", "desc")
+
+			require.NoError(t, err)
+			require.Equal(t, sent.ExpiresAt, token.ExpiresAt)
+			want := before.AddDate(0, months, 0)
+			require.WithinDuration(t, want, time.UnixMilli(sent.ExpiresAt), time.Minute)
+		})
+	}
 }
 
 func TestScheduleTokenPostDeletion_AppendsAfterRetry(t *testing.T) {
