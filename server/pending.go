@@ -432,13 +432,12 @@ func (p *Plugin) migratePendingRequests() error {
 				OldValue:        []byte(migrationRunning),
 				ExpireInSeconds: migrationClaimSeconds,
 			})
+			// On either failure the claim may have lapsed and been taken by
+			// another server, so leave it alone; it expires on its own.
 			if appErr != nil {
-				p.releaseMigrationClaim()
 				return errors.Wrap(appErr, "failed to renew pending-request migration claim")
 			}
 			if !renewed {
-				// The claim lapsed and another server may hold it now, so
-				// leave it alone.
 				return errors.New("pending-request migration claim lapsed; will retry on a later activation")
 			}
 		}

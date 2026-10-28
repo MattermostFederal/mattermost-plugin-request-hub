@@ -622,22 +622,33 @@ func TestMigratePendingRequests(t *testing.T) {
 		api.AssertCalled(t, "KVSetWithOptions", kvPendingMigrated, []byte(migrationRunning), renew)
 	})
 
-	t.Run("a lapsed claim stops the run and is left alone", func(t *testing.T) {
-		api := &plugintest.API{}
-		defer api.AssertExpectations(t)
-		p := newTestPlugin(api)
-		api.On("KVSetWithOptions", kvPendingMigrated, []byte(migrationRunning), mock.MatchedBy(func(o model.PluginKVSetOptions) bool {
-			return o.OldValue != nil
-		})).Return(false, nil)
-		store := fakeKV(api)
-		for range 150 {
-			id := model.NewId()
-			store[kvRequestPrefix+id] = recordJSON(t, channelRequest{ID: id, RequesterID: u1, TeamID: "team1", Name: "team-" + id, CreatedAt: 5})
-		}
+	t.Run("a claim that can't be renewed stops the run and is left alone", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			renewErr *model.AppError
+			want     string
+		}{
+			"lapsed":       {want: "claim lapsed"},
+			"renew errors": {renewErr: testAppErr("kv down"), want: "failed to renew pending-request migration claim"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				api := &plugintest.API{}
+				defer api.AssertExpectations(t)
+				p := newTestPlugin(api)
+				api.On("KVSetWithOptions", kvPendingMigrated, []byte(migrationRunning), mock.MatchedBy(func(o model.PluginKVSetOptions) bool {
+					return o.OldValue != nil
+				})).Return(false, tc.renewErr)
+				store := fakeKV(api)
+				for range 150 {
+					id := model.NewId()
+					store[kvRequestPrefix+id] = recordJSON(t, channelRequest{ID: id, RequesterID: u1, TeamID: "team1", Name: "team-" + id, CreatedAt: 5})
+				}
 
-		require.ErrorContains(t, p.migratePendingRequests(), "claim lapsed")
-		require.Equal(t, migrationRunning, string(store[kvPendingMigrated]))
-		require.Len(t, decodeEntries(t, store[pendingListKey(pendingKindChannel, u1)]), 100)
+				require.ErrorContains(t, p.migratePendingRequests(), tc.want)
+				require.Equal(t, migrationRunning, string(store[kvPendingMigrated]))
+				require.Len(t, decodeEntries(t, store[pendingListKey(pendingKindChannel, u1)]), 100)
+				api.AssertNotCalled(t, "KVDelete", kvPendingMigrated)
+			})
+		}
 	})
 
 	t.Run("failures leave the migration to run again", func(t *testing.T) {
