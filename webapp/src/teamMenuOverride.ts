@@ -315,7 +315,7 @@ function injectRequestTeamAdmin(menuRoot: HTMLElement, store: Store): void {
 // Used by the install-time timeout to detect silent failures.
 let menuFoundOnce = false;
 
-function processTeamMenu(store: Store): void {
+function processTeamMenu(store: Store, teamAdminRequestsOff = false): void {
     const menuRoot = findTeamMenuRoot();
     if (!menuRoot) {
         return;
@@ -330,8 +330,9 @@ function processTeamMenu(store: Store): void {
     }
 
     // "Request Team Admin" is injected for members who are not already
-    // Team Admin or System Admin. Remove a stale inject after promotion.
-    if (!isSystemAdmin(store) && !isTeamAdmin(store)) {
+    // Team Admin or System Admin, while the request type is on. Remove a
+    // stale inject after promotion or after the type is turned off.
+    if (!teamAdminRequestsOff && !isSystemAdmin(store) && !isTeamAdmin(store)) {
         injectRequestTeamAdmin(menuRoot, store);
     } else {
         menuRoot.querySelector(`[${REQUEST_TEAM_ADMIN_MARK}]`)?.remove();
@@ -492,14 +493,13 @@ export function installTeamSidebarAddOverride(store: Store): () => void {
     };
     document.addEventListener('click', onClick, true);
 
-    let scheduled = false;
+    let rafId = 0;
     const observer = new MutationObserver(() => {
-        if (scheduled) {
+        if (rafId) {
             return;
         }
-        scheduled = true;
-        requestAnimationFrame(() => {
-            scheduled = false;
+        rafId = requestAnimationFrame(() => {
+            rafId = 0;
             refresh();
         });
     });
@@ -511,6 +511,10 @@ export function installTeamSidebarAddOverride(store: Store): () => void {
     return () => {
         document.removeEventListener('click', onClick, true);
         observer.disconnect();
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = 0;
+        }
         timers.forEach((id) => window.clearTimeout(id));
         removeInjectedRequestTeamAdd();
         debug('removed team-sidebar + override');
@@ -523,9 +527,11 @@ export function installTeamMenuOverride(store: Store): () => void {
     // Cache AllowTeamRequests so Create Team intercept does not preventDefault
     // before knowing whether native create should remain available.
     let teamRequestsEnabled: boolean | null = null;
+    let teamAdminRequestsOff = false;
     const refreshTeamEnabled = () => {
         fetchEnabledRequestTypes().then((enabled) => {
             teamRequestsEnabled = enabled.team;
+            teamAdminRequestsOff = !enabled.teamAdmin;
             if (!enabled.teamAdmin) {
                 document.querySelectorAll(`[${REQUEST_TEAM_ADMIN_MARK}]`).forEach((n) => n.remove());
             }
@@ -535,9 +541,9 @@ export function installTeamMenuOverride(store: Store): () => void {
 
     processTeamMenu(store);
 
-    let scheduled = false;
+    let rafId = 0;
     const observer = new MutationObserver((mutations) => {
-        if (scheduled) {
+        if (rafId) {
             return;
         }
         const addedElements = mutations.some((m) =>
@@ -546,10 +552,9 @@ export function installTeamMenuOverride(store: Store): () => void {
         if (!addedElements) {
             return;
         }
-        scheduled = true;
-        requestAnimationFrame(() => {
-            scheduled = false;
-            processTeamMenu(store);
+        rafId = requestAnimationFrame(() => {
+            rafId = 0;
+            processTeamMenu(store, teamAdminRequestsOff);
         });
     });
     observer.observe(document.body, {childList: true, subtree: true});
@@ -576,7 +581,7 @@ export function installTeamMenuOverride(store: Store): () => void {
         const myMembers = state?.entities?.teams?.myMembers;
         if (myMembers !== prevMyMembers) {
             prevMyMembers = myMembers;
-            processTeamMenu(store);
+            processTeamMenu(store, teamAdminRequestsOff);
         }
     });
 
@@ -625,6 +630,18 @@ export function installTeamMenuOverride(store: Store): () => void {
         observer.disconnect();
         unsubscribe();
         window.clearTimeout(warnTimer);
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = 0;
+        }
+
+        // Put an open dropdown back the way Mattermost drew it, so a disabled
+        // plugin leaves no injected items or relabeled "Create a team".
+        document.querySelectorAll(`[${REQUEST_TEAM_INJECT_MARK}], [${REQUEST_TEAM_ADMIN_MARK}]`).forEach((n) => n.remove());
+        document.querySelectorAll<HTMLElement>(`[${CREATE_TEAM_MARK}]`).forEach((el) => {
+            replaceTextNode(el, REQUEST_TEAM_LABEL, CREATE_TEAM_LABEL);
+            el.removeAttribute(CREATE_TEAM_MARK);
+        });
         debug('removed team-menu override');
     };
 }

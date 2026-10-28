@@ -1,0 +1,16 @@
+{
+    "all": true,
+    "src": ["src"],
+    "excludeAfterRemap": true,
+    "exclude": [
+        "**/node_modules/**",
+        "*.config.ts",
+        "playwright/**",
+        "src/**/*.spec.ts",
+        "src/**/*.pw.tsx",
+        "src/**/*Harness.tsx",
+        "src/types/**",
+        "src/manifest.ts"
+    ],
+    "reporter": ["text", "html"]
+}
