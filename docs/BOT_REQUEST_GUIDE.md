@@ -36,6 +36,10 @@ Same **Request a Bot Account** form from every entry point.
 - **Slash:** `/mattermost-request-hub bot` (or skip the form with
   `/mattermost-request-hub bot <username> <Display name> [--description <text>] [--owner @user]`;
   access tokens and webhooks for the bot are only in the form)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_bot` tool, which like the
+  slash command covers the account only; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/bot-request/mattermost-bot-integrations.png" alt="Integrations" width="720">

@@ -62,6 +62,16 @@ the same rules and approvers as the form: you must be a member of the channel
 (System Admins excepted), and so must everyone you name. Replies are only
 visible to you. If Channel Admin requests are turned off, the command says so.
 
+### Through an AI agent
+
+If a System Admin has turned on **Offer tools to Agents**, you can ask an agent
+from the Mattermost Agents plugin to request it for you, naming the channel and
+the people. It uses the `request_channel_admin` tool and acts as you, with the
+same rules and approvers as the form: you must be a member of the channel
+(System Admins excepted), and so must everyone you nominate. If Channel Admin
+requests are turned off, the agent is told so. As with the form, a System
+Admin's request goes to the approvers too.
+
 ### Form
 
 <img src="images/channel-admin-request/mattermost-promotion-modal.png" alt="Request a Channel Admin form" width="480">

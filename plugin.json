@@ -6,7 +6,7 @@
     "support_url": "https://github.com/MattermostFederal/mattermost-plugin-request-hub/issues",
     "icon_path": "assets/icon.svg",
     "version": "0.6.2",
-    "min_server_version": "10.5.0",
+    "min_server_version": "11.3.0",
     "server": {
         "executables": {
             "linux-amd64": "server/dist/plugin-linux-amd64",
@@ -158,6 +158,13 @@
                 "display_name": "Channel domain prefixes",
                 "type": "custom",
                 "help_text": "Structured editor: define allowed channel prefixes (team-, project-, etc.) with descriptions and suffix rules. Requesters pick from a dropdown; the resulting channel URL is prefix+suffix."
+            },
+            {
+                "key": "EnableMCP",
+                "display_name": "Offer tools to Agents",
+                "type": "bool",
+                "default": false,
+                "help_text": "When true, the Mattermost Agents plugin can list prefixes and file requests of every type on a user's behalf, under the same rules and per-type settings as the request forms. Every request goes to the approvers, including System Admins' requests. Agents can never approve or deny. Takes effect on save; per-tool access is managed in Agents' System Console."
             }
         ]
     }

@@ -16,6 +16,7 @@ Governance plugin for Mattermost: non-admins **request** channels, Channel Admin
 - Approval routing: channel requests (root or per-team), team-scope tickets in `mattermost-team-requests`, bots/webhooks in dedicated channels
 - Soft-squash approval cards and DM ticket threads with message relay
 - Bot/webhook two-step approval via User Attributes, User Groups, or System Admins only
+- Optional tools for the Mattermost Agents plugin (**Offer tools to Agents**): an agent can list prefixes and file any type of request for the user it's talking to, under the same rules and per-type toggles. Agents can't approve or deny.
 
 ## Documentation
 
@@ -29,6 +30,8 @@ Governance plugin for Mattermost: non-admins **request** channels, Channel Admin
 - [Releasing](docs/RELEASING.md) — how to cut a release
 
 In Mattermost, **`/mattermost-request-hub docs`** replies with a link to the bundled HTML guide.
+
+Requires Mattermost 11.3 or later.
 
 ## Build and deploy
 

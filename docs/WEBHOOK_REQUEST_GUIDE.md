@@ -41,6 +41,9 @@ or group messages (those can't be webhook targets).
 - **Slash:** `/mattermost-request-hub webhook-incoming` or `webhook-outgoing` (or skip the form with
   `webhook-incoming ~channel <Display name> [--description <text>]` or
   `webhook-outgoing ~channel <Display name> --callback <url> [--description <text>]`)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_webhook` tool; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/webhook-request/mattermost-webhook-integrations-incoming.png" alt="Integrations (incoming)" width="720">

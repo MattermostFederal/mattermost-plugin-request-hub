@@ -95,6 +95,9 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 	if err := checkByteLen("description", description, maxWebhookDescriptionBytes); err != nil {
 		return "", err
 	}
+	if webhookType == webhookTypeIncoming && strings.TrimSpace(callbackURL) != "" {
+		return "", errors.New("a callback URL is only for outgoing webhooks")
+	}
 	if webhookType == webhookTypeOutgoing {
 		if strings.TrimSpace(callbackURL) == "" {
 			return "", errors.New("a callback URL is required for outgoing webhooks")

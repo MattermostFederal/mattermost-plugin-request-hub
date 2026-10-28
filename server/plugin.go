@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mattermost/mattermost-plugin-agents/v2/external/pluginmcp"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/pkg/errors"
@@ -22,6 +23,14 @@ type Plugin struct {
 
 	configurationLock sync.RWMutex
 	configuration     *configuration
+
+	// mcpSyncLock serializes starting and stopping the MCP server.
+	// mcpServerLock guards mcpServer and mcpActive, which ServeHTTP reads.
+	// mcpActive is true between OnActivate and OnDeactivate.
+	mcpSyncLock   sync.Mutex
+	mcpServerLock sync.RWMutex
+	mcpServer     *pluginmcp.Server
+	mcpActive     bool
 
 	// botUserID is the user ID of the bot account used to post approval requests and notify
 	// requesters of the outcome.
@@ -58,6 +67,15 @@ func (p *Plugin) OnActivate() error {
 
 	if err := p.API.RegisterCommand(getCommand()); err != nil {
 		return errors.Wrap(err, "failed to register slash command")
+	}
+
+	// Start the MCP server before the background work below, so a failure
+	// here stops activation without leaving goroutines running.
+	p.mcpServerLock.Lock()
+	p.mcpActive = true
+	p.mcpServerLock.Unlock()
+	if err := p.syncMCPServer(); err != nil {
+		return errors.Wrap(err, "failed to initialize the MCP server")
 	}
 
 	// Ensure approval channels exist in the background so activation doesn't
@@ -102,6 +120,7 @@ func (p *Plugin) OnActivate() error {
 
 func (p *Plugin) OnDeactivate() error {
 	p.stopTwoStepChannelReconciler()
+	p.stopMCPServer()
 	return nil
 }
 

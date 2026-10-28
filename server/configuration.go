@@ -67,8 +67,9 @@ type channelPrefix struct {
 //  1. Approval routing (team + channel slugs)
 //  2. Naming enforcement (structured prefix list — required)
 //  3. Approver policy (who can approve)
-//  4. Notification preferences (DM + audit channel + welcome post)
-//  5. Rate limits
+//  4. Requestable types (per-type toggles)
+//  5. Multi-step approver pools (bot / webhook two-step)
+//  6. Agents (MCP tools)
 type configuration struct {
 	// --- 1. Approval routing ---
 
@@ -128,6 +129,11 @@ type configuration struct {
 	// rename them in System Console. Empty → fall back to System Admins.
 	SecurityApproverGroup string
 	SystemApproverGroup   string
+
+	// --- 6. Agents ---
+	// EnableMCP offers the request tools to the Mattermost Agents plugin.
+	// Off by default; syncMCPServer applies changes on save.
+	EnableMCP bool
 
 	// --- Parsed / computed (unexported) ---
 	prefixes []channelPrefix
@@ -276,6 +282,10 @@ func (p *Plugin) OnConfigurationChange() error {
 	// are added without a plugin restart.
 	if hadPrevConfig && twoStepPoolFingerprint(configuration) != prevTwoStep {
 		go p.syncTwoStepApproverChannels()
+	}
+
+	if err := p.syncMCPServer(); err != nil {
+		p.API.LogError("channel-requests: failed to apply the MCP setting", "error", err.Error())
 	}
 
 	return nil

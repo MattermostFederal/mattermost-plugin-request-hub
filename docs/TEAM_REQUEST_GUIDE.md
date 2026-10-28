@@ -35,6 +35,9 @@ Same **Request a New Team** form from every entry point.
 - **Hub:** right App Bar **plug** → Requests → **Request a Team**
 - **Slash:** `/mattermost-request-hub team` (or skip the form with
   `/mattermost-request-hub team <Team name> [options]`)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_team` tool; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/team-request/mattermost-team-native-menu.png" alt="Team sidebar" width="240">
@@ -73,6 +76,9 @@ you're already a Team Admin or System Admin** for that team.
 - **Hub:** right App Bar **plug** → Requests → **Request Team Admin**
 - **Slash:** `/mattermost-request-hub team-admin` (or skip the form with
   `/mattermost-request-hub team-admin @user [@user ...]`)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_team_admin` tool; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/team-admin-request/mattermost-team-admin-native.png" alt="Team sidebar" width="240">
