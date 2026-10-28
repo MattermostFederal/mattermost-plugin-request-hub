@@ -38,7 +38,9 @@ or group messages (those can't be webhook targets).
 - **Native:** Main Menu → Integrations → **Incoming** or **Outgoing Webhooks** (non–System Admins)
 - **Dropdown:** channel More actions → **Request Incoming/Outgoing Webhook**
 - **Hub:** right App Bar **plug** → Requests → the webhook tile
-- **Slash:** `/mattermost-request-hub webhook-incoming` or `webhook-outgoing`
+- **Slash:** `/mattermost-request-hub webhook-incoming` or `webhook-outgoing` (or skip the form with
+  `webhook-incoming ~channel <Display name> [--description <text>]` or
+  `webhook-outgoing ~channel <Display name> --callback <url> [--description <text>]`)
 
 <p>
 <img src="images/webhook-request/mattermost-webhook-integrations-incoming.png" alt="Integrations (incoming)" width="720">
@@ -122,8 +124,10 @@ If an incoming webhook URL can't be delivered to the requester, the hook is
 
 ### System Admin note
 
-Requests from System Admins are queued like any other. A System Admin can fill
-the system step, but a security approver must fill the other.
+Requests from System Admins are queued like any other. Nobody can approve
+either step of their own request, so a System Admin's request needs a security
+approver and a different system approver (or one other System Admin when the
+approver mode is System Admins only).
 
 If webhook creation fails after both steps, the card stays pending with an error
 so the final approver can retry.

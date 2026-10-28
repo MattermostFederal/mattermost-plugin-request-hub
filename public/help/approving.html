@@ -49,11 +49,36 @@
             webhooks → <code>mattermost-webhook-requests</code>).
         </p>
         <p>
-            Channel and team cards are <strong>single-step</strong> (System Admins; Team Admins when enabled for channel types).
+            Channel and team cards are <strong>single-step</strong>: one approver decides.
             With <strong>Approval team&#39;s Team Admins can approve team and Team Admin requests</strong> on, Team Admins of the approval team can
             approve team creation and Team Admin cards too.
             Only a System Admin can approve a request they made themselves.
             Bot and webhook cards are <strong>two-step</strong> (security + system).
+        </p>
+
+        <h2 id="who-sees-what">Who sees and approves what</h2>
+        <p>
+            Only members of an approval channel see its cards. System Admins on the approval team are added to its channels;
+            per-team <code>mattermost-channel-requests</code> channels hold that team's Team Admins and System Admins;
+            two-step approvers are added to the bot and webhook channels. The requester gets their own copy of the card,
+            without buttons, in a DM thread with the bot.
+        </p>
+        <p>
+            If a team has no Team Admin or System Admin, its channel cards go to the root channel labeled <code>For Team: …</code>.
+            If there is no approval channel at all (for example, no approval team is set), cards are sent to System Admins by DM.
+        </p>
+        <table class="field-table">
+            <thead><tr><th>Request</th><th>Who can approve</th></tr></thead>
+            <tbody>
+                <tr><td>Channel</td><td>System Admins and Team Admins of the team the channel will be in; with <strong>Team Admins can approve requests</strong> on, also Team Admins of the approval team</td></tr>
+                <tr><td>Channel Admin</td><td>System Admins and Team Admins of the channel's team</td></tr>
+                <tr><td>Team, Team Admin, team members, guest invite</td><td>System Admins</td></tr>
+                <tr><td>Bot, webhook</td><td>Two different people: security step, then system step (see below)</td></tr>
+            </tbody>
+        </table>
+        <p>
+            Only a System Admin can approve a channel or Channel Admin request they made themselves.
+            Nobody can approve either step of their own bot or webhook request, System Admins included.
         </p>
 
         <h2>Bot &amp; webhook two-step approval</h2>
@@ -81,7 +106,7 @@
         </p>
 
         <h3>Mode: User Groups</h3>
-        <p>Use when ABAC is not available but you have Mattermost groups (custom or synced).</p>
+        <p>Use when ABAC is not available but you have LDAP or plugin-synced groups. Custom groups are not used, because any user can join them.</p>
         <ol>
             <li>Create groups (System Console → User Management → Groups). Defaults expect
                 <code>security-approvers</code> and <code>system-approvers</code> — create those, or rename the plugin fields to match yours.</li>
@@ -100,7 +125,7 @@
         <h3>Mode: System Admins only (no ABAC)</h3>
         <p>
             Intentional backup when neither attributes nor groups are set up.
-            Only System Admins can approve; <strong>one System Admin can complete both steps</strong> on a single click.
+            Only System Admins can approve; <strong>one System Admin can complete both steps</strong> on a single click (except on their own request).
             Prefer attributes or groups in production when you need true two-party separation.
         </p>
 

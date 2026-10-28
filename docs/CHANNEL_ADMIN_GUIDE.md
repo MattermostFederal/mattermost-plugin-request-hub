@@ -36,7 +36,8 @@ items (the slash command still works if the feature is enabled).
 - **Members:** channel Members panel → **Request Admin**
 - **Dropdown:** channel name → More actions → **Request Channel Admin**
 - **Hub:** right App Bar **plug** → Requests → **Request Channel Admin**
-- **Slash:** `/mattermost-request-hub channel-admin`
+- **Slash:** `/mattermost-request-hub channel-admin` (or skip the form, see
+  [From the slash command](#from-the-slash-command))
 
 <p>
 <img src="images/channel-admin-request/mattermost-promotion-members-button.png" alt="Members panel" width="380">
@@ -46,6 +47,20 @@ items (the slash command still works if the feature is enabled).
 </p>
 
 > Tip: **`/mattermost-request-hub docs`** opens the full documentation page.
+
+### From the slash command
+
+`/mattermost-request-hub channel-admin` on its own opens the form. To skip it,
+run this in the channel itself:
+
+```
+/mattermost-request-hub channel-admin @user [@user ...]
+```
+
+It asks for everyone you name to be made a Channel Admin of that channel, with
+the same rules and approvers as the form: you must be a member of the channel
+(System Admins excepted), and so must everyone you name. Replies are only
+visible to you. If Channel Admin requests are turned off, the command says so.
 
 ### Form
 
@@ -61,8 +76,9 @@ someone isn't, add them to the channel first (or ask a Channel Admin to).
 
 Click **Submit request**. You'll see a confirmation, and you'll get a direct
 message when an approver responds. If your admin hasn't configured an approval
-channel yet, you'll be told so directly instead of the request disappearing
-silently — pass that message along to a System Admin.
+channel yet, the request is sent to the System Admins directly. You'll see an
+error only if none of them could be reached; pass that message along to a
+System Admin.
 
 ---
 

@@ -44,12 +44,12 @@
             Same form from every entry point. Approvers create the channel and post a welcome message.
         </p>
 
-        <h2>How to open</h2>
+        <h2 id="how-to-open">How to open</h2>
         <ul class="entry-list">
             <li><strong>+ menu:</strong> channel sidebar <strong>+</strong> → <strong>Request new channel</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request a Channel</strong></li>
             <li><strong>Dropdown:</strong> channel name → More actions → <strong>Request a Channel</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub channel</code></li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub channel</code> opens the form; add a prefix, a name and options to skip it (see <a href="slash.html#channel-without-form">Slash commands</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -66,13 +66,13 @@
             </figure>
         </div>
 
-        <h2>Form</h2>
+        <h2 id="form">Form</h2>
         <img src="images/channel-request/mattermost-creation-modal.png" alt="Request a Channel form">
 
         <table class="field-table">
             <thead><tr><th>Field</th><th>What it does</th></tr></thead>
             <tbody>
-                <tr><td>Domain prefix</td><td>Category for the URL (<code>prefix</code> + <code>suffix</code>).</td></tr>
+                <tr><td>Domain prefix</td><td>Required. Category for the URL (<code>prefix</code> + <code>suffix</code>).</td></tr>
                 <tr><td>Channel name</td><td>Display name (required).</td></tr>
                 <tr><td>URL suffix</td><td>Optional; live Preview shows the final URL.</td></tr>
                 <tr><td>Purpose / Visibility</td><td>Optional description; Public or Private.</td></tr>
@@ -81,7 +81,16 @@
             </tbody>
         </table>
 
-        <h2>On approve</h2>
+        <div class="alert alert-warning">
+            <div class="alert-title">No prefixes configured</div>
+            <p>
+                Channel requests need at least one domain prefix. Until a System Admin defines one, the form and
+                the slash command show: <em>Channel requests aren't configured yet. Ask a System Admin to define at
+                least one channel prefix in System Console → Plugins → Mattermost Request Hub.</em>
+            </p>
+        </div>
+
+        <h2 id="on-approve">On approve</h2>
         <p>Approval card → Approve creates the channel and posts a welcome message.</p>
         <img src="images/channel-request/mattermost-creation-approval-card.png" alt="Channel creation approval card">
         <img src="images/channel-request/mattermost-creation-welcome.png" alt="Welcome message in the new channel">

@@ -60,18 +60,18 @@
             are enabled. The hub tile is labeled <strong>Request Guest Invite</strong>.
         </div>
 
-        <h2>Who can request</h2>
+        <h2 id="who-can-request">Who can request</h2>
         <p>
             You must already be a <strong>member of the target team</strong>
             (System Admins may invite for any team). Open a channel on that team first —
             the current channel becomes the guest’s initial channel access.
         </p>
 
-        <h2>How to open</h2>
+        <h2 id="how-to-open">How to open</h2>
         <ul class="entry-list">
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request Guest Invite</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request Guest Invite</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub team-guest</code></li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub team-guest</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -88,7 +88,7 @@
             </figure>
         </div>
 
-        <h2>Form</h2>
+        <h2 id="form">Form</h2>
         <img src="images/team-user-request/mattermost-team-guest-modal.png" alt="Request Guest Invite form">
         <table>
             <thead>
@@ -107,7 +107,7 @@
         </table>
         <p>Click <strong>Submit request</strong>. You’ll get a DM when a System Admin responds.</p>
 
-        <h2>On approve</h2>
+        <h2 id="on-approve">On approve</h2>
         <img src="images/team-user-request/mattermost-team-guest-approval-card.png" alt="Guest invite approval card">
         <ul>
             <li><strong>Approve</strong> — Mattermost emails the channel-scoped guest invitation; requester notified by DM.</li>

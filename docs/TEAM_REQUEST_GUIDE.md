@@ -4,7 +4,7 @@ Mattermost Request Hub lets members **request a new team** (and, separately,
 **request Team Admin** on a team they already belong to) instead of creating or
 promoting themselves directly. Requests go to System Admins, and can also go to
 the approval team's Team Admins (see [Admin setup](#admin-setup)). On approval the team
-is created (or the requester is promoted) and the requester is notified by DM.
+is created (or the nominees are promoted) and the requester is notified by DM.
 
 > Companion guides: [new channels](CHANNEL_CREATION_GUIDE.md) ·
 > [Channel Admin](CHANNEL_ADMIN_GUIDE.md) ·
@@ -33,7 +33,8 @@ Same **Request a New Team** form from every entry point.
 - **Team rail +:** the + under teams opens Request a Team for non–System Admins (join-other-teams + is unchanged)
 - **Dropdown:** channel More actions → **Request a Team**
 - **Hub:** right App Bar **plug** → Requests → **Request a Team**
-- **Slash:** `/mattermost-request-hub team`
+- **Slash:** `/mattermost-request-hub team` (or skip the form with
+  `/mattermost-request-hub team <Team name> [options]`)
 
 <p>
 <img src="images/team-request/mattermost-team-native-menu.png" alt="Team sidebar" width="240">
@@ -70,7 +71,8 @@ you're already a Team Admin or System Admin** for that team.
 - **Native:** team sidebar → **Request Team Admin**
 - **Dropdown:** channel More actions → **Request Team Admin**
 - **Hub:** right App Bar **plug** → Requests → **Request Team Admin**
-- **Slash:** `/mattermost-request-hub team-admin`
+- **Slash:** `/mattermost-request-hub team-admin` (or skip the form with
+  `/mattermost-request-hub team-admin @user [@user ...]`)
 
 <p>
 <img src="images/team-admin-request/mattermost-team-admin-native.png" alt="Team sidebar" width="240">
@@ -144,7 +146,10 @@ request they made themselves or one that nominates them.
 
 <img src="images/team-admin-request/mattermost-team-admin-approval-card.png" alt="Team Admin approval card" width="720">
 
-- **Approve** — promotes the requester to Team Admin on that team and notifies them by DM.
+- **Approve**: promotes the nominees to Team Admin on that team and notifies the requester by DM.
+  A request from the Request Hub or More actions nominates the requester; the slash
+  command and its form can nominate other members of the team. Nominees must already
+  be on the team.
 - **Deny** — closes the request and notifies the requester by DM.
 
 ---

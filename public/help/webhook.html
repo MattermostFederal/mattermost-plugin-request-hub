@@ -45,12 +45,12 @@
             Two-step approval — see <a href="approving.html">Approving</a>.
         </p>
 
-        <h2>How to open</h2>
+        <h2 id="how-to-open">How to open</h2>
         <ul class="entry-list">
             <li><strong>Native:</strong> Main Menu → Integrations → <strong>Incoming</strong> or <strong>Outgoing Webhooks</strong> (non–System Admins)</li>
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request Incoming/Outgoing Webhook</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → the webhook tile</li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub webhook-incoming</code> or <code>webhook-outgoing</code></li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub webhook-incoming</code> or <code>webhook-outgoing</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -71,7 +71,7 @@
             </figure>
         </div>
 
-        <h2>Forms &amp; approve</h2>
+        <h2 id="forms">Forms &amp; approve</h2>
         <p>Outgoing webhooks need a public channel: Mattermost runs them only on public channels.</p>
         <img src="images/webhook-request/mattermost-webhook-incoming-modal.png" alt="Incoming webhook form">
         <img src="images/webhook-request/mattermost-webhook-outgoing-modal.png" alt="Outgoing webhook form">

@@ -46,7 +46,8 @@ in System Console (see [Admin setup](#admin-setup)).
 
 - **Dropdown:** channel More actions → **Request Team Members**
 - **Hub:** right App Bar **plug** → Requests → **Request Team Members**
-- **Slash:** `/mattermost-request-hub team-member`
+- **Slash:** `/mattermost-request-hub team-member` (or skip the form with
+  `/mattermost-request-hub team-member @user [@user ...] [--reason <text>]`)
 
 <p>
 <img src="images/team-user-request/mattermost-team-member-more-actions.png" alt="More actions" width="240">
@@ -86,7 +87,8 @@ Hub tile label: **Request Guest Invite**. Guest invites **default off** — enab
 
 - **Dropdown:** channel More actions → **Request Guest Invite**
 - **Hub:** right App Bar **plug** → Requests → **Request Guest Invite**
-- **Slash:** `/mattermost-request-hub team-guest`
+- **Slash:** `/mattermost-request-hub team-guest` (or skip the form with
+  `/mattermost-request-hub team-guest <email> --channels ~channel [~channel ...] [--reason <text>]`)
 
 <p>
 <img src="images/team-user-request/mattermost-team-guest-more-actions.png" alt="More actions" width="240">

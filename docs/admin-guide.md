@@ -31,16 +31,23 @@ Disabled types are hidden from the Request Hub and slash commands, and the serve
 |---------|---------|
 | **Approval team** | The team that owns the plugin-managed approval channels. |
 
-### Two-step approver attributes (bot + webhook)
+### Two-step approvers (bot + webhook)
 
-Bot and webhook requests require **two distinct approvals**: one security step and one system step.
+Bot and webhook requests require **two distinct approvals**: one security step and one system step. **Bot/webhook two-step approver mode** picks where the approvers come from:
+
+| Mode | Security step | System step |
+|------|---------------|-------------|
+| **User Attributes** (default) | Holders of the **Security approver attribute** | System Admins and holders of the **System approver attribute** |
+| **User Groups** | Members of the **Security approver user group** | System Admins and members of the **System approver user group** |
+| **System Admins only** | System Admins | System Admins (one System Admin can complete both steps) |
 
 | Setting | Purpose |
 |---------|---------|
-| **Security approver attribute** | User Attribute name (access_control group) that marks security-step approvers. System Admins do **not** auto-qualify for this step. |
-| **System approver attribute** | User Attribute name for system-step approvers. System Admins auto-qualify for this step. |
+| **Security approver attribute** | User Attribute name (access_control group) that marks security-step approvers. System Admins do **not** auto-qualify for this step while it is set. |
+| **System approver attribute** | User Attribute name for system-step approvers. System Admins always qualify for this step. |
+| **Security approver user group** / **System approver user group** | Used in User Groups mode. Only LDAP or plugin-synced groups count; custom groups are ignored, because any user can join them. |
 
-Create and assign these attributes in **System Console → User Management → Attributes**. If they are unset or no users hold them, bot/webhook cards cannot complete.
+Create and assign attributes in **System Console → User Management → Attributes**. If an attribute or group name is left blank, System Admins cover that step. If a security attribute or group is named but doesn't exist or has no members, nobody can fill the security step and bot/webhook cards stay pending.
 
 ### Required for channel creation
 
@@ -68,7 +75,7 @@ Team Admins can promote their own team's members in Mattermost directly, without
 
 ## Approval channels
 
-The plugin creates and manages five dedicated private channels in the configured approval team. All System Admins are added as members when the plugin activates (and when each channel is first created).
+The plugin creates and manages five dedicated private channels in the configured approval team. System Admins who are members of the approval team are added to these channels when each channel is created and again whenever the plugin activates. The plugin doesn't add anyone to the approval team itself, except two-step approvers (see [Who sees and approves what](#who-sees-and-approves-what)).
 
 | Channel | What routes here |
 |---------|-----------------|
@@ -78,7 +85,46 @@ The plugin creates and manages five dedicated private channels in the configured
 | `mattermost-webhook-requests` | Standalone incoming and outgoing webhook requests |
 | `mattermost-audit-requests` | Audit log |
 
-If a channel is accidentally archived, the plugin recreates it on next activation.
+If one of these channels is archived, the plugin doesn't recreate it: the archived channel still holds the name. Unarchive it (or rename it, so the plugin can create a new one). Until then, cards for that channel are DM'd to System Admins, and channel requests for a per-team channel go to the root channel.
+
+---
+
+## Who sees and approves what
+
+### Who is in each channel
+
+- **Approval team channels** (root `mattermost-channel-requests`, `mattermost-team-requests`, `mattermost-bot-requests`, `mattermost-webhook-requests`, `mattermost-audit-requests`): private channels created by the plugin's bot. System Admins on the approval team are added when a channel is created and on every activation.
+- **Two-step approvers:** in User Attributes or User Groups mode, members of the security and system pools are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team.
+- **Per-team channels** (`mattermost-channel-requests` in other teams, when **Per-team approval channels** is on): created in each team that has a Team Admin or a System Admin member, and seeded with those people. A user who joins the team later as an admin is added when they join; someone promoted to Team Admin in Mattermost itself (not through a Request Hub request) is added the next time they join the team. Existing per-team channels aren't reseeded on activation. In the approval team, the per-team channel and the root channel are the same channel.
+
+People who aren't members of a channel can't see its cards. The requester gets their own copy of the card, without buttons, as the root of a DM thread with the bot.
+
+### Where each card goes
+
+- **Channel and Channel Admin:** the per-team channel of the request's team. If that team has no Team Admin or System Admin, the card goes to the root channel labeled `For Team: …`. With **Per-team approval channels** off, every card goes to the root channel.
+- **Team, Team Admin, team member and guest:** `mattermost-team-requests`.
+- **Bot:** `mattermost-bot-requests`. **Webhook:** `mattermost-webhook-requests`.
+- **No channel available** (for example, **Approval team** is blank, missing or archived): the card is DM'd to every System Admin instead, and the message relay isn't available for that request. The requester sees an error only if no System Admin could be reached.
+
+Approve and Deny work only on the cards the plugin posted for that request.
+
+### Who can approve
+
+| Request type | Approvers |
+|---|---|
+| Channel creation | System Admins and Team Admins of the team the channel will be in. With **Team Admins can approve requests** on, also Team Admins of the approval team. |
+| Channel Admin | System Admins and Team Admins of the channel's team |
+| Team creation, Team Admin | System Admins. With **Approval team's Team Admins can approve team and Team Admin requests** on, also Team Admins of the approval team. |
+| Team member, guest invite | System Admins |
+| Bot, incoming webhook, outgoing webhook | Two steps, security first, then system, by two different people (one System Admin in System Admins only mode). See [Two-step approvers](#two-step-approvers-bot--webhook). |
+
+Approving your own request:
+
+- **Channel, Channel Admin, team creation and Team Admin:** only a System Admin can approve their own request.
+- **Team member and guest invite:** System Admins only, so a System Admin can approve their own.
+- **Bot and webhook:** nobody can approve either step of their own request, System Admins included. A System Admin's request needs two other approvers, or one other System Admin in System Admins only mode.
+
+Being allowed to approve doesn't make a card visible. Team Admins of the approval team are added to the root channel the same way as to any per-team channel (while **Per-team approval channels** is on, when they join the approval team or are promoted through a Request Hub request), and never to other teams' channels. So **Team Admins can approve requests** mostly matters for cards in the root channel. Likewise, when **Per-team approval channels** is off, Team Admins of other teams can approve their teams' channel cards but usually can't see them, because those cards go to the root channel.
 
 ---
 
@@ -88,7 +134,7 @@ Every request posts a card to the appropriate approval channel. The card include
 
 [Screenshot: A representative request card showing request details and Approve/Deny buttons]
 
-Channel, channel-admin, team, and team-admin cards use **single-step** approval (System Admins, plus Team Admins where a setting allows it).
+Channel, Channel Admin, team, Team Admin, team member and guest cards use **single-step** approval: one approver decides (see [Who can approve](#who-can-approve)).
 
 Bot and webhook cards use **two-step** approval. The card shows security and system status lines. Each eligible approver clicks **Approve** once; two different people must fill the two steps before the resource is created. Any eligible approver may **Deny** at any time.
 
@@ -97,8 +143,8 @@ Bot and webhook cards use **two-step** approval. The card shows security and sys
 | Request type | On Approve |
 |--------------|-----------|
 | **Channel creation** | Creates the channel, adds members, promotes Channel Admins, places in sidebar category if requested |
-| **Channel Admin** | Adds nominees to the channel (if not already members) and promotes them to Channel Admin |
-| **Team Admin** | Promotes the requester to Team Admin on their current team |
+| **Channel Admin** | Promotes the nominees to Channel Admin. Nominees must already be channel members when the request is made; anyone who has left by approval is skipped |
+| **Team Admin** | Promotes the nominees to Team Admin on that team. Nominees must already be team members. From the Request Hub or More actions the nominee is the requester; the slash command and its form can name other team members |
 | **Team creation** | Creates the team, adds the requester, optionally promotes to Team Admin |
 | **Bot account** | After both steps: creates the bot, optional token/webhooks; secrets go to a DM that auto-deletes in 72h |
 | **Incoming webhook** | After both steps: creates the webhook; URL is DM'd privately. If delivery fails, the hook is deleted |
@@ -141,7 +187,7 @@ Bot requests need a **security** approval and a **system** approval from two dif
 
 ### Token delivery
 
-Access tokens are generated at approve-time using the plugin's bot account, not a stored credential. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token itself does not expire unless revoked.
+Access tokens are generated at approve-time through a short-lived session for the final approver, which is revoked right after; no credential is stored. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token itself does not expire unless revoked.
 
 If a token is suspected compromised, revoke it in **System Console → User Management → Bot Accounts → {bot name}** and issue a new one.
 
@@ -151,7 +197,7 @@ If a token is suspected compromised, revoke it in **System Console → User Mana
 
 Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call — never stored.
 
-**Webhook requests from System Admins get both steps too.** A System Admin can fill the system step; a security approver must still approve. If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
+**Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different system approver (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
 
 ---
 
@@ -189,12 +235,43 @@ per-team channel and placed under the managed sidebar category
 channel (team-creation tickets) gets the same category treatment. On plugin
 activate, a one-time migration forces all existing ticket/approval channels
 (root, bot, webhook, team-creation, audit, and per-team) into that category
-for current members (renaming a short-lived `Mattermost Requests` label if
-present).
+for current members. A category from an earlier version named
+`Mattermost: Permissions` or `Mattermost Requests` is renamed to
+**Mattermost: Request Hub**.
 
 > Upgrades that already saved `PerTeamApprovalChannels = false` keep that
 > value — turn the setting back **on** in System Console if channel requests
 > are still landing only in the primary team.
+
+---
+
+## Upgrading
+
+### From Channel Requests (plugin ID `com.mattermostfederal.channel-requests`)
+
+Request Hub has a different plugin ID, so Mattermost treats it as a separate plugin. Nothing is imported from Channel Requests: its settings and its pending requests stay with the old plugin ID.
+
+1. Let pending requests in the old plugin be approved or denied first. Once the old plugin is disabled, its cards stop working.
+2. Note the old settings, such as the approval team and the channel prefixes.
+3. Disable and remove the old plugin, then install Request Hub.
+4. Before enabling Request Hub, review its settings. A new install turns on every request type except guest invites, including types the old plugin didn't have (team, Team Admin, team member, bot, webhook). Turn off the ones you don't want yet.
+5. Enter the approval team and the other settings again, then enable the plugin.
+
+Channel Requests posted its cards to an approval channel you chose. Request Hub doesn't use that channel: it creates its own private channels in the approval team (see [Approval channels](#approval-channels)). If a channel with one of those names already exists and Request Hub didn't create it, the plugin won't post there and logs an error; rename that channel so the plugin can create its own.
+
+### Between Request Hub versions
+
+Settings and pending requests carry over. Each time the plugin activates it:
+
+- creates any missing approval team channels and adds System Admins on the approval team to them;
+- adds the two-step approvers to the bot and webhook channels;
+- creates missing per-team channels when **Per-team approval channels** is on (existing ones aren't reseeded);
+- runs the one-time sidebar category migration described in [Per-team approval channels](#per-team-approval-channels);
+- deletes token and webhook URL DMs older than 72 hours.
+
+Once, on the first configuration load, channel prefixes saved with the old maximum suffix length of 24 are raised to 48.
+
+The plugin records which team **Approval team** named the first time it was used. If that name later belongs to a different team (for example, the original was renamed or deleted and another team took the name), the plugin stops using it until the setting is changed: set **Approval team** to a different team, save, then set it back.
 
 ---
 

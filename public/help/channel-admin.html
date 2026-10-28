@@ -44,12 +44,12 @@
             Hidden in the UI if you already admin the channel. Same form from every entry point.
         </p>
 
-        <h2>How to open</h2>
+        <h2 id="how-to-open">How to open</h2>
         <ul class="entry-list">
             <li><strong>Members:</strong> channel Members panel → <strong>Request Admin</strong></li>
             <li><strong>Dropdown:</strong> channel name → More actions → <strong>Request Channel Admin</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request Channel Admin</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub channel-admin</code></li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub channel-admin</code> opens the form; <code>/mattermost-request-hub channel-admin @user [@user ...]</code> run in the channel skips it (see <a href="slash.html#channel-admin-without-form">Slash commands</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -70,11 +70,11 @@
             </figure>
         </div>
 
-        <h2>Form</h2>
+        <h2 id="form">Form</h2>
         <img src="images/channel-admin-request/mattermost-promotion-modal.png" alt="Request a Channel Admin form">
         <p>Pick one or more people to promote. Everyone you pick must already be a member of the channel; this request never adds anyone to it.</p>
 
-        <h2>On approve</h2>
+        <h2 id="on-approve">On approve</h2>
         <img src="images/channel-admin-request/mattermost-promotion-approval-card.png" alt="Channel Admin approval card">
         <p>
             System Admins and the Team Admins of the channel's team can approve or deny. Team Admins of other

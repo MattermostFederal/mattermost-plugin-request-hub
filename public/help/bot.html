@@ -45,12 +45,12 @@
             <strong>Two-step</strong> approval (security + system) — see <a href="approving.html">Approving</a>.
         </p>
 
-        <h2>How to open</h2>
+        <h2 id="how-to-open">How to open</h2>
         <ul class="entry-list">
             <li><strong>Native:</strong> Main Menu → Integrations → <strong>Bot Accounts</strong> (non–System Admins)</li>
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request a Bot</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request a Bot</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub bot</code></li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub bot</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -71,13 +71,13 @@
             </figure>
         </div>
 
-        <h2>Form &amp; approve</h2>
+        <h2 id="form">Form &amp; approve</h2>
         <img src="images/bot-request/mattermost-bot-modal.png" alt="Request a Bot Account form">
         <img src="images/bot-request/mattermost-bot-approval-card.png" alt="Bot approval card">
         <img src="images/bot-request/mattermost-bot-token-dm.png" alt="Bot token DM">
         <p>Tokens in the approval DM auto-delete after <strong>72 hours</strong> — save them securely.</p>
 
-        <h2>Add the bot to a team</h2>
+        <h2 id="add-to-team">Add the bot to a team</h2>
         <p>
             Creating a bot does not put it on a team. After the bot exists, use
             <a href="team-member.html">Request Team Members</a> — search for the bot username

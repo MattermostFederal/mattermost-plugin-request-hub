@@ -6,15 +6,16 @@ Governance plugin for Mattermost: non-admins **request** channels, Channel Admin
 **Slash command:** `/mattermost-request-hub`  
 **Sidebar category:** Mattermost: Request Hub
 
-> **Breaking (0.5.0):** plugin ID changed from `com.mattermostfederal.channel-requests`. Uninstall the old bundle before installing this one — settings and pending KV tickets do not migrate.
+> **Breaking (0.5.0):** plugin ID changed from `com.mattermostfederal.channel-requests`. Settings and pending requests are not carried over from the old plugin; see [Upgrading](docs/admin-guide.md#upgrading) before you switch.
 
 ## Features
 
 - Request Hub (App Bar) plus More actions, slash commands, and native menu overrides
+- Slash command arguments for every request type (for example `channel <prefix> <Channel name> [options]` or `channel-admin @user ...`) that skip the form, plus `prefixes` to list the channel prefixes
 - Per-type enable toggles in System Console
 - Approval routing: channel requests (root or per-team), team-scope tickets in `mattermost-team-requests`, bots/webhooks in dedicated channels
 - Soft-squash approval cards and DM ticket threads with message relay
-- Bot/webhook two-step approval via User Attributes
+- Bot/webhook two-step approval via User Attributes, User Groups, or System Admins only
 
 ## Documentation
 
@@ -27,7 +28,7 @@ Governance plugin for Mattermost: non-admins **request** channels, Channel Admin
 - [Admin Guide](docs/admin-guide.md)
 - [Releasing](docs/RELEASING.md) — how to cut a release
 
-In Mattermost, **`/mattermost-request-hub docs`** opens the bundled HTML guide.
+In Mattermost, **`/mattermost-request-hub docs`** replies with a link to the bundled HTML guide.
 
 ## Build and deploy
 
@@ -60,7 +61,7 @@ Add the `preview` label to a pull request to stand up a throwaway Mattermost ser
 
 `.github/workflows/preview.yml` is a thin copy of the shared workflow in the private `MattermostFederal/pr-preview` repo, checked out at its protected `v1` tag. It never checks out or runs PR code: it waits for `build.yml` to pass on the PR's head commit and deploys the `plugin-bundle` artifact that run uploaded. A fork PR deploys only the commit that was labeled; a later push tears the preview down until a maintainer re-applies the label.
 
-What the preview does beyond installing the bundle lives in `.preview/`, which pr-preview reads from the PR's base branch, so a change to it reaches previews only after it merges. `deploy.sh` runs after the bundle is installed: it creates `~channel-requests` in team `test`, points the plugin's approval settings at it, and removes the built-in create-channel permissions from non-admins so they go through the request flow. Keep it in step with `make docker-setup` and `make deploy`. A `mattermost.env` file there would add `MM_*` settings to the server; none are needed today.
+What the preview does beyond installing the bundle lives in `.preview/`, which pr-preview reads from the PR's base branch, so a change to it reaches previews only after it merges. `deploy.sh` runs after the bundle is installed: it sets the plugin's approval team to `test` (it also creates a `~channel-requests` channel there, which the plugin no longer uses; the plugin creates its own approval channels) and removes the built-in create-channel permissions from non-admins so they go through the request flow. Keep it in step with `make docker-setup` and `make deploy`. A `mattermost.env` file there would add `MM_*` settings to the server; none are needed today.
 
 One-time setup:
 
