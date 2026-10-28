@@ -129,6 +129,9 @@ func TestPendingRequestKeys(t *testing.T) {
 func TestReservePending(t *testing.T) {
 	now := model.GetMillis()
 	key := pendingListKey(pendingKindChannel, "u1")
+	// Listed entries are older than the reserve grace period, so their
+	// requests are looked up.
+	earlier := now - 2*pendingReserveGraceMillis
 	newEntry := pendingEntry{ID: "new", CreatedAt: now, Key: "team1/team-new"}
 	config := &configuration{maxPending: 2, expiryDays: 30}
 
@@ -146,7 +149,7 @@ func TestReservePending(t *testing.T) {
 		api := &plugintest.API{}
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
-		old := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"})
+		old := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"})
 		api.On("KVGet", key).Return(old, nil)
 		var saved []byte
 		api.On("KVCompareAndSet", key, old, mock.Anything).Run(func(args mock.Arguments) { saved = args.Get(2).([]byte) }).Return(true, nil)
@@ -160,8 +163,8 @@ func TestReservePending(t *testing.T) {
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
 		api.On("KVGet", key).Return(entriesJSON(t,
-			pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"},
-			pendingEntry{ID: "b", CreatedAt: now, Key: "team1/team-b"},
+			pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"},
+			pendingEntry{ID: "b", CreatedAt: earlier, Key: "team1/team-b"},
 		), nil)
 		storedRequests(api, kvRequestPrefix, "a", "b")
 
@@ -175,8 +178,8 @@ func TestReservePending(t *testing.T) {
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
 		old := entriesJSON(t,
-			pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"},
-			pendingEntry{ID: "b", CreatedAt: now, Key: "team1/team-b"},
+			pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"},
+			pendingEntry{ID: "b", CreatedAt: earlier, Key: "team1/team-b"},
 		)
 		api.On("KVGet", key).Return(old, nil)
 		api.On("KVCompareAndSet", key, old, mock.Anything).Return(true, nil)
@@ -200,12 +203,54 @@ func TestReservePending(t *testing.T) {
 		require.Equal(t, []pendingEntry{expiredSame, expiredOther, newEntry}, decodeEntries(t, saved))
 	})
 
+	t.Run("entries expired for twice the expiry period are dropped", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		recent := pendingEntry{ID: "a", CreatedAt: now - 59*day, Key: "team1/team-a"}
+		old := entriesJSON(t, recent, pendingEntry{ID: "b", CreatedAt: now - 61*day, Key: "team1/team-b"})
+		api.On("KVGet", key).Return(old, nil)
+		var saved []byte
+		api.On("KVCompareAndSet", key, old, mock.Anything).Run(func(args mock.Arguments) { saved = args.Get(2).([]byte) }).Return(true, nil)
+
+		require.NoError(t, p.reservePending(pendingKindChannel, "u1", newEntry, config))
+		require.Equal(t, []pendingEntry{recent, newEntry}, decodeEntries(t, saved))
+	})
+
+	t.Run("an entry reserved moments ago holds its place before its request is stored", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			list []pendingEntry
+			want string
+		}{
+			"duplicate": {
+				list: []pendingEntry{{ID: "a", CreatedAt: now, Key: newEntry.Key}},
+				want: "you already have a pending request for ~team-new in this team",
+			},
+			"at limit": {
+				list: []pendingEntry{{ID: "a", CreatedAt: now, Key: "team1/team-a"}, {ID: "b", CreatedAt: earlier, Key: "team1/team-b"}},
+				want: "you have 2 pending requests waiting for review; you can submit more once some are approved, denied or expire",
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				api := &plugintest.API{}
+				defer api.AssertExpectations(t)
+				p := newTestPlugin(api)
+				api.On("KVGet", key).Return(entriesJSON(t, tc.list...), nil)
+				api.On("KVGet", kvRequestPrefix+"b").Return([]byte("{}"), nil).Maybe()
+
+				require.EqualError(t, p.reservePending(pendingKindChannel, "u1", newEntry, config), tc.want)
+				api.AssertNotCalled(t, "KVGet", kvRequestPrefix+"a")
+				api.AssertNotCalled(t, "KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything)
+			})
+		}
+	})
+
 	t.Run("an entry whose request is gone doesn't block the same request", func(t *testing.T) {
 		api := &plugintest.API{}
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
-		other := pendingEntry{ID: "b", CreatedAt: now, Key: "team1/team-b"}
-		old := entriesJSON(t, pendingEntry{ID: "gone", CreatedAt: now, Key: newEntry.Key}, other)
+		other := pendingEntry{ID: "b", CreatedAt: earlier, Key: "team1/team-b"}
+		old := entriesJSON(t, pendingEntry{ID: "gone", CreatedAt: earlier, Key: newEntry.Key}, other)
 		api.On("KVGet", key).Return(old, nil)
 		storedRequests(api, kvRequestPrefix, "b")
 		var saved []byte
@@ -219,8 +264,8 @@ func TestReservePending(t *testing.T) {
 		api := &plugintest.API{}
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
-		kept := pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"}
-		old := entriesJSON(t, kept, pendingEntry{ID: "gone", CreatedAt: now, Key: "team1/team-b"})
+		kept := pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"}
+		old := entriesJSON(t, kept, pendingEntry{ID: "gone", CreatedAt: earlier, Key: "team1/team-b"})
 		api.On("KVGet", key).Return(old, nil)
 		storedRequests(api, kvRequestPrefix, "a")
 		var saved []byte
@@ -232,10 +277,10 @@ func TestReservePending(t *testing.T) {
 
 	t.Run("a failed request lookup refuses nothing and saves nothing", func(t *testing.T) {
 		for name, list := range map[string][]byte{
-			"duplicate": entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: newEntry.Key}),
+			"duplicate": entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: newEntry.Key}),
 			"at limit": entriesJSON(t,
-				pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"},
-				pendingEntry{ID: "b", CreatedAt: now, Key: "team1/team-b"},
+				pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"},
+				pendingEntry{ID: "b", CreatedAt: earlier, Key: "team1/team-b"},
 			),
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -268,7 +313,7 @@ func TestReservePending(t *testing.T) {
 		api := &plugintest.API{}
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
-		api.On("KVGet", key).Return(entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: newEntry.Key}), nil)
+		api.On("KVGet", key).Return(entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: newEntry.Key}), nil)
 		storedRequests(api, kvRequestPrefix, "a")
 
 		err := p.reservePending(pendingKindChannel, "u1", newEntry, config)
@@ -280,8 +325,8 @@ func TestReservePending(t *testing.T) {
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
 		adminKey := pendingListKey(pendingKindAdmin, "u1")
-		entry := pendingEntry{ID: "new", CreatedAt: now, Key: "ch1/a,b"}
-		api.On("KVGet", adminKey).Return(entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: entry.Key}), nil)
+		entry := pendingEntry{ID: "new", CreatedAt: earlier, Key: "ch1/a,b"}
+		api.On("KVGet", adminKey).Return(entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: entry.Key}), nil)
 		storedRequests(api, kvAdminRequestPrefix, "a")
 
 		err := p.reservePending(pendingKindAdmin, "u1", entry, config)
@@ -292,8 +337,8 @@ func TestReservePending(t *testing.T) {
 		api := &plugintest.API{}
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
-		first := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"})
-		second := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: now, Key: "team1/team-a"}, pendingEntry{ID: "b", CreatedAt: now, Key: "team1/team-b"})
+		first := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"})
+		second := entriesJSON(t, pendingEntry{ID: "a", CreatedAt: earlier, Key: "team1/team-a"}, pendingEntry{ID: "b", CreatedAt: earlier, Key: "team1/team-b"})
 		api.On("KVGet", key).Return(first, nil).Once()
 		api.On("KVCompareAndSet", key, first, mock.Anything).Return(false, nil).Once()
 		api.On("KVGet", key).Return(second, nil).Once()
@@ -561,6 +606,40 @@ func TestMigratePendingRequests(t *testing.T) {
 		api.AssertCalled(t, "LogWarn", "failed to clear pending-request migration claim", "error", mock.Anything)
 	})
 
+	t.Run("a long run renews its claim", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		store := fakeKV(api)
+		for range 250 {
+			id := model.NewId()
+			store[kvRequestPrefix+id] = recordJSON(t, channelRequest{ID: id, RequesterID: u1, TeamID: "team1", Name: "team-" + id, CreatedAt: 5})
+		}
+
+		require.NoError(t, p.migratePendingRequests())
+		renew := model.PluginKVSetOptions{Atomic: true, OldValue: []byte(migrationRunning), ExpireInSeconds: migrationClaimSeconds}
+		api.AssertNumberOfCalls(t, "KVSetWithOptions", 3) // the claim, then at 100 and 200
+		api.AssertCalled(t, "KVSetWithOptions", kvPendingMigrated, []byte(migrationRunning), renew)
+	})
+
+	t.Run("a lapsed claim stops the run and is left alone", func(t *testing.T) {
+		api := &plugintest.API{}
+		defer api.AssertExpectations(t)
+		p := newTestPlugin(api)
+		api.On("KVSetWithOptions", kvPendingMigrated, []byte(migrationRunning), mock.MatchedBy(func(o model.PluginKVSetOptions) bool {
+			return o.OldValue != nil
+		})).Return(false, nil)
+		store := fakeKV(api)
+		for range 150 {
+			id := model.NewId()
+			store[kvRequestPrefix+id] = recordJSON(t, channelRequest{ID: id, RequesterID: u1, TeamID: "team1", Name: "team-" + id, CreatedAt: 5})
+		}
+
+		require.ErrorContains(t, p.migratePendingRequests(), "claim lapsed")
+		require.Equal(t, migrationRunning, string(store[kvPendingMigrated]))
+		require.Len(t, decodeEntries(t, store[pendingListKey(pendingKindChannel, u1)]), 100)
+	})
+
 	t.Run("failures leave the migration to run again", func(t *testing.T) {
 		api := &plugintest.API{}
 		stubLogLines(api)
@@ -579,6 +658,8 @@ func TestMigratePendingRequests(t *testing.T) {
 		for name, tc := range map[string]struct {
 			setup func(api *plugintest.API)
 			want  string
+			// released: the claim was taken, so the failure lets it go.
+			released bool
 		}{
 			"flag read fails": {
 				setup: func(api *plugintest.API) { api.On("KVGet", kvPendingMigrated).Return(nil, testAppErr("kv down")) },
@@ -591,14 +672,16 @@ func TestMigratePendingRequests(t *testing.T) {
 				want: "failed to start pending-request migration",
 			},
 			"list fails": {
-				setup: func(api *plugintest.API) { api.On("KVList", 0, 200).Return(nil, testAppErr("kv down")) },
-				want:  "failed to list stored requests",
+				setup:    func(api *plugintest.API) { api.On("KVList", 0, 200).Return(nil, testAppErr("kv down")) },
+				want:     "failed to list stored requests",
+				released: true,
 			},
 			"flag write fails": {
 				setup: func(api *plugintest.API) {
 					api.On("KVSet", kvPendingMigrated, []byte(migrationDone)).Return(testAppErr("kv down"))
 				},
-				want: "failed to record pending-request migration",
+				want:     "failed to record pending-request migration",
+				released: true,
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -610,6 +693,9 @@ func TestMigratePendingRequests(t *testing.T) {
 				fakeKV(api)
 
 				require.ErrorContains(t, p.migratePendingRequests(), tc.want)
+				if tc.released {
+					api.AssertCalled(t, "KVDelete", kvPendingMigrated)
+				}
 			})
 		}
 	})

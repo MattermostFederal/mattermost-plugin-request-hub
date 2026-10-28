@@ -253,10 +253,16 @@ func (p *Plugin) updatePending(kind, userID string, change func([]pendingEntry) 
 	return errors.New("pending requests changed while saving")
 }
 
+// pendingReserveGraceMillis covers the gap between reservePending and the
+// request being stored, so a concurrent submit doesn't take an entry that
+// was just reserved for one whose request is gone.
+const pendingReserveGraceMillis = int64(60 * 1000)
+
 // reservePending adds entry to the user's pending list, refusing when the
 // same request is already pending or the user is at the configured limit.
-// Expired entries don't count, and entries whose request no longer exists
-// are dropped. Errors are user-facing.
+// Expired entries don't count and are dropped once expired for twice the
+// expiry period, and entries whose request no longer exists are dropped.
+// Errors are user-facing.
 func (p *Plugin) reservePending(kind, userID string, entry pendingEntry, config *configuration) error {
 	var refusal error
 	err := p.updatePending(kind, userID, func(entries []pendingEntry) ([]pendingEntry, error) {
@@ -265,11 +271,11 @@ func (p *Plugin) reservePending(kind, userID string, entry pendingEntry, config 
 		kept := make([]pendingEntry, 0, len(entries)+1)
 		var counted []pendingEntry
 		for _, e := range entries {
-			if e.ID == entry.ID {
+			if e.ID == entry.ID || requestExpired(e.CreatedAt, 2*config.ExpiryDays(), now) {
 				continue
 			}
 			if e.Key == entry.Key && !requestExpired(e.CreatedAt, config.ExpiryDays(), now) {
-				exists, err := p.pendingRequestExists(kind, e.ID)
+				exists, err := p.pendingEntryLive(kind, e, now)
 				if err != nil {
 					return nil, err
 				}
@@ -289,7 +295,7 @@ func (p *Plugin) reservePending(kind, userID string, entry pendingEntry, config 
 			// the limit, so the usual submit costs no extra reads.
 			gone := map[string]bool{}
 			for _, e := range counted {
-				exists, err := p.pendingRequestExists(kind, e.ID)
+				exists, err := p.pendingEntryLive(kind, e, now)
 				if err != nil {
 					return nil, err
 				}
@@ -313,6 +319,15 @@ func (p *Plugin) reservePending(kind, userID string, entry pendingEntry, config 
 		return errors.New("could not save your request; try again")
 	}
 	return nil
+}
+
+// pendingEntryLive reports whether a pending entry still holds its place:
+// it was reserved within the grace period, or its request is stored.
+func (p *Plugin) pendingEntryLive(kind string, e pendingEntry, now int64) (bool, error) {
+	if now-e.CreatedAt < pendingReserveGraceMillis {
+		return true, nil
+	}
+	return p.pendingRequestExists(kind, e.ID)
 }
 
 // pendingRequestExists reports whether the request behind a pending entry
@@ -366,13 +381,15 @@ const (
 	// kvPendingMigrated marks that requests saved by older versions have a
 	// CreatedAt and appear in their requester's pending list. While one
 	// server runs the migration it holds migrationRunning, which expires so
-	// an interrupted run is retried on a later activation. v2 covers every
-	// request type; v1 covered channel and Channel Admin requests only.
-	kvPendingMigrated       = "migrated_pending_v2"
-	migrationDone           = "1"
-	migrationRunning        = "running"
-	migrationClaimSeconds   = 10 * 60
-	migrationRecordAttempts = 3
+	// an interrupted run is retried on a later activation, and renews every
+	// migrationClaimRenewEvery records so a long run keeps it. v2 covers
+	// every request type; v1 covered channel and Channel Admin requests only.
+	kvPendingMigrated        = "migrated_pending_v2"
+	migrationDone            = "1"
+	migrationRunning         = "running"
+	migrationClaimSeconds    = 10 * 60
+	migrationClaimRenewEvery = 100
+	migrationRecordAttempts  = 3
 )
 
 // migratePendingRequests gives requests saved by older versions a
@@ -408,7 +425,23 @@ func (p *Plugin) migratePendingRequests() error {
 
 	now := model.GetMillis()
 	failed := 0
-	for _, key := range keys {
+	for i, key := range keys {
+		if i > 0 && i%migrationClaimRenewEvery == 0 {
+			renewed, appErr := p.API.KVSetWithOptions(kvPendingMigrated, []byte(migrationRunning), model.PluginKVSetOptions{
+				Atomic:          true,
+				OldValue:        []byte(migrationRunning),
+				ExpireInSeconds: migrationClaimSeconds,
+			})
+			if appErr != nil {
+				p.releaseMigrationClaim()
+				return errors.Wrap(appErr, "failed to renew pending-request migration claim")
+			}
+			if !renewed {
+				// The claim lapsed and another server may hold it now, so
+				// leave it alone.
+				return errors.New("pending-request migration claim lapsed; will retry on a later activation")
+			}
+		}
 		if err := p.migratePendingRequest(key, now); err != nil {
 			p.API.LogWarn("failed to update stored request; will retry on a later activation", "key", key, "error", err.Error())
 			failed++
@@ -420,6 +453,7 @@ func (p *Plugin) migratePendingRequests() error {
 	}
 
 	if appErr := p.API.KVSet(kvPendingMigrated, []byte(migrationDone)); appErr != nil {
+		p.releaseMigrationClaim()
 		return errors.Wrap(appErr, "failed to record pending-request migration")
 	}
 	return nil

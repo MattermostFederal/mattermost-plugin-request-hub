@@ -50,7 +50,7 @@ func (p *Plugin) executeExercise(args *model.CommandArgs, params []commandArg) *
 	case exerciseStatus:
 		reply, err = p.exerciseStatus(args.TeamId)
 	default:
-		return ephemeralResponse(fmt.Sprintf("Unknown exercise subcommand `%s`. %s", sub, exerciseUsage))
+		return ephemeralResponse(fmt.Sprintf("Unknown exercise subcommand %s. %s", inlineCode(sub), exerciseUsage))
 	}
 	if err != nil {
 		p.API.LogWarn("exercise command failed", "subcommand", sub, "team_id", args.TeamId, "error", err.Error())

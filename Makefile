@@ -606,7 +606,7 @@ endif
 # ====================================================================================
 
 ## CodeQL bundle, checked against its published SHA-256.
-CODEQL_VERSION := 2.20.1
+CODEQL_VERSION := 2.27.2
 CODEQL_SHA256_linux64 := 790f5c109f15d26cf67d266591868e21fd6357211bbdbc4601921291a490b164
 CODEQL_SHA256_osx64 := d97cf7ae727338dd9f09068386c612f386ebb8bf63327c300b7e370a269c88c9
 CODEQL_DIR := $(PWD)/build/codeql

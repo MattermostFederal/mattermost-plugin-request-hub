@@ -87,6 +87,11 @@ func TestReadArgs_AutocorrectDashesReadAsFlags(t *testing.T) {
 	require.EqualError(t, err, "unknown option `--color`")
 }
 
+func TestReadArgs_UnknownOptionCantCloseCodeSpan(t *testing.T) {
+	_, _, err := readArgs([]commandArg{{Text: "Ops"}, {Text: "--a`](https://evil.test)`b"}}, "--private")
+	require.EqualError(t, err, "unknown option `--a](https://evil.test)b`")
+}
+
 func TestSplitListArgs(t *testing.T) {
 	for input, want := range map[string][]string{
 		"@a,@b":    {"@a", "@b"},

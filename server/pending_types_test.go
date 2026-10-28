@@ -154,7 +154,7 @@ func TestEveryRequestTypeSubmitChecksPendingList(t *testing.T) {
 			config.expiryDays = 30
 			p.setConfiguration(&config)
 			tc.setup(api)
-			lists[pendingListKey(tc.kind, tc.requesterID)] = entriesJSON(t, pendingEntry{ID: "old", CreatedAt: model.GetMillis(), Key: key})
+			lists[pendingListKey(tc.kind, tc.requesterID)] = entriesJSON(t, pendingEntry{ID: "old", CreatedAt: model.GetMillis() - 2*pendingReserveGraceMillis, Key: key})
 			return api, p, lists
 		}
 

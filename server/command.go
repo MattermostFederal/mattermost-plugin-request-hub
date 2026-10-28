@@ -509,7 +509,7 @@ func readArgs(params []commandArg, allowed ...string) ([]string, map[string][]st
 			values = append(values, params[i].Text)
 		}
 		if !slices.Contains(allowed, flag) {
-			return nil, nil, errors.Errorf("unknown option `%s`", flag)
+			return nil, nil, errors.Errorf("unknown option %s", inlineCode(flag))
 		}
 		if _, seen := flags[flag]; seen {
 			return nil, nil, errors.Errorf("`%s` is given more than once", flag)

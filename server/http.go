@@ -100,10 +100,11 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		}
 	}()
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	// MCP calls get the MCP server's own body limit.
 	if p.serveMCPIfMatch(w, r) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	switch r.URL.Path {
 	case routeDialog:

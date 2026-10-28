@@ -1183,8 +1183,9 @@ func TestSubmitRequestPendingLimit(t *testing.T) {
 
 	lists := fakePendingLists(api)
 	mockMemberRequester(api)
-	// The first request is still stored, so its entry keeps counting.
-	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil)
+	// The first request was reserved within the grace period, so its entry
+	// counts without its record being looked up.
+	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil).Maybe()
 	mockQueuedChannelRequest(api)
 
 	_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
@@ -1209,7 +1210,7 @@ func TestSubmitRequestPendingLimitAppliesToQueuedSystemAdmins(t *testing.T) {
 	p.setConfiguration(config)
 
 	lists := fakePendingLists(api)
-	lists[pendingListKey(pendingKindChannel, "admin1")] = entriesJSON(t, pendingEntry{ID: "r1", CreatedAt: model.GetMillis(), Key: "team1/team-other"})
+	lists[pendingListKey(pendingKindChannel, "admin1")] = entriesJSON(t, pendingEntry{ID: "r1", CreatedAt: model.GetMillis() - 2*pendingReserveGraceMillis, Key: "team1/team-other"})
 	api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil)
 
@@ -1228,8 +1229,9 @@ func TestSubmitRequestDuplicate(t *testing.T) {
 
 	fakePendingLists(api)
 	mockMemberRequester(api)
-	// The first request is still stored, so its entry keeps counting.
-	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil)
+	// The first request was reserved within the grace period, so its entry
+	// counts without its record being looked up.
+	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil).Maybe()
 	mockQueuedChannelRequest(api)
 
 	in := requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"}
