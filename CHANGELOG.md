@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.2...v0.7.0) (2026-10-28)
+
+
+### Features
+
+* argument forms, prefixes and help for /mattermost-request-hub ([6b066ea](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/6b066ea7bc3a8c41030d46a39648c503a291f9fb))
+* bookmark the docs in every request channel ([2d90bba](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/2d90bbaa4b2eff41a0fbd1202d6f6b56779ce6ea))
+* bot access tokens expire after a year by default ([ae0a362](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/ae0a362873f9a02266031b56b5e0e018effd72d3))
+* remind requesters before bot tokens expire; lifetime in months ([273758e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/273758e9135f3eadb8a83dfdc2abbb082af31b1f))
+* request limits, slash-command decisions, exercise mode, token expiry and e2e suite ([a1da723](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/a1da7237f1fe17b73077cda7a00ff2afdc3485d3))
+* team's own Team Admins approve Team Admin requests; opt-in approval-team Team Admins for team creation ([5d05c0f](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/5d05c0f0e6aaa0df3235c1802dfe9c91a1100976))
+
+
+### Bug Fixes
+
+* add the approval team's Team Admins to the shared approval channel ([fa0351e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/fa0351ea4c26b95c392894ca997c5f9d8c15bf07))
+* address review on coverage tooling, injected-item matching and outgoing webhook gating ([b212ce2](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b212ce200cffb07cb50578270cbb6516d84d2154))
+* approval, input and settings rules for every request type ([#61](https://github.com/MattermostFederal/mattermost-plugin-request-hub/issues/61)) ([ac726a3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/ac726a3105e467cbd40a61d0c27abc4d9fa18b88))
+* block nominees from approving their own promotion; detect archived approval channels; update approval copy ([0cb7bff](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/0cb7bff1a2e0a47fc38f6339650135ff70a15cdb))
+* escape slash-command replies, clearer quote and empty-list errors, forgive missing prefix hyphen ([b54b561](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b54b5613f341ad83276ad053431ca863d9443614))
+* hold just-reserved pending entries, prune long-expired ones, renew the migration claim ([b3df7f3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b3df7f3fa2196196777d8956020d89102067ff27))
+* limit Team Admin approvals to System Admins and opt-in approval-team Team Admins ([7f2f474](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/7f2f4741e76312cbe9e1cc875d371164a7c543e8))
+* pin CodeQL 2.27.2 checksums; leave the migration claim alone when renewal errors ([8ac75e1](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/8ac75e16b76c972f73f5bc94e3761396a597c10b))
+
+
+### Dependencies
+
+* **actions:** bump the actions-minor-patch group across 1 directory with 5 updates ([20bd1b8](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/20bd1b881d37a6ad042cf8d68f1924953f9eef96))
+* **go:** bump github.com/mattermost/mattermost/server/public ([8d39a17](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/8d39a17d16d706eb5f13c2ffb88228aca24c9aeb))
+* **npm:** bump the npm-minor-patch group across 1 directory with 8 updates ([d98bfd3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/d98bfd3cb4739dc45c72462fab277736158e434e))
+
 ## [0.6.2](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.1...v0.6.2) (2026-10-23)
 
 
