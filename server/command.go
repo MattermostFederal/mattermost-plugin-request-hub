@@ -42,6 +42,12 @@ const (
 	incomingWebhookArgsHint = "~channel <Display name> [--description <text>]"
 	outgoingWebhookArgsHint = "~channel <Display name> --callback <url> [--description <text>]"
 	subcommandPrefixes      = "prefixes"
+	subcommandList          = "list"
+	listApprovals           = "approvals"
+	subcommandApprove       = "approve"
+	subcommandDeny          = "deny"
+	subcommandExercise      = "exercise"
+	requestIDArgHint        = "<request ID>"
 )
 
 // notConfiguredMessage is shown by every channel request entry point when
@@ -53,7 +59,7 @@ func getCommand() *model.Command {
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Request admin-gated permissions (channels, teams, admin roles) or open docs",
-		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
+		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
 		AutocompleteData: getAutocompleteData(),
 		DisplayName:      "Mattermost Request Hub",
 	}
@@ -66,6 +72,16 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(model.NewAutocompleteData("channel", "["+channelArgsHint+"]", "Request creation of a new channel (no arguments opens the form)"))
 	root.AddCommand(model.NewAutocompleteData("channel-admin", "["+channelAdminArgsHint+"]", "Request Channel Admin role (no arguments opens the form; with users, for this channel)"))
 	root.AddCommand(model.NewAutocompleteData(subcommandPrefixes, "", "List the channel prefixes you can use"))
+	list := model.NewAutocompleteData(subcommandList, "["+listApprovals+"]", "List your pending requests and their IDs, or with approvals, the requests you can approve")
+	list.AddCommand(model.NewAutocompleteData(listApprovals, "", "List the pending requests you can approve and their IDs"))
+	root.AddCommand(list)
+	root.AddCommand(model.NewAutocompleteData(subcommandApprove, requestIDArgHint, "Approve a request by the ID on its approval card"))
+	root.AddCommand(model.NewAutocompleteData(subcommandDeny, requestIDArgHint, "Deny a request by the ID on its approval card"))
+	exercise := model.NewAutocompleteData(subcommandExercise, "populate|teardown|status", "Seed, remove or report exercise data (System Admins, exercise mode on)")
+	exercise.AddCommand(model.NewAutocompleteData(exercisePopulate, "", "Seed marked exercise data into this team"))
+	exercise.AddCommand(model.NewAutocompleteData(exerciseTeardown, "", "Remove this team's exercise data"))
+	exercise.AddCommand(model.NewAutocompleteData(exerciseStatus, "", "Compare recorded and live exercise data"))
+	root.AddCommand(exercise)
 	root.AddCommand(model.NewAutocompleteData("team-admin", "["+teamAdminArgsHint+"]", "Request Team Admin role in the current team (no arguments opens the form)"))
 	root.AddCommand(model.NewAutocompleteData("team", "["+teamArgsHint+"]", "Request creation of a new team (no arguments opens the form)"))
 	root.AddCommand(model.NewAutocompleteData("team-member", "["+teamMemberArgsHint+"]", "Request adding users or bots to the current team (no arguments opens the form)"))
@@ -125,6 +141,14 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 		return p.executeChannelAdminRequestCommand(args)
 	case subcommandPrefixes:
 		return p.executePrefixesCommand(), nil
+	case subcommandList:
+		return p.executeList(args, params), nil
+	case subcommandApprove:
+		return p.executeDecision(args, params, true), nil
+	case subcommandDeny:
+		return p.executeDecision(args, params, false), nil
+	case subcommandExercise:
+		return p.executeExercise(args, params), nil
 	case "team-admin":
 		if len(params) > 0 {
 			return p.executeTeamAdminNominateCommand(args, params), nil
@@ -181,10 +205,9 @@ func (p *Plugin) executeDocsCommand(args *model.CommandArgs) (*model.CommandResp
 
 // docsLinkText is the Markdown link to the bundled guide.
 func (p *Plugin) docsLinkText(args *model.CommandArgs) string {
-	path := fmt.Sprintf("/plugins/%s/public/help/docs.html", manifest.Id)
-	location := path
+	location := docsPath()
 	if args != nil && args.SiteURL != "" {
-		location = strings.TrimRight(args.SiteURL, "/") + path
+		location = strings.TrimRight(args.SiteURL, "/") + location
 	}
 	return "[Open the full guide](" + location + ") (opens in a new tab)."
 }
@@ -343,6 +366,11 @@ var helpRows = []helpRow{
 	{requestTypeChannelAdmin, "channel-admin", "Request Channel Admin role (opens the form)"},
 	{requestTypeChannelAdmin, "channel-admin " + channelAdminArgsHint, "Request Channel Admin for those members of this channel"},
 	{requestTypeChannel, subcommandPrefixes, "List the channel prefixes you can use"},
+	{"", subcommandList, "List your pending requests and their IDs"},
+	{"", subcommandList + " " + listApprovals, "List the pending requests you can approve and their IDs"},
+	{"", subcommandApprove + " " + requestIDArgHint, "Approve a request, as its Approve button would"},
+	{"", subcommandDeny + " " + requestIDArgHint, "Deny a request, as its Deny button would"},
+	{"", subcommandExercise + " <populate, teardown or status>", "Seed (`populate`), remove (`teardown`) or report (`status`) marked exercise data in this team (System Admins, when exercise mode is on)"},
 	{requestTypeTeamAdmin, "team-admin", "Request Team Admin role in this team (opens the form)"},
 	{requestTypeTeamAdmin, "team-admin " + teamAdminArgsHint, "Request Team Admin for those members of this team"},
 	{requestTypeTeam, "team", "Request a new team (opens the form)"},
@@ -481,7 +509,7 @@ func readArgs(params []commandArg, allowed ...string) ([]string, map[string][]st
 			values = append(values, params[i].Text)
 		}
 		if !slices.Contains(allowed, flag) {
-			return nil, nil, errors.Errorf("unknown option `%s`", flag)
+			return nil, nil, errors.Errorf("unknown option %s", inlineCode(flag))
 		}
 		if _, seen := flags[flag]; seen {
 			return nil, nil, errors.Errorf("`%s` is given more than once", flag)
@@ -949,6 +977,93 @@ func (p *Plugin) executePrefixesCommand() *model.CommandResponse {
 		b.WriteString("\n")
 	}
 	return ephemeralResponse(strings.TrimRight(b.String(), "\n"))
+}
+
+// executeList lists the user's own pending requests, or with
+// "approvals", the pending requests they can approve.
+func (p *Plugin) executeList(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
+	approvals := len(params) == 1 && params[0].Text == listApprovals
+	if len(params) > 0 && !approvals {
+		return ephemeralResponse(fmt.Sprintf("Use `/%s %s` for your own requests, or `/%s %s %s` for the requests you can approve.",
+			commandTrigger, subcommandList, commandTrigger, subcommandList, listApprovals))
+	}
+	if len(enabledPendingKinds(p.getConfiguration())) == 0 {
+		return ephemeralResponse(listRequestsDisabledMsg)
+	}
+
+	list, title, none := p.listOwnRequests, "Your pending requests:", "You have no pending requests."
+	if approvals {
+		list, title, none = p.listApprovableRequests, "Requests you can approve:", "There are no pending requests you can approve."
+	}
+	requests, more, err := list(args.UserId, maxListedRequests)
+	if err != nil {
+		p.API.LogError("failed to list pending requests", "user_id", args.UserId, "error", err.Error())
+		return ephemeralResponse("Could not load the requests. Please try again.")
+	}
+	if len(requests) == 0 {
+		return ephemeralResponse(none)
+	}
+
+	var b strings.Builder
+	b.WriteString(title + "\n")
+	for _, req := range requests {
+		fmt.Fprintf(&b, "- %s\n", req.summaryLine())
+	}
+	if more > 0 {
+		fmt.Fprintf(&b, "- ...and %d more\n", more)
+	}
+	return ephemeralResponse(strings.TrimRight(b.String(), "\n"))
+}
+
+// deciderFor returns the decide function for requests of a pending kind.
+func (p *Plugin) deciderFor(kind string) decider {
+	switch kind {
+	case pendingKindChannel:
+		return p.decideChannelRequest
+	case pendingKindAdmin:
+		return p.decideAdminRequest
+	case pendingKindTeam:
+		return p.decideTeamRequest
+	case pendingKindTeamAdmin:
+		return p.decideTeamAdminRequest
+	case pendingKindTeamMember:
+		return p.decideTeamMemberRequest
+	case pendingKindTeamGuest:
+		return p.decideTeamGuestRequest
+	case pendingKindBot:
+		return p.decideBotRequest
+	case pendingKindWebhook:
+		return p.decideWebhookRequest
+	default:
+		return nil
+	}
+}
+
+// executeDecision approves or denies a request of any type by ID, through
+// the same checks as the approval card buttons.
+func (p *Plugin) executeDecision(args *model.CommandArgs, params []commandArg, approve bool) *model.CommandResponse {
+	sub := subcommandDeny
+	if approve {
+		sub = subcommandApprove
+	}
+	if len(params) != 1 || !model.IsValidId(params[0].Text) {
+		return ephemeralResponse(fmt.Sprintf("Give the request ID from the approval card: `/%s %s %s`", commandTrigger, sub, requestIDArgHint))
+	}
+	requestID := params[0].Text
+
+	// IDs are unique across every kind, so whichever is stored is the one.
+	// A turned-off type is still found, so its requests can be denied.
+	for _, kind := range allPendingKinds {
+		exists, err := p.pendingRequestExists(kind, requestID)
+		if err != nil {
+			p.API.LogError("failed to look up request", "request_id", requestID, "error", err.Error())
+			return ephemeralResponse("Could not load that request.")
+		}
+		if exists {
+			return ephemeralResponse(p.deciderFor(kind)(args.UserId, requestID, "", approve).replyText())
+		}
+	}
+	return ephemeralResponse(alreadyHandledText)
 }
 
 func ephemeralResponse(text string) *model.CommandResponse {

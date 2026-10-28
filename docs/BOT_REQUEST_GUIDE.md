@@ -1,4 +1,4 @@
-# Bot Account Requests — User Guide
+# Bot Account Requests: User Guide
 
 Mattermost Request Hub lets members **request a bot account** (optionally
 with an access token and incoming/outgoing webhooks in the same ticket) instead
@@ -17,10 +17,10 @@ system). On final approval the bot is created and secrets are delivered by DM
 
 This guide covers:
 
-- [Requesting a bot](#requesting-a-bot) — any member
-- [Messaging while a request is pending](#messaging-while-a-request-is-pending) — two-way threads
-- [Approving requests](#approving-requests) — security + system approvers
-- [Admin setup](#admin-setup) — system admins
+- [Requesting a bot](#requesting-a-bot): any member
+- [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
+- [Approving requests](#approving-requests): security + system approvers
+- [Admin setup](#admin-setup): system admins
 
 ---
 
@@ -36,6 +36,10 @@ Same **Request a Bot Account** form from every entry point.
 - **Slash:** `/mattermost-request-hub bot` (or skip the form with
   `/mattermost-request-hub bot <username> <Display name> [--description <text>] [--owner @user]`;
   access tokens and webhooks for the bot are only in the form)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_bot` tool, which like the
+  slash command covers the account only; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/bot-request/mattermost-bot-integrations.png" alt="Integrations" width="720">
@@ -63,7 +67,9 @@ token to authenticate to Mattermost as the bot.
 
 > The token is sent in a DM when the request is fully approved. That DM
 > **auto-deletes after 72 hours**. Save the token in a secrets manager or CI
-> vault before it disappears. The token itself does not expire until you revoke it.
+> vault before it disappears. The token expires after one year by default (an
+> admin can set 1 to 12 months); the DM gives the date. From a month before, you
+> get a weekly reminder, then a daily one in the last week.
 
 Uncheck this if the bot only receives messages via an incoming webhook and never
 calls the API.
@@ -96,10 +102,18 @@ webhooks you checked. You'll get a DM when both approvers have acted.
 
 ---
 
+**Limits.** A System Admin sets how many bot requests you can have waiting for review
+at once (each request type is counted separately). At the limit you'll see *you
+have N pending requests waiting for review; you can submit more once some are
+approved, denied or expire*. Asking again for a bot username you're already waiting on shows *you already
+have a pending request for bot @username*. Requests that aren't reviewed within the configured number of days of being
+submitted expire, even if one approval step is done, and you'll get a direct
+message saying so.
+
 ## Messaging while a request is pending
 
 Bot tickets use the same **two-way thread relay** as other request types.
-Open the **Thread** RHS from the card (Reply / reply count) — not a new root post.
+Open the **Thread** RHS from the card (Reply / reply count), not a new root post.
 
 - **Approver:** ask in the approval Thread (e.g. *What systems will this bot call?*)
 - **Requester:** see `Message from @admin:` in your DM Thread with the bot
@@ -133,7 +147,15 @@ are complete, the plugin:
 3. Creates any requested incoming/outgoing webhooks.
 4. DMs the requester with results (tokens/URLs auto-delete after 72 hours).
 
-Any eligible approver may **Deny** at any time — that closes the ticket and
+Before either step, Approve checks that the requester and any chosen owner are
+still active (the owner can't be a bot), and that any webhook channels still
+exist and aren't archived, the requester is still in them (System Admins
+excepted), and an outgoing webhook's channel is still public. If not, you'll
+get a private message saying so (for example *The bot owner is no longer an
+active user. Deny this request instead.*) and the request and its steps stay as
+they were, so deny it.
+
+Any eligible approver may **Deny** at any time. That closes the ticket and
 notifies the requester.
 
 ### DM to the requester
@@ -143,7 +165,7 @@ notifies the requester.
 The DM includes:
 
 - Bot account confirmation
-- Access token (if requested) — **message auto-deletes in 72 hours**
+- Access token (if requested): **message auto-deletes in 72 hours**
 - Incoming webhook URL (if requested)
 - Outgoing webhook confirmation (if requested)
 

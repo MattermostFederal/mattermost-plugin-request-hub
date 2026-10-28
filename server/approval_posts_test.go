@@ -36,8 +36,11 @@ func actionHandlerCases() []actionHandlerCase {
 			record: func(postID string) any {
 				return &channelRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", ApprovalPostID: postID}
 			},
-			handler:         func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleAction },
-			stubBeforeClaim: none,
+			handler: func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleAction },
+			// The requester is loaded for the expiry and approve-time checks.
+			stubBeforeClaim: func(api *plugintest.API) {
+				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
+			},
 		},
 		{
 			name:     "channel admin",
@@ -49,6 +52,7 @@ func actionHandlerCases() []actionHandlerCase {
 			stubBeforeClaim: func(api *plugintest.API) {
 				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+				api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			},
 		},
 		{
@@ -108,6 +112,7 @@ func actionHandlerCases() []actionHandlerCase {
 			stubBeforeClaim: func(api *plugintest.API) {
 				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+				api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			},
 		},
 	}
@@ -254,6 +259,7 @@ func TestTwoStepActionHandlers_LostFinalClaimRepliesPrivately(t *testing.T) {
 			stub: func(api *plugintest.API) {
 				api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil)
+				api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 			},
 		},
 	}
@@ -710,6 +716,7 @@ func TestPostApprovalAttachment_RecordFailureDeletesCards(t *testing.T) {
 func TestActionHandlers_LostRequestClearsCards(t *testing.T) {
 	t.Run("team", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubPendingLists(api)
 		stubLogs(api)
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
@@ -723,13 +730,20 @@ func TestActionHandlers_LostRequestClearsCards(t *testing.T) {
 		api.On("CreateTeam", mock.Anything).Return(nil, testAppErr("name taken"))
 		api.On("KVSet", kvTeamRequestPrefix+"r1", mock.Anything).Return(testAppErr("kv down"))
 
+		// The request is gone, so the clicked card is closed as lost.
+		api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil)
+		api.On("GetPost", "post1").Return(nil, testAppErr("gone"))
+
 		resp := runAction(t, p, actionHandlerCase{handler: func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleTeamAction }}, true)
 
 		require.Contains(t, resp.EphemeralText, "could not be saved")
+		require.NotNil(t, resp.Update)
+		require.Contains(t, resp.Update.Message, "could not be kept")
 		api.AssertCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
 	})
 	t.Run("team guest", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubPendingLists(api)
 		stubLogs(api)
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
@@ -740,14 +754,21 @@ func TestActionHandlers_LostRequestClearsCards(t *testing.T) {
 		api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 		api.On("KVGet", kvTeamGuestRequestPrefix+"r1").Return(raw, nil)
 		api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Once()
+		stubActiveTeamMember(api, "team1", "u_req")
 		api.On("KVCompareAndDelete", kvTeamGuestRequestPrefix+"r1", raw).Return(true, nil)
 		// The invite can't be sent, and the pending request can't be written back.
 		api.On("GetTeam", "team1").Return(nil, testAppErr("gone")).Once()
 		api.On("KVSet", kvTeamGuestRequestPrefix+"r1", raw).Return(testAppErr("kv down"))
 
+		// The request is gone, so the clicked card is closed as lost.
+		api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil)
+		api.On("GetPost", "post1").Return(nil, testAppErr("gone"))
+
 		resp := runAction(t, p, actionHandlerCase{handler: func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleTeamGuestAction }}, true)
 
 		require.Contains(t, resp.EphemeralText, "failed to load team")
+		require.NotNil(t, resp.Update)
+		require.Contains(t, resp.Update.Message, "could not be kept")
 		api.AssertCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
 	})
 }

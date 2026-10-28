@@ -35,6 +35,7 @@ func TestSubmitBotRequest_RequiresDisplayName(t *testing.T) {
 
 func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -60,6 +61,7 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 
 func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)

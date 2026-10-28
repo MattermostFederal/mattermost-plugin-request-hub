@@ -136,7 +136,7 @@ body {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-/* Request forms — width for field readability; height stops 2× tall crops */
+/* Request forms: width for field readability; height stops 2× tall crops */
 .content img[src*="-modal"] {
     max-width: min(100%, 480px);
     max-height: min(68vh, 600px);
@@ -179,7 +179,7 @@ body {
     max-height: min(55vh, 400px);
 }
 
-/* Thin App Bar strip (≈2× of a ~48–56px rail) — keep near real chrome size */
+/* Thin App Bar strip (≈2× of a ~48–56px rail): keep near real chrome size */
 .content img[src*="plug-appbar"] {
     width: auto;
     max-width: min(100%, 56px);

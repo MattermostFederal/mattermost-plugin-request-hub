@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Approving — Mattermost Request Hub</title>
+    <title>Approving (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -29,6 +29,8 @@
             <span class="nav-section">Also</span>
             <a href="approving.html" class="active">Approving</a>
             <a href="slash.html">Slash commands</a>
+            <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -53,6 +55,8 @@
             With <strong>Approval team&#39;s Team Admins can approve team and Team Admin requests</strong> on, Team Admins of the approval team can
             approve team creation and Team Admin cards too.
             Only a System Admin can approve a request they made themselves.
+            A request an AI agent filed for someone arrives the same way and names that person as the requester;
+            agents can't approve or deny (see <a href="agents.html">AI agents</a>).
             Bot and webhook cards are <strong>two-step</strong> (security + system).
         </p>
 
@@ -81,11 +85,89 @@
             Nobody can approve either step of their own bot or webhook request, System Admins included.
         </p>
 
+        <h2 id="slash-command">Approving from the slash command</h2>
+        <p>
+            Every approval card ends with <em>Request ID:</em> and the request's ID.
+            <code>/mattermost-request-hub list approvals</code> lists the requests you can approve, with their
+            IDs. You can approve or deny a request of any type from any channel with
+            <code>/mattermost-request-hub approve &lt;request ID&gt;</code> or
+            <code>/mattermost-request-hub deny &lt;request ID&gt;</code>. The command makes the same checks as
+            the buttons, in the same order, and replies only to you. See
+            <a href="slash.html#approve">Slash commands</a>.
+        </p>
+        <p>
+            Once a request is approved, denied or expired, its card is closed with the outcome and the buttons
+            are removed, however the decision was made. When the request went to System Admins by direct
+            message, every copy is closed, not only the one that was clicked. When the first step of a bot or
+            webhook request is approved, every copy shows it. Copies sent before the plugin was upgraded to this
+            version are only closed when they're clicked.
+        </p>
+
+        <h2 id="rechecks">Requests that can't be approved as they stand</h2>
+        <p>
+            A request may have waited a while, so Approve checks it again before acting. If something no longer
+            holds, you'll see a private message ending <em>Deny this request instead.</em>, the request stays
+            pending and the card keeps its buttons, so you can deny it. Deny is never blocked, and an expired
+            request closes as expired whatever else has changed.
+        </p>
+        <table class="field-table">
+            <thead><tr><th>Request</th><th>Approve checks that</th></tr></thead>
+            <tbody>
+                <tr><td>Channel</td><td>The team still exists and isn't archived; the requester's account is active and they're still on the team (System Admins excepted); the channel name still matches a configured prefix</td></tr>
+                <tr><td>Channel Admin</td><td>The channel still exists and isn't archived; the requester's account is active and they're still in the channel (System Admins excepted); every nominee's account is active and they're still in the channel</td></tr>
+                <tr><td>Team Admin</td><td>The team still exists and isn't archived; the requester's account is active and they're still on the team (System Admins excepted); every nominee's account is active, isn't a bot or guest, and is still on the team</td></tr>
+                <tr><td>Team members</td><td>The team still exists, isn't archived and isn't managed by groups; the requester's account is active; every nominee's account is active</td></tr>
+                <tr><td>Guest invite</td><td>The team still exists and isn't archived; the requester's account is active and they're still on the team and in each channel (System Admins excepted); each channel still exists, isn't archived and is still in the team</td></tr>
+                <tr><td>Team</td><td>The requester's account is active</td></tr>
+                <tr><td>Bot</td><td>The requester's account is active; a chosen owner's account is active and isn't a bot; any webhook channels still exist and aren't archived, the requester is still in them (System Admins excepted), and an outgoing webhook's channel is still public</td></tr>
+                <tr><td>Webhook</td><td>The requester's account is active; the channel still exists and isn't archived; the requester is still in it (System Admins excepted); an outgoing webhook's channel is still public</td></tr>
+            </tbody>
+        </table>
+        <p>
+            Bot and webhook requests are checked before either step, so neither step is recorded on a request
+            that can no longer go through. Messages you may see include:
+        </p>
+        <ul>
+            <li><em>The requester's account is no longer active. Deny this request instead.</em></li>
+            <li><em>The requester is no longer a member of the team. Deny this request instead.</em></li>
+            <li><em>The requester is no longer a member of the channel. Deny this request instead.</em></li>
+            <li><em>The team has been archived. Deny this request instead.</em></li>
+            <li><em>The team no longer exists. Deny this request instead.</em></li>
+            <li><em>~town has been archived. Deny this request instead.</em> (with the channel's name)</li>
+            <li><em>@bob is deactivated. Deny this request instead.</em> (with the nominee's name)</li>
+            <li><em>@bob is no longer a member of the team. Deny this request instead.</em></li>
+            <li><em>~town is no longer in this team. Deny this request instead.</em></li>
+            <li><em>Outgoing webhooks need a public channel, and ~town is no longer public. Deny this request instead.</em></li>
+            <li><em>The bot owner is no longer an active user. Deny this request instead.</em></li>
+            <li><em>The channel name no longer matches the configured prefixes. Deny this request and ask the requester to submit it again.</em></li>
+        </ul>
+        <p>
+            If something can't be checked at that moment, you'll see <em>Could not check the requester right
+            now. Try again in a moment.</em> or <em>Could not check this request right now. Try again in a
+            moment.</em> instead.
+        </p>
+        <p>
+            See <a href="troubleshooting.html#requester-left">Troubleshooting</a> if a requester has left.
+        </p>
+
+        <h2 id="expired">Expired requests</h2>
+        <p>
+            A request of any type that wasn't reviewed within <em>Request expiry (days)</em> (default 30) can't be
+            approved. Clicking either button on it, or running <code>approve</code> or <code>deny</code> on it,
+            replies <em>This request has expired.</em>, marks the card
+            <em>⌛ Expired: not reviewed within N days.</em>, closes the requester's ticket as expired and posts an
+            <em>Expired</em> card to the audit channel. The requester can submit it again.
+        </p>
+        <p>
+            Bot and webhook requests count from when they were submitted, even after one approval step is done.
+            Only someone who can approve one of their steps can close them as expired.
+        </p>
+
         <h2>Bot &amp; webhook two-step approval</h2>
         <p>Each bot/webhook card needs <strong>two distinct approvers</strong> on the same card:</p>
         <ul class="entry-list">
-            <li><strong>Security first</strong> — security pool (attribute or group). System Admins do <em>not</em> auto-qualify once a security pool is set. Dual-role (both pools / security + System Admin) fills <em>security</em> only.</li>
-            <li><strong>System second</strong> — a <strong>different</strong> System Admin or system-pool member. System-only cannot click before security has signed off.</li>
+            <li><strong>Security first</strong>: security pool (attribute or group). System Admins do <em>not</em> auto-qualify once a security pool is set. Dual-role (both pools / security + System Admin) fills <em>security</em> only.</li>
+            <li><strong>System second</strong>: a <strong>different</strong> System Admin or system-pool member. System-only cannot click before security has signed off.</li>
         </ul>
         <p>
             Configure pools in System Console → Plugins → Mattermost Request Hub →
@@ -95,28 +177,28 @@
         <h3>Mode: User Attributes (ABAC / CPA)</h3>
         <p>Default. Uses Mattermost User Attributes (custom profile attributes).</p>
         <ol>
-            <li>System Console → User Management → Attributes — create attributes (admin-managed or LDAP/SAML-synced).</li>
+            <li>System Console → User Management → Attributes: create attributes (admin-managed or LDAP/SAML-synced).</li>
             <li>Set <strong>Security approver attribute name</strong> and <strong>System approver attribute name</strong>
-                to match your schema (defaults <code>security_approver</code> / <code>system_approver</code> — rename freely).</li>
+                to match your schema (defaults <code>security_approver</code> / <code>system_approver</code>, rename freely).</li>
             <li>Mark the right users with those attributes.</li>
         </ol>
         <p>
             System Admins always qualify for the <em>system</em> step.
-            They do <strong>not</strong> bypass a configured security attribute — create the attribute and mark security reviewers, or clear the security attribute name if you intentionally want the setup soft-fallback.
+            They do <strong>not</strong> bypass a configured security attribute. Create the attribute and mark security reviewers, or clear the security attribute name if you intentionally want the setup soft-fallback.
         </p>
 
         <h3>Mode: User Groups</h3>
         <p>Use when ABAC is not available but you have LDAP or plugin-synced groups. Custom groups are not used, because any user can join them.</p>
         <ol>
             <li>Create groups (System Console → User Management → Groups). Defaults expect
-                <code>security-approvers</code> and <code>system-approvers</code> — create those, or rename the plugin fields to match yours.</li>
+                <code>security-approvers</code> and <code>system-approvers</code>. Create those, or rename the plugin fields to match yours.</li>
             <li>Set mode to <strong>User Groups</strong>.</li>
             <li>Confirm <strong>Security approver user group</strong> and <strong>System approver user group</strong>
                 match the group <em>name/handle</em> (not display name). Both fields are editable in System Console.</li>
         </ol>
         <p>
             Security-group members fill security first. System-group members <em>or</em> System Admins fill system
-            second — always two different people. Someone who is in the security group <em>and</em> a System Admin
+            second, always two different people. Someone who is in the security group <em>and</em> a System Admin
             still only fills security on their click; another person must complete system.
             If the security group name is blank, System Admins may cover the security step (setup soft-fallback),
             but a second distinct approver is still required for system.

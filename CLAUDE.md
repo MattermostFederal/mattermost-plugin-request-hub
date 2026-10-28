@@ -18,10 +18,12 @@ This is a minimal Mattermost plugin template. The server is written in Go and th
 - Keep the plugin minimal: avoid adding features or abstractions that are not part of the core template.
 - Server: follow Mattermost plugin API conventions. Use `p.API.LogError`/`LogWarn`/`LogInfo` for logging.
 - Webapp: prefer functional React components with hooks.
+- No em dashes in documentation (`public/help/`, `docs/`, `README.md`) or in `plugin.json`. Use a comma, a colon, a period or parentheses. `server/help_docs_test.go` enforces this.
 
 ## Build and test
 
 - `make dist` - build the plugin bundle
 - `make check-style` - lint both Go and webapp code
 - `make test` - run tests
+- `make e2e` - run the Playwright e2e suite in `e2e/` against Mattermost in Docker (Node from `e2e/.nvmrc`)
 - `make deploy` - build and deploy to a running Mattermost server

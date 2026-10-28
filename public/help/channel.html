@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Channels — Mattermost Request Hub</title>
+    <title>Channels (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -29,6 +29,8 @@
             <span class="nav-section">Also</span>
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
+            <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -50,6 +52,7 @@
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request a Channel</strong></li>
             <li><strong>Dropdown:</strong> channel name → More actions → <strong>Request a Channel</strong></li>
             <li><strong>Slash:</strong> <code>/mattermost-request-hub channel</code> opens the form; add a prefix, a name and options to skip it (see <a href="slash.html#channel-without-form">Slash commands</a>)</li>
+            <li><strong>Agent:</strong> when <em>Offer tools to Agents</em> is on, ask an AI agent to file it for you (see <a href="agents.html">AI agents</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -90,8 +93,29 @@
             </p>
         </div>
 
+        <div class="alert alert-info">
+            <div class="alert-title">Limits</div>
+            <p>
+                A System Admin sets how many channel requests you can have waiting for review at once
+                (<em>Pending requests per user</em>; each request type is counted separately). At the
+                limit, you'll see <em>you have N pending requests waiting for review; you can submit more once
+                some are approved, denied or expire</em>.
+            </p>
+            <p>
+                You can't have the same request pending twice: asking again for a channel name you're already
+                waiting on shows <em>you already have a pending request for ~name in this team</em>. Requests
+                that aren't reviewed within <em>Request expiry (days)</em> expire, and your ticket DM says so.
+            </p>
+        </div>
+
         <h2 id="on-approve">On approve</h2>
         <p>Approval card → Approve creates the channel and posts a welcome message.</p>
+        <p>
+            Approve checks the request again first. If the team has been archived, the requester's account is
+            no longer active, they've left the team, or the channel name no longer matches the configured
+            prefixes, the approver gets a private message saying so; the request stays pending and the card
+            keeps its buttons, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>). An expired request can't be approved (see <a href="approving.html#expired">Expired requests</a>).
+        </p>
         <img src="images/channel-request/mattermost-creation-approval-card.png" alt="Channel creation approval card">
         <img src="images/channel-request/mattermost-creation-welcome.png" alt="Welcome message in the new channel">
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bots — Mattermost Request Hub</title>
+    <title>Bots (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -29,6 +29,8 @@
             <span class="nav-section">Also</span>
             <a href="approving.html">Approving</a>
             <a href="slash.html">Slash commands</a>
+            <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -42,7 +44,7 @@
         <h1>Request a bot</h1>
         <p class="tagline">
             Optional access token + incoming/outgoing webhooks on the same ticket.
-            <strong>Two-step</strong> approval (security + system) — see <a href="approving.html">Approving</a>.
+            <strong>Two-step</strong> approval (security + system). See <a href="approving.html">Approving</a>.
         </p>
 
         <h2 id="how-to-open">How to open</h2>
@@ -50,7 +52,8 @@
             <li><strong>Native:</strong> Main Menu → Integrations → <strong>Bot Accounts</strong> (non–System Admins)</li>
             <li><strong>Dropdown:</strong> channel More actions → <strong>Request a Bot</strong></li>
             <li><strong>Hub:</strong> right App Bar <strong>plug</strong> → Requests → <strong>Request a Bot</strong></li>
-            <li><strong>Slash:</strong> <code>/mattermost-request-hub bot</code> opens the form; add arguments to skip it (see <a href="slash.html#other-without-form">Slash commands</a>)</li>
+            <li><strong>Slash:</strong> <code>/mattermost-request-hub bot</code> opens the form; add arguments to skip it (see <a href="slash.html#bot">Slash commands</a>)</li>
+            <li><strong>Agent:</strong> when <em>Offer tools to Agents</em> is on, ask an AI agent to file it for you (see <a href="agents.html">AI agents</a>)</li>
         </ul>
         <div class="entry-shots">
             <figure>
@@ -75,12 +78,34 @@
         <img src="images/bot-request/mattermost-bot-modal.png" alt="Request a Bot Account form">
         <img src="images/bot-request/mattermost-bot-approval-card.png" alt="Bot approval card">
         <img src="images/bot-request/mattermost-bot-token-dm.png" alt="Bot token DM">
-        <p>Tokens in the approval DM auto-delete after <strong>72 hours</strong> — save them securely.</p>
+        <p>Tokens in the approval DM auto-delete after <strong>72 hours</strong>. Save them securely.</p>
+        <p>A token expires after <em>Bot token lifetime</em>, one year by default, and the DM gives the date. From a month before, you get a weekly reminder, then a daily one in the last week. Ask for a new token before then.</p>
+        <p>
+            Before either approval step, Approve checks that the requester and any chosen owner are still active,
+            and that any webhook channels still exist, the requester is still in them, and an outgoing webhook's
+            channel is still public. If not, the approver gets a private message and the
+            request stays as it was, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>).
+        </p>
+
+        <div class="alert alert-info">
+            <div class="alert-title">Limits</div>
+            <p>
+                A System Admin sets how many bot requests you can have waiting for review at once
+                (<em>Pending requests per user</em>; each request type is counted separately). At the limit,
+                you'll see <em>you have N pending requests waiting for review; you can submit more once some are
+                approved, denied or expire</em>.
+            </p>
+            <p>
+                Asking again for a bot username you're already waiting on shows <em>you already have a pending
+                request for bot @username</em>. Requests that aren't reviewed within <em>Request expiry (days)</em> of being submitted expire, even
+                if one approval step is done, and your ticket DM says so.
+            </p>
+        </div>
 
         <h2 id="add-to-team">Add the bot to a team</h2>
         <p>
             Creating a bot does not put it on a team. After the bot exists, use
-            <a href="team-member.html">Request Team Members</a> — search for the bot username
+            <a href="team-member.html">Request Team Members</a>, search for the bot username
             and submit the same way you would add a person. System Admins approve that ticket
             in <code>mattermost-team-requests</code>.
         </p>

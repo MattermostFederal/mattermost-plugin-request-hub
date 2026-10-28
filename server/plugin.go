@@ -7,8 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mattermost/mattermost-plugin-agents/v2/external/pluginmcp"
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 )
 
@@ -23,12 +25,23 @@ type Plugin struct {
 	configurationLock sync.RWMutex
 	configuration     *configuration
 
+	// mcpSyncLock serializes starting and stopping the MCP server.
+	// mcpServerLock guards mcpServer and mcpActive, which ServeHTTP reads.
+	// mcpActive is true between OnActivate and OnDeactivate.
+	mcpSyncLock   sync.Mutex
+	mcpServerLock sync.RWMutex
+	mcpServer     *pluginmcp.Server
+	mcpActive     bool
+
 	// botUserID is the user ID of the bot account used to post approval requests and notify
 	// requesters of the outcome.
 	botUserID string
 
 	// twoStepSyncStop cancels the periodic two-step channel reconciler.
 	twoStepSyncStop chan struct{}
+
+	// tokenReminderJob sends the bot token expiry reminders.
+	tokenReminderJob *cluster.Job
 
 	// Test seams for webhook create/delete side effects (nil in production).
 	createWebhookFn func(req *webhookRequest, adminUserID string) (dmMsg, hookID string, err error)
@@ -56,8 +69,21 @@ func (p *Plugin) OnActivate() error {
 		p.API.LogWarn("bot profile image asset not found; place a PNG at assets/mattermost-icon.png to activate it")
 	}
 
+	if err := p.migratePendingRequests(); err != nil {
+		p.API.LogError("channel-requests: failed to update stored requests", "error", err.Error())
+	}
+
 	if err := p.API.RegisterCommand(getCommand()); err != nil {
 		return errors.Wrap(err, "failed to register slash command")
+	}
+
+	// Start the MCP server before the background work below, so a failure
+	// here stops activation without leaving goroutines running.
+	p.mcpServerLock.Lock()
+	p.mcpActive = true
+	p.mcpServerLock.Unlock()
+	if err := p.syncMCPServer(); err != nil {
+		return errors.Wrap(err, "failed to initialize the MCP server")
 	}
 
 	// Ensure approval channels exist in the background so activation doesn't
@@ -89,9 +115,13 @@ func (p *Plugin) OnActivate() error {
 		// "Mattermost: Request Hub" sidebar category for all current members
 		// (also renames a short-lived "Mattermost Requests" category if present).
 		p.migrateTicketChannelsToManagedCategory()
+		// One-shot: bookmark the docs in request channels created before
+		// channels were bookmarked on creation.
+		p.bookmarkDocsInExistingChannels()
 	}()
 
 	p.startTwoStepChannelReconciler()
+	p.startTokenReminderJob()
 
 	// Delete any token DM posts whose 72-hour window lapsed while the plugin
 	// was not running, and re-arm in-process timers for the remainder.
@@ -102,6 +132,8 @@ func (p *Plugin) OnActivate() error {
 
 func (p *Plugin) OnDeactivate() error {
 	p.stopTwoStepChannelReconciler()
+	p.stopTokenReminderJob()
+	p.stopMCPServer()
 	return nil
 }
 

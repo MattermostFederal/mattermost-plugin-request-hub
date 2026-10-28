@@ -43,6 +43,7 @@ func TestSubmitTeamCreationRequest_InvalidURLName(t *testing.T) {
 
 func TestSubmitTeamCreationRequest_StoresAndPostsRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -162,6 +163,7 @@ func TestPostTeamCreationApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *t
 		}},
 	}, nil)
 	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead"}, nil)
+	api.On("GetUsersByIds", []string{"appta"}).Return([]*model.User{{Id: "appta", Username: "lead"}}, nil)
 	api.On("KVSet", kvApprovalCardsPrefix+"r1", mock.Anything).Return(nil)
 
 	var approvalPost *model.Post
@@ -247,4 +249,17 @@ func TestHandleTeamAction_ApprovalTeamAdminCannotApproveOwnRequest(t *testing.T)
 	require.Equal(t, ownRequestText, resp.EphemeralText)
 	api.AssertNotCalled(t, "KVCompareAndDelete", mock.Anything, mock.Anything)
 	api.AssertNotCalled(t, "CreateTeam", mock.Anything)
+}
+
+func TestTeamScopeApprovalHeader_ExerciseMentionsNobody(t *testing.T) {
+	api := &plugintest.API{}
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam"})
+	ch := &model.Channel{Id: "teams-ch", TeamId: "appteam-id"}
+
+	header := p.teamScopeApprovalHeader(ch, "Team Admin request", true)
+
+	require.Equal(t, exerciseMarker+": a Team Admin request needs System Admin review.", header)
+	api.AssertNotCalled(t, "GetUsers", mock.Anything)
 }

@@ -1,4 +1,4 @@
-# Team Requests — User Guide
+# Team Requests: User Guide
 
 Mattermost Request Hub lets members **request a new team** (and, separately,
 **request Team Admin** on a team they already belong to) instead of creating or
@@ -15,11 +15,11 @@ is created (or the nominees are promoted) and the requester is notified by DM.
 
 This guide covers:
 
-- [Requesting a new team](#requesting-a-new-team) — any member
-- [Requesting Team Admin](#requesting-team-admin) — members who are not already Team Admin
-- [Messaging while a request is pending](#messaging-while-a-request-is-pending) — two-way threads
-- [Approving requests](#approving-requests) — System Admins, and approval-team Team Admins when enabled
-- [Admin setup](#admin-setup) — system admins
+- [Requesting a new team](#requesting-a-new-team): any member
+- [Requesting Team Admin](#requesting-team-admin): members who are not already Team Admin
+- [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
+- [Approving requests](#approving-requests): System Admins, and approval-team Team Admins when enabled
+- [Admin setup](#admin-setup): system admins
 
 ---
 
@@ -35,6 +35,9 @@ Same **Request a New Team** form from every entry point.
 - **Hub:** right App Bar **plug** → Requests → **Request a Team**
 - **Slash:** `/mattermost-request-hub team` (or skip the form with
   `/mattermost-request-hub team <Team name> [options]`)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_team` tool; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/team-request/mattermost-team-native-menu.png" alt="Team sidebar" width="240">
@@ -73,6 +76,9 @@ you're already a Team Admin or System Admin** for that team.
 - **Hub:** right App Bar **plug** → Requests → **Request Team Admin**
 - **Slash:** `/mattermost-request-hub team-admin` (or skip the form with
   `/mattermost-request-hub team-admin @user [@user ...]`)
+- **Agent:** when **Offer tools to Agents** is on, ask an agent from the
+  Mattermost Agents plugin to file it for you (the `request_team_admin` tool; see the
+  [admin guide](admin-guide.md#agents-tools))
 
 <p>
 <img src="images/team-admin-request/mattermost-team-admin-native.png" alt="Team sidebar" width="240">
@@ -89,13 +95,22 @@ You'll get a DM when a System Admin responds.
 
 ---
 
+**Limits.** A System Admin sets how many team requests and how many Team Admin requests you can have waiting for review
+at once (each request type is counted separately). At the limit you'll see *you
+have N pending requests waiting for review; you can submit more once some are
+approved, denied or expire*. Asking again for a team URL you're already waiting on shows *you already have a
+pending request for a team named name*; asking again for the same people in the
+same team shows *you already have a pending Team Admin request for these people
+in this team*. Requests that aren't reviewed within the configured number of days expire, and
+you'll get a direct message saying so.
+
 ## Messaging while a request is pending
 
 Every request opens a **linked pair of threads**: one in the approval channel
 (for reviewers) and one in a DM from the bot (for you). Replies are relayed both
 ways.
 
-Use Mattermost's **Thread** panel (right-hand sidebar) — not a new top-level
+Use Mattermost's **Thread** panel (right-hand sidebar), not a new top-level
 message. Open the thread from the request card ("Reply" / reply count).
 
 - **Approver:** ask in the approval Thread (e.g. *Why do you need this new team?*)
@@ -128,9 +143,13 @@ are added to that channel and can approve or deny too.
 
 <img src="images/team-request/mattermost-team-approval-card.png" alt="Team creation approval card" width="720">
 
-- **Approve** — creates the team, adds the requester, and (if they checked the
+- **Approve**: creates the team, adds the requester, and (if they checked the
   box) promotes them to Team Admin. The requester is notified by DM.
-- **Deny** — closes the request and notifies the requester by DM.
+- **Deny**: closes the request and notifies the requester by DM.
+
+Approve first checks that the requester's account is still active. If it isn't,
+you'll get a private message (*The requester's account is no longer active. Deny
+this request instead.*) and the request stays pending, so deny it.
 
 Requests from System Admins are queued for approval too. Only a System Admin can
 approve a request they made themselves.
@@ -150,7 +169,14 @@ request they made themselves or one that nominates them.
   A request from the Request Hub or More actions nominates the requester; the slash
   command and its form can nominate other members of the team. Nominees must already
   be on the team.
-- **Deny** — closes the request and notifies the requester by DM.
+- **Deny**: closes the request and notifies the requester by DM.
+
+Approve first checks that the team still exists and isn't archived, that the
+requester is still active and on the team (System Admins excepted), and that
+every nominee is still an active member of the team and not a bot or guest. If
+not, you'll get a private message saying so (for example *@bob is no longer a
+member of the team. Deny this request instead.*) and the request stays pending,
+so deny it.
 
 ---
 

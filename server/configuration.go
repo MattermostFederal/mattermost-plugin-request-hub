@@ -67,8 +67,11 @@ type channelPrefix struct {
 //  1. Approval routing (team + channel slugs)
 //  2. Naming enforcement (structured prefix list — required)
 //  3. Approver policy (who can approve)
-//  4. Notification preferences (DM + audit channel + welcome post)
-//  5. Rate limits
+//  4. Requestable types (per-type toggles)
+//  5. Multi-step approver pools (bot / webhook two-step)
+//  6. Agents (MCP tools)
+//  7. Request limits (pending requests per user, expiry)
+//  8. Exercise mode
 type configuration struct {
 	// --- 1. Approval routing ---
 
@@ -129,8 +132,87 @@ type configuration struct {
 	SecurityApproverGroup string
 	SystemApproverGroup   string
 
+	// --- 6. Agents ---
+	// EnableMCP offers the request tools to the Mattermost Agents plugin.
+	// Off by default; syncMCPServer applies changes on save.
+	EnableMCP bool
+
+	// --- 7. Request limits ---
+	// Both are text settings holding whole numbers; 0 turns the limit off.
+	// Blank or invalid values fall back to the defaults below. They apply to
+	// every request type, and each type is counted separately.
+	MaxPendingRequestsPerUser string
+	RequestExpiryDays         string
+
+	// BotTokenLifetimeMonths is how long an access token issued with a bot
+	// request lasts: a dropdown from 1 to 12 months.
+	BotTokenLifetimeMonths string
+
+	// --- 8. Exercise mode ---
+	// EnableExercise lets System Admins run the exercise subcommand.
+	// ExerciseScenarioJSON replaces the built-in fictional scenario when
+	// set; see loadExerciseScenario.
+	EnableExercise       bool
+	ExerciseScenarioJSON string
+
 	// --- Parsed / computed (unexported) ---
-	prefixes []channelPrefix
+	prefixes            []channelPrefix
+	maxPending          int
+	expiryDays          int
+	tokenLifetimeMonths int
+}
+
+// The defaults match plugin.json. The maximums keep the settings in a
+// sensible range.
+const (
+	defaultMaxPendingRequests = 5
+	defaultRequestExpiryDays  = 30
+	defaultBotTokenLifetime   = 12
+	maxPendingRequestsLimit   = 1000
+	maxRequestExpiryDays      = 3650
+	maxBotTokenLifetime       = 12
+)
+
+// MaxPending returns how many requests of each kind one user may have
+// pending. 0 means no limit.
+func (c *configuration) MaxPending() int {
+	return c.maxPending
+}
+
+// ExpiryDays returns how many days a request stays approvable. 0 means
+// requests never expire.
+func (c *configuration) ExpiryDays() int {
+	return c.expiryDays
+}
+
+// TokenLifetimeMonths returns how many months a bot access token lasts,
+// from 1 to 12. A configuration that was never parsed gets the default.
+func (c *configuration) TokenLifetimeMonths() int {
+	if c.tokenLifetimeMonths == 0 {
+		return defaultBotTokenLifetime
+	}
+	return c.tokenLifetimeMonths
+}
+
+// allowsChannelName reports whether name still fits the configured prefix
+// list: it must start with a configured prefix, and the rest must satisfy
+// that prefix's suffix rule. The longest matching prefix is used, as in
+// resolvePrefixedName.
+func (c *configuration) allowsChannelName(name string) bool {
+	var entry *channelPrefix
+	for i := range c.prefixes {
+		if strings.HasPrefix(name, c.prefixes[i].Prefix) && (entry == nil || len(c.prefixes[i].Prefix) > len(entry.Prefix)) {
+			entry = &c.prefixes[i]
+		}
+	}
+	if entry == nil {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, entry.Prefix)
+	if suffix == "" {
+		return false
+	}
+	return entry.SuffixPattern == nil || entry.SuffixPattern.MatchString(suffix)
 }
 
 // TeamChannelName returns the fixed per-team approval channel URL name.
@@ -243,6 +325,9 @@ func (p *Plugin) OnConfigurationChange() error {
 	// entries are logged and skipped rather than failing the whole
 	// activation — a typo in one line should not wedge the plugin.
 	configuration.prefixes = parsePrefixList(configuration.ChannelNamePrefixes, p.API.LogError)
+	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
+	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
+	configuration.tokenLifetimeMonths = parseTokenLifetimeMonths(configuration.BotTokenLifetimeMonths, p.API.LogWarn)
 
 	// Detect PerTeamApprovalChannels being enabled for the first time so we can
 	// backfill channels for teams that existed before the setting was toggled on.
@@ -278,6 +363,10 @@ func (p *Plugin) OnConfigurationChange() error {
 		go p.syncTwoStepApproverChannels()
 	}
 
+	if err := p.syncMCPServer(); err != nil {
+		p.API.LogError("channel-requests: failed to apply the MCP setting", "error", err.Error())
+	}
+
 	return nil
 }
 
@@ -294,6 +383,44 @@ func twoStepPoolFingerprint(c *configuration) string {
 		strings.TrimSpace(c.SecurityApproverAttribute),
 		strings.TrimSpace(c.SystemApproverAttribute),
 	}, "|")
+}
+
+// parseNonNegativeInt parses a whole-number setting. A blank value means the
+// default; anything that isn't a whole number 0 or greater is logged and
+// also falls back to the default. Values above max are logged and capped.
+func parseNonNegativeInt(raw string, def, maxValue int, key string, logWarn func(msg string, keyValuePairs ...any)) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	// isPositiveInt only checks for digits, so it also rejects signs.
+	n, err := strconv.Atoi(raw)
+	if err != nil || !isPositiveInt(raw) {
+		logWarn("channel-requests: setting must be a whole number 0 or greater; using the default", "setting", key, "value", raw, "default", def)
+		return def
+	}
+	if n > maxValue {
+		logWarn("channel-requests: setting is above its maximum; using the maximum", "setting", key, "value", raw, "maximum", maxValue)
+		return maxValue
+	}
+	return n
+}
+
+// parseTokenLifetimeMonths parses the Bot token lifetime setting. The
+// dropdown only offers 1 to 12, so anything else came from config.json and
+// falls back to the default.
+func parseTokenLifetimeMonths(raw string, logWarn func(msg string, keyValuePairs ...any)) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultBotTokenLifetime
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || !isPositiveInt(raw) || n < 1 || n > maxBotTokenLifetime {
+		logWarn("channel-requests: bot token lifetime must be 1 to 12 months; using the default",
+			"setting", "BotTokenLifetimeMonths", "value", raw, "default", defaultBotTokenLifetime)
+		return defaultBotTokenLifetime
+	}
+	return n
 }
 
 // bumpLegacyDefaultSuffixMax rewrites numeric third fields equal to the

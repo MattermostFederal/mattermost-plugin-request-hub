@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,6 +66,8 @@ func TestSubmitAdminRequest_ValidationErrors(t *testing.T) {
 func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
+	stubSubmittedRequestExists(api, kvAdminRequestPrefix)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam"})
@@ -82,13 +85,14 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)
 	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(pluginChannel("appch", "mattermost-channel-requests"), nil)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sys1"}}, nil)
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1"}}, nil)
 	api.On("GetTeamMembers", "team1", mock.Anything, mock.Anything).Return([]*model.TeamMember{
 		{TeamId: "team1", UserId: "ta1", Roles: "team_user team_admin"},
 		{TeamId: "team1", UserId: "tu1", Roles: "team_user"},
 	}, nil)
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1", Username: "lead"}, nil)
+	api.On("GetUsersByIds", []string{"ta1"}).Return([]*model.User{{Id: "ta1", Username: "lead"}}, nil)
 
 	// Capture only the post going to the approval channel so the requester DM
 	// (a second CreatePost call) doesn't overwrite the assertion target.
@@ -131,6 +135,8 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 func TestSubmitAdminRequest_NoApprovalChannelFallsBackToSystemAdmins(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
+	stubSubmittedRequestExists(api, kvAdminRequestPrefix)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	// No approval channel configured -> DM every System Admin, mirroring the
@@ -148,8 +154,8 @@ func TestSubmitAdminRequest_NoApprovalChannelFallsBackToSystemAdmins(t *testing.
 
 	// adminApprovalHeader also lists approvers; supply one System Admin who is
 	// both an approver mention and a DM recipient.
-	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
-	api.On("GetTeamMembers", "team1", mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil)
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 
 	// Capture only the post going to the system-admin DM so the requester DM
@@ -331,6 +337,7 @@ func TestSubmitAdminRequest_RequesterLookupFails(t *testing.T) {
 func TestSubmitAdminRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{})
@@ -347,6 +354,7 @@ func TestSubmitAdminRequest_StoreFailure(t *testing.T) {
 func TestSubmitAdminRequest_DeliveryFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{}) // no approval channel: DMs only
@@ -373,26 +381,75 @@ func TestAdminApprovalHeader_NoApproversIsPlainText(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "bot-user-id"}}, nil)
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "bot-user-id", IsBot: true}}, nil)
 	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
 
 	require.Equal(t, "A Channel Admin request needs your review.", p.adminApprovalHeader(&model.Channel{TeamId: "team1"}))
 }
 
-func TestAdminApproverIDs_DedupesAndSkipsBot(t *testing.T) {
+func TestAdminApproverIDs_DedupesAndSkipsNonHumanAccounts(t *testing.T) {
 	api := &plugintest.API{}
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "bot-user-id"}, {Id: "a1"}}, nil)
+	remote := "remote1"
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{
+		{Id: "bot-user-id"},
+		{Id: "a1"},
+		{Id: "otherbot", IsBot: true},
+		{Id: "gone", DeleteAt: 123},
+		{Id: "shared", RemoteId: &remote},
+	}, nil)
 	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{
 		{UserId: "a1", Roles: "team_user team_admin"}, // also a System Admin
 		{UserId: "t2", SchemeAdmin: true},
+		{UserId: "tbot", SchemeAdmin: true},
+		{UserId: "tleft", SchemeAdmin: true, DeleteAt: 1},
+		{UserId: "tmissing", SchemeAdmin: true},
 		{UserId: "u3", Roles: "team_user"},
 		{UserId: "", Roles: "team_admin"},
+	}, nil)
+	// tmissing can't be loaded, so GetUsersByIds leaves it out.
+	api.On("GetUsersByIds", []string{"t2", "tbot", "tmissing"}).Return([]*model.User{
+		{Id: "t2"},
+		{Id: "tbot", IsBot: true},
 	}, nil)
 
 	require.Equal(t, []string{"a1", "t2"}, p.adminApproverIDs("team1"))
 }
+
+func TestAdminApproverIDs_TeamAdminLookupFails(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "a1"}}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{{UserId: "t2", SchemeAdmin: true}}, nil)
+	api.On("GetUsersByIds", []string{"t2"}).Return(nil, testAppErr("db down"))
+
+	require.Equal(t, []string{"a1"}, p.adminApproverIDs("team1"))
+	api.AssertCalled(t, "LogWarn", "failed to load Team Admins for admin-request approvers", "team_id", "team1", "error", mock.Anything)
+}
+
+func TestAdminApproverIDs_PagesTeamMembers(t *testing.T) {
+	api := &plugintest.API{}
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	full := make([]*model.TeamMember, 200)
+	for i := range full {
+		full[i] = &model.TeamMember{UserId: fmt.Sprintf("tu%03d", i), Roles: "team_user"}
+	}
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return(full, nil)
+	api.On("GetTeamMembers", "team1", 1, 200).Return([]*model.TeamMember{{UserId: "last", SchemeAdmin: true}}, nil)
+	api.On("GetUsersByIds", []string{"last"}).Return([]*model.User{{Id: "last"}}, nil)
+
+	require.Equal(t, []string{"last"}, p.adminApproverIDs("team1"))
+}
+
+// isSystemAdminQuery matches the GetUsers call that lists active System Admins.
+var isSystemAdminQuery = mock.MatchedBy(func(o *model.UserGetOptions) bool {
+	return o.Role == model.SystemAdminRoleId && o.Active
+})
 
 func TestLoadAdminRequest_Errors(t *testing.T) {
 	t.Run("store read fails", func(t *testing.T) {
@@ -453,4 +510,85 @@ func TestPromoteChannelAdmins_SkipsEmptyIDs(t *testing.T) {
 
 	require.Equal(t, []string{"u_nom"}, got)
 	api.AssertNotCalled(t, "GetChannelMember", "chX", "")
+}
+
+func TestSubmitAdminRequestPendingLimitAndDuplicate(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{maxPending: 1})
+
+	const secondNomineeID = "secondnomineeidaaaaaaaaaaa"
+	lists := fakePendingLists(api)
+	mockAdminRequestPrereqs(api)
+	api.On("GetChannelMember", "chX", secondNomineeID).Return(&model.ChannelMember{}, nil)
+	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+	// The first request is still stored, so its entry keeps counting.
+	api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvAdminRequestPrefix) })).Return([]byte("{}"), nil)
+	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng"}, nil)
+	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nom"}, nil)
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1", Username: "root"}}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
+	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
+	api.On("GetDirectChannel", "sys1", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+	api.On("GetDirectChannel", "u1", "bot-user-id").Return(&model.Channel{Id: "dm2"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+
+	_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+	require.NoError(t, err)
+	require.Len(t, decodeEntries(t, lists[pendingListKey(pendingKindAdmin, "u1")]), 1)
+
+	_, err = p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+	require.EqualError(t, err, "you already have a pending Channel Admin request for these people in this channel")
+
+	_, err = p.submitAdminRequest("u1", "chX", []string{secondNomineeID})
+	require.ErrorContains(t, err, "you have 1 pending requests waiting for review")
+}
+
+func TestSubmitAdminRequestFailureFreesPendingSlot(t *testing.T) {
+	for name, setup := range map[string]func(api *plugintest.API){
+		"store fails": func(api *plugintest.API) {
+			api.On("KVSet", mock.Anything, mock.Anything).Return(testAppErr("kv down"))
+		},
+		"delivery fails": func(api *plugintest.API) {
+			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+			api.On("KVDelete", mock.Anything).Return(nil)
+			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng"}, nil)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nom"}, nil)
+			api.On("GetUsers", mock.Anything).Return(nil, testAppErr("db down"))
+			api.On("GetTeamMembers", "team1", 0, 200).Return(nil, testAppErr("db down"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogs(api)
+			defer api.AssertExpectations(t)
+			p := newTestPlugin(api)
+			p.setConfiguration(&configuration{})
+
+			lists := fakePendingLists(api)
+			mockAdminRequestPrereqs(api)
+			setup(api)
+
+			_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+			require.Error(t, err)
+			require.Empty(t, lists, "the pending slot is given back")
+		})
+	}
+}
+
+func TestSubmitAdminRequestPendingListUnavailable(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{})
+
+	mockAdminRequestPrereqs(api)
+	api.On("KVGet", isPendingListKey).Return(nil, testAppErr("kv down"))
+
+	_, err := p.submitAdminRequest("u1", "chX", []string{testNomineeID})
+	require.EqualError(t, err, "could not save your request; try again")
+	api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
 }

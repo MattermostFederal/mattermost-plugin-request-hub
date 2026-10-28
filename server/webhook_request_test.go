@@ -94,6 +94,7 @@ func TestSubmitWebhookRequest_RejectsUnknownType(t *testing.T) {
 // approval instead of creating the webhook.
 func TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -121,6 +122,7 @@ func TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses(t *testing.T) {
 
 func TestSubmitWebhookRequest_RegularUserQueuesInWebhookChannel(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -151,6 +153,7 @@ func TestSubmitWebhookRequest_RegularUserQueuesInWebhookChannel(t *testing.T) {
 
 func TestSubmitWebhookRequest_OutgoingQueuesWithCallbackURL(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)

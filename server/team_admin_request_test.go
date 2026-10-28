@@ -47,6 +47,7 @@ func TestSubmitTeamAdminRequest_RequesterMustBeTeamMember(t *testing.T) {
 
 func TestSubmitTeamAdminRequest_StoresAndPostsRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -193,6 +194,7 @@ func TestPostTeamAdminApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *test
 		}},
 	}, nil)
 	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead"}, nil)
+	api.On("GetUsersByIds", []string{"appta"}).Return([]*model.User{{Id: "appta", Username: "lead"}}, nil)
 	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
 	api.On("KVSet", kvApprovalCardsPrefix+"r1", mock.Anything).Return(nil)
 
@@ -323,6 +325,9 @@ func TestHandleTeamAdminAction_ApprovalTeamAdminApproves(t *testing.T) {
 	stubApprovalTeamAdmin(api, "appta")
 	api.On("KVGet", kvTeamAdminRequestPrefix+"r1").Return(raw, nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Sales"}, nil)
+	// Approve re-checks that the requester and nominee are still on the team.
+	api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{TeamId: "team1", UserId: "u_req"}, nil)
+	api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{TeamId: "team1", UserId: testNomineeID}, nil)
 	api.On("KVCompareAndDelete", kvTeamAdminRequestPrefix+"r1", raw).Return(true, nil)
 	api.On("CreateTeamMember", "team1", testNomineeID).Return(&model.TeamMember{}, nil)
 	api.On("UpdateTeamMemberRoles", "team1", testNomineeID, teamAdminRoles).Return(&model.TeamMember{}, nil)

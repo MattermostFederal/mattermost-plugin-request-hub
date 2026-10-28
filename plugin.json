@@ -1,12 +1,12 @@
 {
     "id": "com.mattermostfederal.mattermost-plugin-request-hub",
     "name": "Mattermost Request Hub",
-    "description": "Request Hub: gated requests for channel creation, Channel Admin, team creation/membership/guests, Team Admin, bots, and webhooks — routed to approvers with two-way messaging.",
+    "description": "Request Hub: gated requests for channel creation, Channel Admin, team creation/membership/guests, Team Admin, bots, and webhooks, routed to approvers with two-way messaging.",
     "homepage_url": "https://github.com/MattermostFederal/mattermost-plugin-request-hub",
     "support_url": "https://github.com/MattermostFederal/mattermost-plugin-request-hub/issues",
     "icon_path": "assets/icon.svg",
     "version": "0.6.2",
-    "min_server_version": "10.5.0",
+    "min_server_version": "11.3.0",
     "server": {
         "executables": {
             "linux-amd64": "server/dist/plugin-linux-amd64",
@@ -19,7 +19,7 @@
         "bundle_path": "webapp/dist/main.js"
     },
     "settings_schema": {
-        "header": "## Mattermost Request Hub\n\nGovernance plugin: non-admins request channel creation, Channel Admin promotion, Team Admin promotion, team creation, team membership, guest invites, bot accounts, and incoming/outgoing webhooks — all via /mattermost-request-hub or the sidebar UI. Requests route to the appropriate approval channel; System Admins (and optionally Team Admins) approve or deny with full two-way messaging.\n\n**Bot and webhook requests use two-step approval** — one security approver and one system approver, identified by the User Attributes configured below.\n\n**Breaking change:** plugin ID changed in 0.5.0 — uninstall the previous Mattermost Request Hub / channel-requests bundle before installing this one (settings and pending KV tickets do not migrate).\n\n### Approval channel routing\n\nThe plugin auto-creates these private channels in the approval team on first use:\n\n| Request type | Auto-created channel |\n|---|---|\n| Channel creation, Channel Admin | Mattermost: Channel Requests (root or per-team) |\n| Bot account creation | mattermost-bot-requests |\n| Incoming / outgoing webhooks | mattermost-webhook-requests |\n| Team creation, Team Admin, team member, guest | mattermost-team-requests |\n| Audit log | mattermost-audit-requests |\n\nAll channels are seeded with System Admins automatically. Configure the root approval team below, then set up channel domain prefixes.",
+        "header": "## Mattermost Request Hub\n\nGovernance plugin: non-admins request channel creation, Channel Admin promotion, Team Admin promotion, team creation, team membership, guest invites, bot accounts, and incoming/outgoing webhooks, all via /mattermost-request-hub or the sidebar UI. Requests route to the appropriate approval channel; System Admins (and optionally Team Admins) approve or deny with full two-way messaging.\n\n**Bot and webhook requests use two-step approval**: one security approver and one system approver, identified by the User Attributes configured below.\n\n**Breaking change:** plugin ID changed in 0.5.0. Uninstall the previous Mattermost Request Hub / channel-requests bundle before installing this one (settings and pending KV tickets do not migrate).\n\n### Approval channel routing\n\nThe plugin auto-creates these private channels in the approval team on first use:\n\n| Request type | Auto-created channel |\n|---|---|\n| Channel creation, Channel Admin | Mattermost: Channel Requests (root or per-team) |\n| Bot account creation | mattermost-bot-requests |\n| Incoming / outgoing webhooks | mattermost-webhook-requests |\n| Team creation, Team Admin, team member, guest | mattermost-team-requests |\n| Audit log | mattermost-audit-requests |\n\nAll channels are seeded with System Admins automatically. Configure the root approval team below, then set up channel domain prefixes.\n\n[View the documentation](/plugins/com.mattermostfederal.mattermost-plugin-request-hub/public/help/docs.html)",
         "settings": [
             {
                 "key": "AllowChannelRequests",
@@ -61,7 +61,7 @@
                 "display_name": "Allow team guest requests",
                 "type": "bool",
                 "default": false,
-                "help_text": "When enabled, users can request a guest invite to a team. Email is required. On approval, Mattermost emails a channel-scoped guest invitation (InviteGuestsToTeam) — not a regular team signup link. Requires Guest Accounts enabled. Routed to mattermost-team-requests."
+                "help_text": "When enabled, users can request a guest invite to a team. Email is required. On approval, Mattermost emails a channel-scoped guest invitation (InviteGuestsToTeam), not a regular team signup link. Requires Guest Accounts enabled. Routed to mattermost-team-requests."
             },
             {
                 "key": "AllowBotTokenRequests",
@@ -118,7 +118,7 @@
                 "type": "text",
                 "default": "security-approvers",
                 "placeholder": "security-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers — change freely. Clear the field only if you intentionally want System Admins to cover security during setup."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers. Change it freely. Clear the field only if you intentionally want System Admins to cover security during setup."
             },
             {
                 "key": "SystemApproverGroup",
@@ -126,7 +126,7 @@
                 "type": "text",
                 "default": "system-approvers",
                 "placeholder": "system-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers — change freely. Clear the field to use System Admins only for that step."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers. Change it freely. Clear the field to use System Admins only for that step."
             },
             {
                 "key": "ApprovalTeam",
@@ -158,6 +158,98 @@
                 "display_name": "Channel domain prefixes",
                 "type": "custom",
                 "help_text": "Structured editor: define allowed channel prefixes (team-, project-, etc.) with descriptions and suffix rules. Requesters pick from a dropdown; the resulting channel URL is prefix+suffix."
+            },
+            {
+                "key": "EnableMCP",
+                "display_name": "Offer tools to Agents",
+                "type": "bool",
+                "default": false,
+                "help_text": "When true, the Mattermost Agents plugin can list prefixes, file requests of every type on a user's behalf and look up pending ones, under the same rules and per-type settings as the request forms. Every request goes to the approvers, including System Admins' requests. Agents can never approve or deny. Takes effect on save; per-tool access is managed in Agents' System Console."
+            },
+            {
+                "key": "MaxPendingRequestsPerUser",
+                "display_name": "Pending requests per user",
+                "type": "text",
+                "default": "5",
+                "help_text": "How many requests of each type one user can have waiting for review, up to 1000. Each type is counted separately. 0 means no limit."
+            },
+            {
+                "key": "RequestExpiryDays",
+                "display_name": "Request expiry (days)",
+                "type": "text",
+                "default": "30",
+                "help_text": "Pending requests older than this can no longer be approved, and stop counting toward the per-user limit. At most 3650. 0 means requests never expire. Applies to existing requests too."
+            },
+            {
+                "key": "BotTokenLifetimeMonths",
+                "display_name": "Bot token lifetime",
+                "type": "dropdown",
+                "default": "12",
+                "help_text": "How long an access token issued with an approved bot request stays valid. From a month before it expires, the requester gets a weekly reminder, and daily in the last week; System Admins get them if the requester's account is gone. Only affects tokens issued after the change; this is not the request expiry above.",
+                "options": [
+                    {
+                        "display_name": "1 month",
+                        "value": "1"
+                    },
+                    {
+                        "display_name": "2 months",
+                        "value": "2"
+                    },
+                    {
+                        "display_name": "3 months",
+                        "value": "3"
+                    },
+                    {
+                        "display_name": "4 months",
+                        "value": "4"
+                    },
+                    {
+                        "display_name": "5 months",
+                        "value": "5"
+                    },
+                    {
+                        "display_name": "6 months",
+                        "value": "6"
+                    },
+                    {
+                        "display_name": "7 months",
+                        "value": "7"
+                    },
+                    {
+                        "display_name": "8 months",
+                        "value": "8"
+                    },
+                    {
+                        "display_name": "9 months",
+                        "value": "9"
+                    },
+                    {
+                        "display_name": "10 months",
+                        "value": "10"
+                    },
+                    {
+                        "display_name": "11 months",
+                        "value": "11"
+                    },
+                    {
+                        "display_name": "12 months",
+                        "value": "12"
+                    }
+                ]
+            },
+            {
+                "key": "EnableExercise",
+                "display_name": "Enable exercise mode",
+                "type": "bool",
+                "default": false,
+                "help_text": "Do not enable in production. When true, System Admins can run /mattermost-request-hub exercise populate, teardown and status to seed marked EXERCISE data into a team: persona accounts nobody can sign in as, a channel, and pending requests of every type on the approval cards. Needs channel requests allowed, a channel prefix, and each type the scenario seeds turned on. Approving a seeded request does the real thing (a channel, team, bot or webhook marked EXERCISE, a Team Admin or member change for a persona, or a guest invite to an address that receives no mail). Teardown closes the requests, deletes the webhooks and bots, archives the teams and channels, undoes the personas' team changes and deactivates them. Guest invites can't be withdrawn and expire on their own."
+            },
+            {
+                "key": "ExerciseScenarioJSON",
+                "display_name": "Exercise scenario (JSON)",
+                "type": "longtext",
+                "default": "",
+                "help_text": "Leave blank to use the built-in fictional scenario. Paste a scenario here to seed your own personas, channels and requests instead. It is stored only in this server's configuration. The format is described in the plugin documentation."
             }
         ]
     }

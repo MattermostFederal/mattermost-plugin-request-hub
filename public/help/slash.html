@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slash commands — Mattermost Request Hub</title>
+    <title>Slash commands (Mattermost Request Hub)</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -29,6 +29,8 @@
             <span class="nav-section">Also</span>
             <a href="approving.html">Approving</a>
             <a href="slash.html" class="active">Slash commands</a>
+            <a href="agents.html">AI agents</a>
+            <a href="troubleshooting.html">Troubleshooting</a>
         </nav>
     </aside>
 
@@ -43,48 +45,60 @@
         <h1>Slash commands</h1>
         <p class="tagline">Same requests as the hub and native menus, from the message box. Replies are only visible to you.</p>
 
+        <h2 id="overview">The <code>/mattermost-request-hub</code> command</h2>
         <table class="field-table">
             <thead><tr><th>Command</th><th>What it does</th></tr></thead>
             <tbody>
-                <tr><td><code>/mattermost-request-hub docs</code></td><td>Links to this documentation (overview).</td></tr>
-                <tr><td><code>/mattermost-request-hub help</code></td><td>Lists every subcommand and its arguments, with a link to this documentation.</td></tr>
-                <tr><td><code>/mattermost-request-hub channel</code></td><td>Opens the Request a Channel form. <code>/mattermost-request-hub</code> on its own does the same.</td></tr>
-                <tr><td><code>/mattermost-request-hub channel &lt;prefix&gt; &lt;Channel name&gt; [options]</code></td><td>Requests a channel in the current team without the form. See <a href="#channel-without-form">below</a>.</td></tr>
-                <tr><td><code>/mattermost-request-hub channel-admin</code></td><td>Opens the Request Channel Admin form.</td></tr>
-                <tr><td><code>/mattermost-request-hub channel-admin @user [@user ...]</code></td><td>Asks for those channel members to be made Channel Admins of the channel you run it in. See <a href="#channel-admin-without-form">below</a>.</td></tr>
-                <tr><td><code>/mattermost-request-hub prefixes</code></td><td>Lists the channel prefixes you can use, with each one's description and suffix rule.</td></tr>
-                <tr><td><code>/mattermost-request-hub team</code></td><td>Opens the Request a Team form.</td></tr>
-                <tr><td><code>/mattermost-request-hub team &lt;Team name&gt; [options]</code></td><td>Requests a new team without the form. See <a href="#other-without-form">below</a>.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-admin</code></td><td>Opens the Request Team Admin form.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-admin @user [@user ...]</code></td><td>Asks for those team members to be made Team Admins of the current team.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-member</code></td><td>Opens the Request Team Members form.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-member @user [@user ...] [--reason &lt;text&gt;]</code></td><td>Asks for those users or bots to be added to the current team.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-guest</code></td><td>Opens the Request Guest Invite form.</td></tr>
-                <tr><td><code>/mattermost-request-hub team-guest &lt;email&gt; --channels ~channel [~channel ...] [--reason &lt;text&gt;]</code></td><td>Asks for a guest invite to those channels of the current team.</td></tr>
-                <tr><td><code>/mattermost-request-hub bot</code></td><td>Opens the Request a Bot form.</td></tr>
-                <tr><td><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; [options]</code></td><td>Requests a bot account without the form.</td></tr>
-                <tr><td><code>/mattermost-request-hub webhook-incoming</code></td><td>Opens the incoming webhook form.</td></tr>
-                <tr><td><code>/mattermost-request-hub webhook-incoming ~channel &lt;Display name&gt; [--description &lt;text&gt;]</code></td><td>Requests an incoming webhook that posts to that channel.</td></tr>
-                <tr><td><code>/mattermost-request-hub webhook-outgoing</code></td><td>Opens the outgoing webhook form.</td></tr>
-                <tr><td><code>/mattermost-request-hub webhook-outgoing ~channel &lt;Display name&gt; --callback &lt;url&gt; [--description &lt;text&gt;]</code></td><td>Requests an outgoing webhook for that channel.</td></tr>
+                <tr><td><a href="#docs"><code>/mattermost-request-hub docs</code></a></td><td>Links to this documentation (overview).</td></tr>
+                <tr><td><a href="#help"><code>/mattermost-request-hub help</code></a></td><td>Lists every subcommand and its arguments, with a link to this documentation.</td></tr>
+                <tr><td><a href="#channel"><code>/mattermost-request-hub channel</code></a></td><td>Opens the Request a Channel form, or with arguments requests a channel without it. <code>/mattermost-request-hub</code> on its own opens the form too.</td></tr>
+                <tr><td><a href="#channel-admin"><code>/mattermost-request-hub channel-admin</code></a></td><td>Opens the Request Channel Admin form, or with <code>@user</code> names asks for those channel members to be made Channel Admins of the channel you run it in.</td></tr>
+                <tr><td><a href="#prefixes"><code>/mattermost-request-hub prefixes</code></a></td><td>Lists the channel prefixes you can use, with each one's description and suffix rule.</td></tr>
+                <tr><td><a href="#list"><code>/mattermost-request-hub list</code></a></td><td>Lists your pending requests of every type, with their IDs and when they expire.</td></tr>
+                <tr><td><a href="#list-approvals"><code>/mattermost-request-hub list approvals</code></a></td><td>For approvers: lists the pending requests you can approve, with their IDs.</td></tr>
+                <tr><td><a href="#approve"><code>/mattermost-request-hub approve &lt;request ID&gt;</code></a></td><td>For approvers: approves a request of any type, as its Approve button would.</td></tr>
+                <tr><td><a href="#deny"><code>/mattermost-request-hub deny &lt;request ID&gt;</code></a></td><td>For approvers: denies a request of any type, as its Deny button would.</td></tr>
+                <tr><td><a href="#exercise"><code>/mattermost-request-hub exercise populate|teardown|status</code></a></td><td>For System Admins, when exercise mode is on: seeds, removes or reports marked exercise data in this team.</td></tr>
+                <tr><td><a href="#team"><code>/mattermost-request-hub team</code></a></td><td>Opens the Request a Team form, or with arguments requests a new team without it.</td></tr>
+                <tr><td><a href="#team-admin"><code>/mattermost-request-hub team-admin</code></a></td><td>Opens the Request Team Admin form, or with <code>@user</code> names asks for those team members to be made Team Admins of the current team.</td></tr>
+                <tr><td><a href="#team-member"><code>/mattermost-request-hub team-member</code></a></td><td>Opens the Request Team Members form, or with <code>@user</code> names asks for those users or bots to be added to the current team.</td></tr>
+                <tr><td><a href="#team-guest"><code>/mattermost-request-hub team-guest</code></a></td><td>Opens the Request Guest Invite form, or with an email and channels asks for a guest invite to the current team.</td></tr>
+                <tr><td><a href="#bot"><code>/mattermost-request-hub bot</code></a></td><td>Opens the Request a Bot form, or with a username and display name requests the bot without it.</td></tr>
+                <tr><td><a href="#webhook-incoming"><code>/mattermost-request-hub webhook-incoming</code></a></td><td>Opens the incoming webhook form, or with a channel and display name requests the webhook without it.</td></tr>
+                <tr><td><a href="#webhook-outgoing"><code>/mattermost-request-hub webhook-outgoing</code></a></td><td>Opens the outgoing webhook form, or with a channel, display name and callback URL requests the webhook without it.</td></tr>
             </tbody>
         </table>
 
         <p>
             Each request subcommand opens its form when you give it no arguments. With arguments, it files the
-            request directly, with the same checks, approvers and confirmation as the form. If something is wrong,
-            the reply says what, and nothing is submitted.
-            A request type a System Admin has turned off in the System Console replies that it is disabled, and
-            <code>help</code> leaves it out.
+            request directly, with the same checks, approvers and confirmation as the form. See
+            <a href="#typing-arguments">Typing arguments</a> for quotes and lists.
+            A request type a System Admin has turned off in the System Console replies that it is disabled, for
+            example <em>Channel requests are currently disabled by an administrator.</em>, and <code>help</code>
+            leaves it out.
             Requests made with a slash command always go to the approvers, even when a System Admin runs it.
-            An unknown subcommand replies with the list above.
+            An unknown subcommand replies <em>Unknown subcommand `name`.</em> followed by the list above.
         </p>
 
-        <h2 id="channel-without-form">Requesting a channel without the form</h2>
+        <h2 id="docs"><code>/mattermost-request-hub docs</code></h2>
+        <p>Replies with a link to the <a href="docs.html">overview</a> of this documentation.</p>
+
+        <h2 id="help"><code>/mattermost-request-hub help</code></h2>
+        <p>Lists every subcommand and its arguments, with a link to this documentation.</p>
+
+        <h2 id="channel"><code>/mattermost-request-hub channel</code></h2>
+        <p>
+            On its own, opens the <a href="channel.html">Request a Channel</a> form. With a prefix and a channel
+            name, it requests the channel in the current team without the form.
+        </p>
+
+        <h3 id="channel-without-form">Requesting a channel without the form</h3>
+<pre><code>/mattermost-request-hub channel &lt;prefix&gt; &lt;Channel name&gt; [--suffix &lt;suffix&gt;] [--purpose &lt;text&gt;] [--private] [--members @user ...] [--admins @user ...] [--category &lt;name&gt;]</code></pre>
         <p>
             The prefix comes first, typed exactly as <code>/mattermost-request-hub prefixes</code> lists it
             (for example <code>team-</code>). Then comes the channel name, which can be several words, then any
-            options in any order. Each option takes the words up to the next <code>--</code>.
+            options in any order. Each option takes the words up to the next <code>--</code>, and each can be
+            given only once.
         </p>
 
         <table class="field-table">
@@ -93,7 +107,7 @@
                 <tr><td><code>--suffix &lt;suffix&gt;</code></td><td>The URL part after the prefix, as one word. Leave it out to generate it from the channel name.</td></tr>
                 <tr><td><code>--purpose &lt;text&gt;</code></td><td>A short description of the channel.</td></tr>
                 <tr><td><code>--private</code></td><td>Makes the channel private. Without it the channel is public.</td></tr>
-                <tr><td><code>--members @user ...</code></td><td>Users who become regular members on approval.</td></tr>
+                <tr><td><code>--members @user ...</code></td><td>Users who become regular members on approval. If you list exactly one member and no <code>--admins</code>, that member is made a Channel Admin, so the channel always has someone who can manage it.</td></tr>
                 <tr><td><code>--admins @user ...</code></td><td>Users who become Channel Admins on approval.</td></tr>
                 <tr><td><code>--category &lt;name&gt;</code></td><td>Sidebar category to place the channel in on approval. It can be several words; a missing category is created.</td></tr>
             </tbody>
@@ -105,37 +119,308 @@
 
         <p>
             The request goes through the same checks and approval as the form, and you get the same confirmation.
-            If something is wrong, such as an unknown prefix, an unknown <code>@user</code> or a suffix that breaks
-            the prefix's rule, the reply says what, and nothing is submitted.
         </p>
 
 
-        <h2 id="channel-admin-without-form">Requesting Channel Admin without the form</h2>
-        <p>
-            Run <code>/mattermost-request-hub channel-admin @user [@user ...]</code> in the channel itself. You must
-            be a member of it (System Admins excepted), and everyone you name must already be a member too; the request never adds anyone
-            to the channel. The approvers are the same as for the form. The command isn't hidden from people who
-            already admin the channel, but they can manage it directly instead.
-        </p>
-
-        <h2 id="other-without-form">Other requests without the form</h2>
-        <p>
-            Team Admin, team member and guest requests are for the team you run the command in. Name channels
-            as <code>~channel</code>, using the name from the channel's URL, and users as <code>@user</code>.
-        </p>
-
+        <h3 id="channel-errors">When <code>channel</code> refuses</h3>
+        <p>If something is wrong, the reply says what, and nothing is submitted.</p>
         <table class="field-table">
-            <thead><tr><th>Command</th><th>Arguments and options</th></tr></thead>
+            <thead><tr><th>Reply</th><th>What to do</th></tr></thead>
             <tbody>
-                <tr><td><code>team</code></td><td>The team name, which can be several words, then <code>--name &lt;url name&gt;</code> (leave it out to generate it from the team name), <code>--description &lt;text&gt;</code>, <code>--invite-only</code> (without it the team is open) and <code>--team-admin</code> (make you a Team Admin of the new team).</td></tr>
-                <tr><td><code>team-admin</code></td><td>One or more <code>@user</code>. You must be a member of the team.</td></tr>
-                <tr><td><code>team-member</code></td><td>One or more <code>@user</code>, then <code>--reason &lt;text&gt;</code> if you want to give one.</td></tr>
-                <tr><td><code>team-guest</code></td><td>The guest's email, then <code>--channels</code> with one or more <code>~channel</code>, then <code>--reason &lt;text&gt;</code> if you want to give one.</td></tr>
-                <tr><td><code>bot</code></td><td>The bot's username as one word, then its display name, which can be several words, then <code>--description &lt;text&gt;</code> and <code>--owner @user</code>. Access tokens and webhooks for the bot are only in the form.</td></tr>
-                <tr><td><code>webhook-incoming</code></td><td>The <code>~channel</code> it posts to, then its display name, then <code>--description &lt;text&gt;</code>.</td></tr>
-                <tr><td><code>webhook-outgoing</code></td><td>The <code>~channel</code> it listens in, then its display name, then <code>--callback &lt;url&gt;</code> and <code>--description &lt;text&gt;</code>.</td></tr>
+                <tr><td><em>Could not read the request: a prefix and a channel name are required.</em></td><td>Give the prefix, then the name, before any option.</td></tr>
+                <tr><td><em>Could not read the request: unknown option `--x`.</em>, <em>... is given more than once</em>, <em>`--suffix` takes exactly one value</em></td><td>Check the options against the table above.</td></tr>
+                <tr><td><em>prefix "x" is not in the list of allowed prefixes</em></td><td>Run <code>/mattermost-request-hub prefixes</code> and copy one exactly.</td></tr>
+                <tr><td><em>suffix "x" doesn't match the required pattern for prefix "y"</em></td><td>The prefix has a suffix rule; <code>prefixes</code> shows it.</td></tr>
+                <tr><td><em>unknown user: name</em></td><td>Check the spelling of each <code>@user</code>.</td></tr>
+                <tr><td><em>you must be a member of the team to request a channel in it</em></td><td>Run the command from a team you belong to.</td></tr>
+                <tr><td><em>you have N pending requests waiting for review...</em>, <em>you already have a pending request for ~name in this team</em></td><td>See <a href="troubleshooting.html#pending-limit">Pending limit</a>.</td></tr>
+                <tr><td><em>Channel requests aren't configured yet...</em></td><td>See <a href="troubleshooting.html#not-configured">Not configured</a>.</td></tr>
             </tbody>
         </table>
+
+        <h2 id="channel-admin"><code>/mattermost-request-hub channel-admin</code></h2>
+        <p>
+            On its own, opens the <a href="channel-admin.html">Request Channel Admin</a> form. With
+            <code>@user</code> names, it files the request for the channel you run it in.
+        </p>
+
+        <h3 id="channel-admin-without-form">Requesting Channel Admin without the form</h3>
+<pre><code>/mattermost-request-hub channel-admin @user [@user ...]</code></pre>
+        <p>
+            Run it in the channel itself. You must be a member of it (System Admins excepted), and everyone you
+            name must already be a member too; the request never adds anyone to the channel. The request goes to
+            the System Admins and the Team Admins of the channel's team, the same approvers as the form. The
+            command isn't hidden from people who already admin the channel, but they can manage it directly
+            instead.
+        </p>
+        <table class="field-table">
+            <thead><tr><th>Reply</th><th>What to do</th></tr></thead>
+            <tbody>
+                <tr><td><em>Name at least one channel member...</em></td><td>Add at least one <code>@user</code>.</td></tr>
+                <tr><td><em>everyone you nominate must already be a member of the channel</em></td><td>Add them to the channel first.</td></tr>
+                <tr><td><em>channel not found, or you are not a member of it</em></td><td>Run it from a channel you belong to.</td></tr>
+                <tr><td><em>Channel Admins can only be requested for public or private channels</em>, <em>that channel is archived</em></td><td>Direct and group messages and archived channels can't have Channel Admins.</td></tr>
+                <tr><td><em>you already have a pending Channel Admin request for these people in this channel</em></td><td>Wait for the existing request to be reviewed.</td></tr>
+            </tbody>
+        </table>
+
+        <h2 id="prefixes"><code>/mattermost-request-hub prefixes</code></h2>
+        <p>
+            Lists every prefix your admin configured, with its description and, where there is one, its suffix
+            rule. Use these exactly with <code>/mattermost-request-hub channel</code>.
+        </p>
+
+        <h2 id="list"><code>/mattermost-request-hub list</code></h2>
+        <p>
+            Lists the requests you made that are still waiting for review, of every type, oldest first. Each line shows what you asked for, the day you submitted it (in UTC), the day it expires if
+            your admin set an expiry, and its request ID. A request that expired before anyone reviewed it is
+            shown as <em>expired (an approver can close it)</em>. A request submitted before the plugin started
+            recording submission times shows <em>submitted before the upgrade</em> and doesn't expire. If
+            nothing is waiting, the reply is <em>You have no pending requests.</em>
+        </p>
+        <p>
+            At most 50 requests are shown, followed by <em>...and N more</em> when there are others. A type a
+            System Admin turned off isn't listed; with every type turned off the reply is <em>Every request type
+            is currently disabled by an administrator.</em> Approved and denied requests aren't listed: the
+            outcome arrives in your request's direct message thread. Bot and webhook requests also say which
+            approval they're waiting for, security or system.
+        </p>
+
+        <h3 id="list-approvals"><code>/mattermost-request-hub list approvals</code></h3>
+        <p>
+            Lists the pending requests you can approve now, oldest first, in the same format, so you can copy an
+            ID into <code>approve</code> or <code>deny</code>. Your own requests aren't included, nor are types a
+            System Admin turned off. A bot or webhook request is included only when you can fill the step it's
+            waiting for: not when you already approved the other step, and not when only the system step is
+            left and you are a security approver. If there are none, the reply is <em>There are no pending
+            requests you can approve.</em> Finding them reads every pending request, so it can take a moment on a
+            busy server.
+        </p>
+
+        <h2 id="approve"><code>/mattermost-request-hub approve</code></h2>
+<pre><code>/mattermost-request-hub approve &lt;request ID&gt;</code></pre>
+        <p>
+            Approves a request of any type without clicking its card. The request ID is at the bottom of every
+            approval card, after <em>Request ID:</em>, in the requester's own copy of the request, and in
+            <a href="#list-approvals"><code>list approvals</code></a>. The command makes the same checks as the Approve button, in the same order, and the reply
+            is only visible to you. When it succeeds, the approval card is closed with the outcome, the same as
+            after a click, and the requester's request thread is updated. When the request went to System Admins
+            by direct message (no approval channel), every copy is closed. See
+            <a href="approving.html">Approving</a> for who can approve.
+        </p>
+        <p>
+            On a bot or webhook request, <code>approve</code> fills your step, as a click would; you don't say
+            which. After the first step the reply is <em>Approved the security step. The request now needs the
+            other approval, from a different person.</em> and every copy of the card shows the approval. The
+            second step, from a different person, creates the bot or webhook.
+        </p>
+        <p>
+            Like the card buttons, <code>approve</code> and <code>deny</code> still work on a request whose type a
+            System Admin turned off after it was submitted, so pending requests can be closed.
+        </p>
+
+        <h2 id="deny"><code>/mattermost-request-hub deny</code></h2>
+<pre><code>/mattermost-request-hub deny &lt;request ID&gt;</code></pre>
+        <p>Denies a request of any type, as its Deny button would. It works the same way as <code>approve</code>.</p>
+
+        <h3 id="decision-errors">When <code>approve</code> or <code>deny</code> refuses</h3>
+        <table class="field-table">
+            <thead><tr><th>Reply</th><th>What to do</th></tr></thead>
+            <tbody>
+                <tr><td><em>Give the request ID from the approval card...</em></td><td>Give exactly one ID, copied from the card.</td></tr>
+                <tr><td><em>This request has already been handled.</em></td><td>Someone approved or denied it already, or the ID is wrong.</td></tr>
+                <tr><td><em>This request was just updated. Please run the command again.</em></td><td>Someone acted on it at the same moment. Run the command again.</td></tr>
+                <tr><td><em>You don't have permission to approve or deny this channel request...</em>, <em>...this Channel Admin request...</em>, <em>Only System Admins can approve or deny ... requests.</em>, <em>You don't have permission to deny this request.</em>, <em>⚠️ You don't have permission to approve this request.</em></td><td>Only approvers can act on a request. See <a href="approving.html#who-sees-what">Who sees and approves what</a>.</td></tr>
+                <tr><td><em>You can't approve your own request. Another approver has to review it.</em>, <em>⚠️ You created this request...</em></td><td>Ask another approver. You can still deny your own request.</td></tr>
+                <tr><td><em>⚠️ Security review must happen first...</em>, <em>⚠️ Security already approved...</em>, <em>⚠️ You've already approved your step...</em></td><td>A bot or webhook request needs a security approver, then a different system approver. Ask the approver whose step is next.</td></tr>
+                <tr><td><em>This request has expired.</em></td><td>The request is closed and the requester is told. See <a href="troubleshooting.html#expired">Expired</a>.</td></tr>
+                <tr><td><em>The requester's account is no longer active...</em>, <em>...no longer a member...</em></td><td>See <a href="troubleshooting.html#requester-left">Requester left</a>.</td></tr>
+                <tr><td><em>The channel name no longer matches the configured prefixes...</em></td><td>The prefixes changed after the request was made. Deny it and ask for a new request.</td></tr>
+                <tr><td><em>A channel in this request no longer exists...</em>, <em>~name has been archived...</em>, <em>The team no longer exists...</em></td><td>The request can't be carried out any more. Deny it. See <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>.</td></tr>
+                <tr><td><em>Could not check the requester right now. Try again in a moment.</em></td><td>Run the command again shortly. See <a href="troubleshooting.html#try-again">"Try again" messages</a>.</td></tr>
+                <tr><td><em>Could not create the channel: ...</em>, <em>Could not create the team: ...</em>, <em>Couldn't create the bot: ...</em>, <em>Couldn't create the webhook: ...</em></td><td>The request stays pending. Run the command again, or if the name is already taken, deny it and ask for a new name.</td></tr>
+            </tbody>
+        </table>
+
+        <h2 id="exercise"><code>/mattermost-request-hub exercise</code></h2>
+<pre><code>/mattermost-request-hub exercise populate
+/mattermost-request-hub exercise status
+/mattermost-request-hub exercise teardown</code></pre>
+        <p>
+            Exercise mode fills a team with believable, clearly marked data for training and demonstrations.
+            Only System Admins can run it, and only while <em>Enable exercise mode</em> is on in System Console
+            → Plugins → Mattermost Request Hub. Run it from a channel in the team you want to seed. Each team
+            has its own exercise data. <code>populate</code> also needs <em>Allow channel requests</em> on and at
+            least one channel prefix, and the setting for every other request type the scenario seeds. The
+            built-in scenario seeds all eight types, and its guest invite also needs guest access on.
+            <code>status</code> and <code>teardown</code> work whatever those settings are, so exercise data can
+            always be removed.
+        </p>
+        <table class="field-table">
+            <thead><tr><th>Subcommand</th><th>What it does</th></tr></thead>
+            <tbody>
+                <tr><td><code>populate</code></td><td>Creates the scenario's personas, its channels and its pending requests. Each request gets its approval card, in the approval channel the team's real requests use (or as direct messages to System Admins when there is none), and its persona gets the usual request thread. Runs once per team until teardown.</td></tr>
+                <tr><td><code>status</code></td><td>Compares what populate recorded with what is still live: active personas, channels not archived, requests still pending, and the teams and bots approvals created. Webhooks are counted but only teardown checks them.</td></tr>
+                <tr><td><code>teardown</code></td><td>Closes the exercise requests still pending, marking their approval cards and the personas' request threads. Deletes the webhooks and bots that approving exercise requests created, archives the teams and every exercise channel (including any created by an approval), takes Team Admin back from personas and removes personas that were added to the team by a request, deactivates the personas, and removes what the plugin stored about the exercise requests.</td></tr>
+            </tbody>
+        </table>
+        <p>Everything exercise mode creates is marked:</p>
+        <ul>
+            <li>Personas have the nickname <em>EXERCISE</em> and a position that starts with <em>EXERCISE:</em>. They get a random password that is never shown, so nobody can sign in as one, and email notifications are off.</li>
+            <li>Channel names shown in the sidebar start with <em>EXERCISE</em>, purposes start with <em>[EXERCISE]</em>, and each exercise channel's header is an EXERCISE banner.</li>
+            <li>Approval card titles start with <em>EXERCISE</em>, and the message above the card starts with <em>EXERCISE:</em> (after the team label, when the card is routed for another team) and mentions nobody, so populate doesn't notify the approvers.</li>
+            <li>Audit cards and the personas' request threads about exercise requests start with <em>EXERCISE</em>.</li>
+            <li>Teams have a display name that starts with <em>EXERCISE</em> and a URL name that starts with <code>exercise-</code>. Bot usernames start with <code>ex-</code> and their display names with <em>EXERCISE</em>. A webhook request's webhook has a name that starts with <em>EXERCISE</em>, a bot's webhooks are named after the bot, and outgoing webhooks call <code>https://exercise.invalid/hook</code>, which never answers.</li>
+            <li>Guest invites go to <code>exercise-guest-&lt;guest&gt;-&lt;team&gt;@exercise.invalid</code>, a domain that never receives mail.</li>
+        </ul>
+        <p>
+            Seeded requests are made by personas and name only personas, so approving one gives no real user
+            access to anything. Approve and deny work exactly as for a real request, on the card or with
+            <code>approve</code> and <code>deny</code>, and approving does the real thing: it creates the channel,
+            team, bot or webhook, changes the persona's team membership, or sends the guest invite. A bot's token
+            and an incoming webhook's URL go to the requesting persona's request thread, which nobody can sign in
+            to read. Bot and webhook requests still need both approval steps, so in the default user attribute
+            mode they can only be approved once the attribute is set up. Seeded requests don't count toward any
+            real user's pending limit. Channel names use the first configured prefix and must pass its suffix
+            rule.
+        </p>
+        <p>
+            Teardown only touches what exercise mode created: the requests, channels and persona accounts it
+            recorded, and the teams, bots and webhooks approving its requests created. Real requests, channels,
+            teams, bots and accounts are left alone, even ones that use an exercise name. Teardown waits while a
+            populate is still running in the team.
+        </p>
+        <div class="alert alert-info">
+            <div class="alert-title">Nothing is deleted outright</div>
+            <p>
+                Mattermost doesn't let plugins delete users, channels or teams. Teardown archives exercise channels
+                and teams, renaming each first so the name can be used again, and deactivates the personas. The next
+                <code>populate</code> reactivates the same personas. Bots are the exception: teardown deletes them
+                for good, with their tokens, so their usernames are free again. A guest invite can't be withdrawn;
+                it reaches nobody and expires on its own.
+            </p>
+        </div>
+
+        <h3 id="exercise-scenario">The exercise scenario</h3>
+        <p>
+            The plugin includes a fictional scenario. To seed your own personas, channels and requests, paste a
+            scenario into <em>Exercise scenario (JSON)</em> in the plugin settings. It is stored only in this
+            server's configuration. A scenario looks like this:
+        </p>
+<pre><code>{
+  "id": "sample",
+  "name": "Sample",
+  "personas": [
+    {"role": "lead", "first_name": "Ana", "last_name": "Lee", "position": "Shift lead"},
+    {"role": "crew", "first_name": "Bo", "last_name": "Ng", "position": "Crew member"},
+    {"role": "visitor", "first_name": "Cy", "last_name": "Ray", "position": "Visitor", "off_team": true}
+  ],
+  "operations": [
+    {"act": 1, "operation_id": "ops-channel", "kind": "channel", "suffix": "ops",
+     "display_name": "Ops", "purpose": "Shift coordination", "requester": "lead", "members": ["crew"]},
+    {"act": 1, "operation_id": "plans-request", "kind": "channel_request", "suffix": "plans",
+     "display_name": "Plans", "purpose": "Planning", "private": true, "requester": "crew",
+     "members": ["lead"], "age_days": 45},
+    {"act": 1, "operation_id": "ops-admin", "kind": "admin_request", "channel": "ops-channel",
+     "requester": "lead", "nominees": ["crew"]},
+    {"act": 1, "operation_id": "cell-team", "kind": "team_request", "suffix": "cell",
+     "display_name": "Cell", "purpose": "A team for the cell", "requester": "lead", "team_admin": true},
+    {"act": 1, "operation_id": "crew-team-admin", "kind": "team_admin_request",
+     "requester": "lead", "nominees": ["crew"]},
+    {"act": 1, "operation_id": "visitor-join", "kind": "team_member_request",
+     "requester": "crew", "nominees": ["visitor"], "reason": "Joining the shift"},
+    {"act": 1, "operation_id": "vendor-guest", "kind": "team_guest_request", "guest": "vendor",
+     "channels": ["ops-channel"], "requester": "lead", "reason": "Vendor access"},
+    {"act": 1, "operation_id": "status-bot", "kind": "bot_request", "suffix": "status",
+     "display_name": "Status", "purpose": "Posts status", "requester": "lead", "owner": "crew",
+     "token": true, "incoming_channel": "ops-channel"},
+    {"act": 1, "operation_id": "feed-hook", "kind": "webhook_request", "webhook_type": "incoming",
+     "channel": "ops-channel", "display_name": "Feed", "purpose": "Status feed", "requester": "lead"}
+  ]
+}</code></pre>
+        <table class="field-table">
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr><td><code>id</code>, <code>name</code></td><td>Required. The name appears in the populate reply.</td></tr>
+                <tr><td><code>personas</code></td><td>The people in the scenario, at most 50. <code>role</code> is a short lowercase key that becomes part of the username (<code>exercise-&lt;role&gt;-&lt;team&gt;</code>). <code>off_team</code> keeps a persona out of the team, so a <code>team_member_request</code> can add them. An off-team persona can only be a team member nominee, the requester of a team member or team creation request, or a bot owner.</td></tr>
+                <tr><td><code>act</code>, <code>operation_id</code></td><td>Identify each operation, at most 200. Operation IDs must be unique.</td></tr>
+                <tr><td><code>kind</code></td><td><code>channel</code> creates an exercise channel at once. The others file a pending request:
+                    <code>channel_request</code> a channel request;
+                    <code>admin_request</code> a Channel Admin request on an earlier <code>channel</code> operation, named in <code>channel</code>;
+                    <code>team_request</code> a team creation request;
+                    <code>team_admin_request</code> and <code>team_member_request</code> a Team Admin or team member request for this team;
+                    <code>team_guest_request</code> a guest invite to this team;
+                    <code>bot_request</code> a bot account request;
+                    <code>webhook_request</code> a webhook request on an earlier <code>channel</code> operation, named in <code>channel</code>.</td></tr>
+                <tr><td><code>requester</code>, <code>members</code>, <code>admins</code>, <code>nominees</code></td><td>Persona roles, at most 100 in each list. For a <code>channel</code>, <code>requester</code> creates it.</td></tr>
+                <tr><td><code>suffix</code>, <code>display_name</code>, <code>purpose</code>, <code>private</code></td><td>As in a real request. The suffix follows the first configured prefix.</td></tr>
+                <tr><td><code>reason</code></td><td>For <code>team_member_request</code> and <code>team_guest_request</code>, as in a real request.</td></tr>
+                <tr><td><code>team_admin</code></td><td>For <code>team_request</code>: the requester also asks to be Team Admin of the new team. <code>suffix</code> becomes the team URL name <code>exercise-&lt;suffix&gt;-&lt;team&gt;</code>, and <code>private</code> makes it invite only.</td></tr>
+                <tr><td><code>guest</code>, <code>channels</code></td><td>For <code>team_guest_request</code>: a short label for the invite address, and the earlier <code>channel</code> operations the guest joins. The requester must be in each one.</td></tr>
+                <tr><td><code>owner</code>, <code>token</code>, <code>incoming_channel</code>, <code>outgoing_channel</code></td><td>For <code>bot_request</code>: the persona that owns the bot (the requester when left out), whether to ask for a token, and earlier <code>channel</code> operations for an incoming or outgoing webhook. The outgoing one must be public. <code>suffix</code> becomes the username <code>ex-&lt;suffix&gt;-&lt;team&gt;</code>, which must be 3 to 22 characters.</td></tr>
+                <tr><td><code>webhook_type</code></td><td>For <code>webhook_request</code>: <code>incoming</code> or <code>outgoing</code>. An outgoing webhook needs a public channel.</td></tr>
+                <tr><td><code>age_days</code></td><td>Optional, from <code>0</code> to <code>3650</code>. Backdates a request, for example past the expiry so its card shows as expired when approved.</td></tr>
+            </tbody>
+        </table>
+
+        <h3 id="exercise-errors">When <code>exercise</code> refuses</h3>
+        <table class="field-table">
+            <thead><tr><th>Reply</th><th>What to do</th></tr></thead>
+            <tbody>
+                <tr><td><em>Exercise mode is off...</em></td><td>A System Admin turns on <em>Enable exercise mode</em>.</td></tr>
+                <tr><td><em>Only System Admins can run `/mattermost-request-hub exercise`.</em></td><td>Ask a System Admin.</td></tr>
+                <tr><td><em>exercise mode seeds channel requests, which are turned off...</em>, <em>this scenario seeds Channel Admin requests, which are turned off...</em>, and the same reply for the other types</td><td>Turn on the setting the reply names, or use a scenario without that type.</td></tr>
+                <tr><td><em>Channel requests aren't configured yet...</em></td><td>Add at least one channel prefix. See <a href="troubleshooting.html#not-configured">Not configured</a>.</td></tr>
+                <tr><td><em>exercise data already exists for this team, or a populate is running...</em></td><td>Run <code>status</code> to see it, or <code>teardown</code> to remove it first.</td></tr>
+                <tr><td><em>the username @... is taken by an account that isn't exercise data</em>, <em>a channel named ~... already exists in this team</em>, <em>this server or team only allows accounts with email addresses at...</em>, <em>a team with the URL name ... already exists</em>, <em>the username @... is taken</em>, <em>...guest accounts are off...</em>, <em>guests can only be invited from...</em></td><td>See <a href="troubleshooting.html#exercise">Exercise mode</a>.</td></tr>
+                <tr><td><em>a populate is still running in this team...</em></td><td>Wait for it to finish, then run <code>teardown</code> again.</td></tr>
+                <tr><td><em>the exercise scenario doesn't fit this server's settings...</em>, <em>...is not valid JSON</em></td><td>Fix the scenario or the prefix list; the reply says what failed. Nothing was created.</td></tr>
+                <tr><td><em>could not finish seeding...</em></td><td>Run <code>teardown</code>, then <code>populate</code> again.</td></tr>
+            </tbody>
+        </table>
+
+        <h2 id="other-forms">The other request types</h2>
+        <p>
+            On their own, these subcommands open the request form for their type. With arguments, they file the
+            request without it. Team Admin, team member and guest requests are for the team you run the command
+            in. Name channels as <code>~channel</code>, using the name from the channel's URL, and users as
+            <code>@user</code>. The form, approvers and what happens on approve are described on each type's page.
+        </p>
+
+        <h3 id="team"><code>/mattermost-request-hub team</code></h3>
+<pre><code>/mattermost-request-hub team &lt;Team name&gt; [--name &lt;url name&gt;] [--description &lt;text&gt;] [--invite-only] [--team-admin]</code></pre>
+        <p>
+            The team name can be several words. <code>--name</code> is the URL name; leave it out to generate it
+            from the team name. Without <code>--invite-only</code> the team is open. <code>--team-admin</code>
+            makes you a Team Admin of the new team. See <a href="team.html">Teams</a>.
+        </p>
+
+        <h3 id="team-admin"><code>/mattermost-request-hub team-admin</code></h3>
+<pre><code>/mattermost-request-hub team-admin @user [@user ...]</code></pre>
+        <p>Asks for those people to be made Team Admins of the current team. You must be a member of the team. See <a href="team.html">Teams</a>.</p>
+
+        <h3 id="team-member"><code>/mattermost-request-hub team-member</code></h3>
+<pre><code>/mattermost-request-hub team-member @user [@user ...] [--reason &lt;text&gt;]</code></pre>
+        <p>Asks for those users or bots to be added to the current team. See <a href="team-member.html">Team members</a>.</p>
+
+        <h3 id="team-guest"><code>/mattermost-request-hub team-guest</code></h3>
+<pre><code>/mattermost-request-hub team-guest &lt;email&gt; --channels ~channel [~channel ...] [--reason &lt;text&gt;]</code></pre>
+        <p>Asks for a guest invite to those channels of the current team. See <a href="team-guest.html">Guest invites</a>.</p>
+
+        <h3 id="bot"><code>/mattermost-request-hub bot</code></h3>
+<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; [--description &lt;text&gt;] [--owner @user]</code></pre>
+        <p>
+            The username is one word; the display name can be several. Access tokens and webhooks for the bot are
+            only in the form. See <a href="bot.html">Bots</a>.
+        </p>
+
+        <h3 id="webhook-incoming"><code>/mattermost-request-hub webhook-incoming</code></h3>
+<pre><code>/mattermost-request-hub webhook-incoming ~channel &lt;Display name&gt; [--description &lt;text&gt;]</code></pre>
+        <p>Requests an incoming webhook that posts to that channel. See <a href="webhook.html">Webhooks</a>.</p>
+
+        <h3 id="webhook-outgoing"><code>/mattermost-request-hub webhook-outgoing</code></h3>
+<pre><code>/mattermost-request-hub webhook-outgoing ~channel &lt;Display name&gt; --callback &lt;url&gt; [--description &lt;text&gt;]</code></pre>
+        <p>Requests an outgoing webhook for that channel. See <a href="webhook.html">Webhooks</a>.</p>
 
         <p>For example:</p>
 <pre><code>/mattermost-request-hub team Field Support --description Support for field teams --invite-only
@@ -143,6 +428,12 @@
 /mattermost-request-hub team-guest guest@example.com --channels ~town-square ~vendor-chat
 /mattermost-request-hub bot build-bot Build Bot --description Posts build results --owner @carol
 /mattermost-request-hub webhook-outgoing ~deploys Deploy Hook --callback https://ci.example.com/hook</code></pre>
+        <p>
+            If something is wrong, the reply starts <em>Could not read the request:</em>, says what, and repeats
+            the usage line; nothing is submitted. A name that isn't a user, or a channel that isn't a public
+            channel of the team or a private one you are in, replies <em>unknown user: name</em> or
+            <em>unknown channel: ~name</em>.
+        </p>
 
         <h2 id="typing-arguments">Typing arguments</h2>
         <ul>
@@ -150,8 +441,12 @@
             <li>Put quotes around text that should stay as typed, for example <code>--purpose "--draft-- plans"</code>. Inside quotes, a word that starts with <code>--</code> is just text. The quote marks themselves are not saved. Curly quotes work too.</li>
             <li>Separate users or channels with spaces or commas: <code>@alice @bob</code>, <code>@alice,@bob</code> and <code>@alice, @bob</code> mean the same.</li>
             <li>A long dash that your device typed in place of <code>--</code> works like <code>--</code>.</li>
-            <li>A <code>~channel</code> must be a public channel of the team, or a private one you are in.</li>
         </ul>
+
+        <p>
+            Any request type can also be filed by an AI agent; see <a href="agents.html">AI agents</a>.
+            If a reply isn't clear, see <a href="troubleshooting.html">Troubleshooting</a>.
+        </p>
 
         <p style="margin-top: 32px; opacity: 0.65; font-size: 13px;">
             Markdown sources for contributors live in the plugin repo under <code>docs/</code>

@@ -35,6 +35,7 @@ func TestSubmitTeamGuestRequest_RequiresEmail(t *testing.T) {
 
 func TestSubmitTeamGuestRequest_QueuesForApproval(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)

@@ -30,6 +30,10 @@ type adminRequest struct {
 	// still are get the channel_admin scheme role. Nobody is added to the
 	// channel by this flow.
 	NomineeIDs []string `json:"nominee_ids"`
+	// CreatedAt is when the request was submitted, in milliseconds.
+	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
 	// Used by the MessageHasBeenPosted hook to route thread replies in both directions.
@@ -96,16 +100,24 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 		RequesterID: requesterID,
 		ChannelID:   channelID,
 		NomineeIDs:  nominees,
+		CreatedAt:   model.GetMillis(),
+	}
+
+	entry := newPendingEntry(req)
+	if err := p.reservePending(pendingKindAdmin, req.RequesterID, entry, p.getConfiguration()); err != nil {
+		return "", err
 	}
 
 	// Store before posting so approve/deny handlers can find the request immediately.
 	if err := p.storeAdminRequest(req); err != nil {
+		p.releasePending(pendingKindAdmin, req.RequesterID, req.ID)
 		p.API.LogError("failed to store Channel Admin request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, err := json.Marshal(req)
 	if err != nil {
 		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)
+		p.releasePending(pendingKindAdmin, req.RequesterID, req.ID)
 		return "", errors.Wrap(err, "failed to snapshot admin request")
 	}
 
@@ -113,8 +125,13 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	if err != nil {
 		// Roll back so the stored request isn't orphaned without an approval message.
 		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)
+		p.releasePending(pendingKindAdmin, req.RequesterID, req.ID)
 		p.API.LogError("failed to post Channel Admin request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindAdmin, req.ID)
 	}
 
 	req.ApprovalPostID = approvalPostID
@@ -147,10 +164,11 @@ func (p *Plugin) sendAdminTicketCreatedDM(req *adminRequest, requester *model.Us
 
 // promoteChannelAdmins grants the channel_admin role to each nominee who is
 // still a member of the channel and returns the IDs actually promoted.
-// Membership is re-checked because a request can sit pending while people
-// leave or are removed; nobody is added to the channel. Per-user failures
-// are logged but don't abort the others — a partial promotion is better than
-// none, and callers report only who was promoted.
+// Approve refuses a request whose nominees have left (adminApprovalBlocker),
+// but someone can still leave between that check and this loop, so
+// membership is checked again here; nobody is added to the channel. Per-user
+// failures are logged but don't abort the others, and callers report only
+// who was promoted.
 func (p *Plugin) promoteChannelAdmins(req *adminRequest) []string {
 	promoted := make([]string, 0, len(req.NomineeIDs))
 	for _, userID := range req.NomineeIDs {
@@ -224,15 +242,15 @@ func (p *Plugin) loadAdminRequest(id string) (*adminRequest, []byte, error) {
 // buttons) to the reviewers. It reuses postApprovalAttachment, which posts to
 // the resolved approval channel and falls back to DMing every System Admin when
 // none is available, exactly as the channel-creation flow does. Returns the
-// created post ID and channel ID; both empty in fallback mode.
+// created post ID and channel ID; both empty in fallback mode. Exercise
+// requests mention nobody, so seeding doesn't notify the approvers.
 func (p *Plugin) postAdminApprovalRequest(req *adminRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(channel.TeamId)
-	return p.postApprovalAttachment(
-		req.ID,
-		p.adminApprovalAttachment(req, requester, channel),
-		teamLabel+p.adminApprovalHeader(channel),
-		approvalChannel,
-	)
+	header := exerciseMarker + ": a Channel Admin request needs your review."
+	if !req.Exercise {
+		header = p.adminApprovalHeader(channel)
+	}
+	return p.postApprovalAttachment(req.ID, p.adminApprovalAttachment(req, requester, channel), teamLabel+header, approvalChannel)
 }
 
 // adminApprovalHeader builds the message that leads the approval post,
@@ -247,46 +265,63 @@ func (p *Plugin) adminApprovalHeader(channel *model.Channel) string {
 
 // adminApproverIDs returns the user IDs authorized to approve a channel-admin
 // request: every System Admin plus the Team Admins of the target channel's
-// team. Deduped, bot excluded. Best-effort — lookup failures are logged and
-// skipped rather than aborting the request.
+// team. Deduped; bots, deactivated and remote users are left out.
+// Best-effort — lookup failures are logged and skipped rather than aborting
+// the request.
 func (p *Plugin) adminApproverIDs(teamID string) []string {
 	seen := make(map[string]bool)
 	var ids []string
-	add := func(id string) {
-		if id == "" || id == p.botUserID || seen[id] {
+	add := func(u *model.User) {
+		if !isNotifiableUser(u) || u.Id == p.botUserID || seen[u.Id] {
 			return
 		}
-		seen[id] = true
-		ids = append(ids, id)
+		seen[u.Id] = true
+		ids = append(ids, u.Id)
 	}
 
-	sysAdmins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Page: 0, PerPage: 100})
+	sysAdmins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Active: true, Page: 0, PerPage: 100})
 	if appErr != nil {
 		p.API.LogWarn("failed to list System Admins for admin-request approvers", "error", appErr.Error())
 	} else {
 		for _, u := range sysAdmins {
-			add(u.Id)
+			add(u)
 		}
 	}
 
+	// The plugin API can't filter users by team role (GetUsers ignores
+	// InTeamId and TeamRoles), so Team Admins are found by paging the team's
+	// members, up to maxTeamMemberPages pages.
 	if teamID != "" {
-		const perPage = 200
-		for page := range 50 {
+		const (
+			perPage            = 200
+			maxTeamMemberPages = 50
+		)
+		var teamAdminIDs []string
+		for page := range maxTeamMemberPages {
 			members, appErr := p.API.GetTeamMembers(teamID, page, perPage)
 			if appErr != nil {
 				p.API.LogWarn("failed to list Team Admins for admin-request approvers", "team_id", teamID, "error", appErr.Error())
 				break
 			}
-			if len(members) == 0 {
-				break
-			}
 			for _, m := range members {
+				if m.UserId == "" || m.DeleteAt != 0 || seen[m.UserId] {
+					continue
+				}
 				if m.SchemeAdmin || slices.Contains(strings.Fields(m.Roles), model.TeamAdminRoleId) {
-					add(m.UserId)
+					teamAdminIDs = append(teamAdminIDs, m.UserId)
 				}
 			}
 			if len(members) < perPage {
 				break
+			}
+		}
+		if len(teamAdminIDs) > 0 {
+			teamAdmins, appErr := p.API.GetUsersByIds(teamAdminIDs)
+			if appErr != nil {
+				p.API.LogWarn("failed to load Team Admins for admin-request approvers", "team_id", teamID, "error", appErr.Error())
+			}
+			for _, u := range teamAdmins {
+				add(u)
 			}
 		}
 	}
@@ -307,15 +342,16 @@ func (p *Plugin) adminApprovalAttachment(req *adminRequest, requester *model.Use
 
 	title := "Channel Admin request"
 	if teamName != "" && teamName != "(unknown team)" {
-		title = fmt.Sprintf("Channel Admin request — %s", teamName)
+		title = fmt.Sprintf("Channel Admin request — %s", escapeMarkdown(teamName))
 	}
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   title,
+		Title:   exerciseLabel(req.Exercise) + title,
 		Color:   "#0058CC",
 		Fields:  fields,
 		Text:    fmt.Sprintf("**Proposed Channel Admins:** %s", p.mentionList(req.NomineeIDs)),
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.adminApprovalActions(req.ID, siteURL),
 	}
 }

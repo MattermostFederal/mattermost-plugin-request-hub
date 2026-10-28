@@ -22,6 +22,11 @@ type teamMemberRequest struct {
 	TeamID      string   `json:"team_id"`
 	NomineeIDs  []string `json:"nominee_ids"`
 	Reason      string   `json:"reason,omitempty"`
+	// CreatedAt is when the request was submitted, in milliseconds.
+	// Requests saved by older versions get it from migratePendingRequests.
+	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -71,24 +76,39 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 		TeamID:      teamID,
 		NomineeIDs:  nominees,
 		Reason:      strings.TrimSpace(reason),
+		CreatedAt:   model.GetMillis(),
 	}
 
 	// Any authenticated user may nominate people onto any team; System Admins
 	// approve. Membership of the requester on the target team is intentionally
 	// not required — governance is the approval card, not submit-side RBAC.
-	if err := p.storeTeamMemberRequest(req); err != nil {
+	entry := newPendingEntry(req)
+	if err := p.reservePending(pendingKindTeamMember, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
+	}
+
+	if err := p.storeTeamMemberRequest(req); err != nil {
+		p.releasePending(pendingKindTeamMember, req.RequesterID, req.ID)
+		p.API.LogError("failed to store team member request", "error", err.Error())
+		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamMemberRequestPrefix + req.ID)
+		p.releasePending(pendingKindTeamMember, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot team member request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postTeamMemberApprovalRequest(req, requester, team)
 	if err != nil {
 		_ = p.API.KVDelete(kvTeamMemberRequestPrefix + req.ID)
-		return "", err
+		p.releasePending(pendingKindTeamMember, req.RequesterID, req.ID)
+		p.API.LogError("failed to post team member request for approval", "error", err.Error())
+		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindTeamMember, req.ID)
 	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
@@ -152,7 +172,10 @@ func exceptIDs(all, exclude []string) []string {
 
 func (p *Plugin) postTeamMemberApprovalRequest(req *teamMemberRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a team member request needs System Admin review."
+	header := exerciseMarker + ": a team member request needs System Admin review."
+	if !req.Exercise {
+		header = p.systemAdminMentions() + " — a team member request needs System Admin review."
+	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamMemberApprovalAttachment(req, requester, team),
@@ -172,9 +195,10 @@ func (p *Plugin) teamMemberApprovalAttachment(req *teamMemberRequest, requester 
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Team member request",
+		Title:   exerciseLabel(req.Exercise) + "Team member request",
 		Color:   "#F4A221",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.teamMemberApprovalActions(req.ID, siteURL),
 	}
 }

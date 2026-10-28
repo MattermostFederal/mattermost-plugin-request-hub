@@ -2,10 +2,8 @@ package main
 
 import (
 	"encoding/json"
-	"net/http"
 	"slices"
 
-	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
 )
 
@@ -99,25 +97,27 @@ func (p *Plugin) isRequestCard(postID, approvalPostID, requestID string) (bool, 
 	return postRequestID(post) == requestID, nil
 }
 
-// refuseAction answers an Approve or Deny click that can't go ahead and
-// reports whether it did: the button isn't on one of the request's cards
-// (or the cards couldn't be checked), or Approve was clicked after requests
-// of this type were turned off. Deny still works then, so queued requests
-// can be closed.
-func (p *Plugin) refuseAction(w http.ResponseWriter, postID, approvalPostID, requestID, requestType string, approve bool) bool {
+// cardRefusal returns the private reply to an Approve or Deny click that
+// isn't on one of the request's cards (or whose cards couldn't be checked),
+// or "" when the click is on one.
+func (p *Plugin) cardRefusal(postID, approvalPostID, requestID string) string {
 	isCard, err := p.isRequestCard(postID, approvalPostID, requestID)
 	if err != nil {
 		p.API.LogWarn("failed to check approval card", "request_id", requestID, "error", err.Error())
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: cardCheckFailedText})
-		return true
+		return cardCheckFailedText
 	}
 	if !isCard {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: buttonNotOnCardText})
-		return true
+		return buttonNotOnCardText
 	}
+	return ""
+}
+
+// typeOffRefusal returns the private reply to Approve on a request whose
+// type was turned off after it was submitted, or "" otherwise. Deny still
+// works then, so queued requests can be closed.
+func (p *Plugin) typeOffRefusal(requestType string, approve bool) string {
 	if approve && !p.getConfiguration().RequestEnabled(requestType) {
-		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: requestTypeOffText})
-		return true
+		return requestTypeOffText
 	}
-	return false
+	return ""
 }

@@ -26,6 +26,11 @@ type teamGuestRequest struct {
 	Email       string   `json:"email"`
 	ChannelIDs  []string `json:"channel_ids"`
 	Reason      string   `json:"reason,omitempty"`
+	// CreatedAt is when the request was submitted, in milliseconds.
+	// Requests saved by older versions get it from migratePendingRequests.
+	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -83,16 +88,18 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 		if chErr != nil || ch == nil || ch.TeamId != teamID {
 			return "", errors.New("all guest channels must belong to the selected team")
 		}
+		// Check membership first, so someone outside the channel gets the
+		// same reply whatever state the channel is in.
+		if !requester.IsSystemAdmin() {
+			if _, memErr := p.API.GetChannelMember(chID, requesterID); memErr != nil {
+				return "", errors.New("you can only invite guests to channels you're a member of")
+			}
+		}
 		if ch.Type != model.ChannelTypeOpen && ch.Type != model.ChannelTypePrivate {
 			return "", errors.New("guests can only be invited to public or private channels")
 		}
 		if ch.DeleteAt != 0 {
 			return "", errors.Errorf("~%s is archived", ch.Name)
-		}
-		if !requester.IsSystemAdmin() {
-			if _, memErr := p.API.GetChannelMember(chID, requesterID); memErr != nil {
-				return "", errors.New("you can only invite guests to channels you're a member of")
-			}
 		}
 	}
 
@@ -103,21 +110,36 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 		Email:       email,
 		ChannelIDs:  channels,
 		Reason:      strings.TrimSpace(reason),
+		CreatedAt:   model.GetMillis(),
+	}
+
+	entry := newPendingEntry(req)
+	if err := p.reservePending(pendingKindTeamGuest, req.RequesterID, entry, p.getConfiguration()); err != nil {
+		return "", err
 	}
 
 	if err := p.storeTeamGuestRequest(req); err != nil {
-		return "", err
+		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
+		p.API.LogError("failed to store team guest request", "error", err.Error())
+		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamGuestRequestPrefix + req.ID)
+		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot team guest request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postTeamGuestApprovalRequest(req, requester, team)
 	if err != nil {
 		_ = p.API.KVDelete(kvTeamGuestRequestPrefix + req.ID)
-		return "", err
+		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
+		p.API.LogError("failed to post team guest request for approval", "error", err.Error())
+		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindTeamGuest, req.ID)
 	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
@@ -178,7 +200,10 @@ func (p *Plugin) fulfillTeamGuestRequest(req *teamGuestRequest, actingAdminID st
 
 func (p *Plugin) postTeamGuestApprovalRequest(req *teamGuestRequest, requester *model.User, team *model.Team) (postID, channelID string, err error) {
 	ch := p.ensureTeamCreationApprovalChannel()
-	header := p.systemAdminMentions() + " — a guest invite request needs System Admin review."
+	header := exerciseMarker + ": a guest invite request needs System Admin review."
+	if !req.Exercise {
+		header = p.systemAdminMentions() + " — a guest invite request needs System Admin review."
+	}
 	return p.postApprovalAttachment(
 		req.ID,
 		p.teamGuestApprovalAttachment(req, requester, team),
@@ -199,9 +224,10 @@ func (p *Plugin) teamGuestApprovalAttachment(req *teamGuestRequest, requester *m
 	}
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Team guest invite request",
+		Title:   exerciseLabel(req.Exercise) + "Team guest invite request",
 		Color:   "#F4A221",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.teamGuestApprovalActions(req.ID, siteURL),
 	}
 }

@@ -42,6 +42,14 @@ type botRequest struct {
 	OutgoingWebhookChannelID   string `json:"outgoing_webhook_channel_id,omitempty"`
 	OutgoingWebhookDisplayName string `json:"outgoing_webhook_display_name,omitempty"`
 	OutgoingWebhookCallbackURL string `json:"outgoing_webhook_callback_url,omitempty"`
+	// CreatedAt is when the request was submitted, in milliseconds.
+	// Requests saved by older versions get it from migratePendingRequests.
+	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
+	// ExerciseTeamID is the team whose exercise data records what
+	// approving this request creates.
+	ExerciseTeamID string `json:"exercise_team_id,omitempty"`
 
 	// Ticket messaging fields — set after the approval post and DM are created.
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
@@ -140,21 +148,36 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		OutgoingWebhookChannelID:   outgoingChID,
 		OutgoingWebhookDisplayName: strings.TrimSpace(input.OutgoingWebhookDisplayName),
 		OutgoingWebhookCallbackURL: strings.TrimSpace(input.OutgoingWebhookCallbackURL),
+		CreatedAt:                  model.GetMillis(),
+	}
+
+	entry := newPendingEntry(req)
+	if err := p.reservePending(pendingKindBot, req.RequesterID, entry, p.getConfiguration()); err != nil {
+		return "", err
 	}
 
 	if err := p.storeBotRequest(req); err != nil {
-		return "", err
+		p.releasePending(pendingKindBot, req.RequesterID, req.ID)
+		p.API.LogError("failed to store bot request", "error", err.Error())
+		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)
+		p.releasePending(pendingKindBot, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot bot request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postBotApprovalRequest(req, requester)
 	if err != nil {
 		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)
-		return "", err
+		p.releasePending(pendingKindBot, req.RequesterID, req.ID)
+		p.API.LogError("failed to post bot request for approval", "error", err.Error())
+		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindBot, req.ID)
 	}
 	req.ApprovalPostID = approvalPostID
 	req.ApprovalChannelID = approvalChannelID
@@ -212,13 +235,20 @@ func (p *Plugin) postBotApprovalRequest(req *botRequest, requester *model.User) 
 	return p.postApprovalAttachment(
 		req.ID,
 		p.botApprovalAttachment(req, requester),
-		p.botApprovalHeader(),
+		p.botApprovalHeader(req.Exercise),
 		ch,
 	)
 }
 
-func (p *Plugin) botApprovalHeader() string {
-	return "@channel — a bot account request needs review (requires a security approval and a system approval)."
+// botApprovalHeader is the bot card's header. Exercise cards mention
+// nobody, so seeding doesn't notify the channel.
+func (p *Plugin) botApprovalHeader(exercise bool) string {
+	return cardMention(exercise) + "a bot account request needs review (requires a security approval and a system approval)."
+}
+
+// botRetryHeader is the bot card's header after a failed final approval.
+func botRetryHeader(exercise bool) string {
+	return cardMention(exercise) + "a bot account request needs review (a previous approval attempt failed)."
 }
 
 func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *model.MessageAttachment {
@@ -259,9 +289,10 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   "Bot account request",
+		Title:   exerciseLabel(req.Exercise) + "Bot account request",
 		Color:   "#8B008B",
 		Fields:  fields,
+		Footer:  requestIDFooter(req.ID),
 		Text:    strings.Join(details, "\n"),
 		Actions: p.botApprovalActions(req.ID, siteURL),
 	}

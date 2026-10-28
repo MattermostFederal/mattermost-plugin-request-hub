@@ -84,6 +84,7 @@ func TestTeamScopedSubmit_StoreFailure(t *testing.T) {
 	for _, tc := range teamSubmits() {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
 			tc.setup(api)
@@ -91,8 +92,8 @@ func TestTeamScopedSubmit_StoreFailure(t *testing.T) {
 
 			_, err := tc.submit(p)
 
-			require.Error(t, err)
-			require.Contains(t, err.Error(), tc.storeErr)
+			require.EqualError(t, err, "could not save your request; try again")
+			api.AssertCalled(t, "LogError", tc.storeErr, "error", mock.Anything)
 			api.AssertNotCalled(t, "CreatePost", mock.Anything)
 			api.AssertNotCalled(t, "GetUsers", mock.Anything)
 		})
@@ -105,6 +106,7 @@ func TestTeamScopedSubmit_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	for _, tc := range teamSubmits() {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
 			tc.setup(api)
@@ -117,8 +119,8 @@ func TestTeamScopedSubmit_ApprovalPostFailureRemovesRequest(t *testing.T) {
 
 			_, err := tc.submit(p)
 
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "failed to list System Admins")
+			require.EqualError(t, err, "could not send your request to the approvers; try again or contact a System Admin")
+			api.AssertCalled(t, "LogError", mock.MatchedBy(func(msg string) bool { return strings.HasPrefix(msg, "failed to post ") }), "error", mock.Anything)
 			require.True(t, strings.HasPrefix(deleted, tc.prefix))
 			api.AssertNotCalled(t, "CreatePost", mock.Anything)
 		})

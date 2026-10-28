@@ -38,12 +38,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+
+      # The web app SBOM lists what npm installed, so install it first.
+      # It only reads the installed packages, so install scripts are skipped.
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install webapp dependencies
+        run: cd webapp && npm ci --ignore-scripts
 
       - name: Generate SBOM
         run: make sbom
@@ -58,11 +72,22 @@ jobs:
       # Run Grype directly (rather than via make) so we can emit SARIF
       # for GitHub code scanning. `make sbom-scan` emits table output
       # only — useful for humans, not for the code scanning API.
-      - name: Scan SBOM with Grype (SARIF output)
+      - name: Scan server SBOM with Grype (SARIF output)
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v6.7.0
-        id: grype-scan
+        id: grype-server
         with:
           sbom: dist/sbom/server-sbom.json
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+
+      # Runs even when the server scan fails, so both results are reported.
+      - name: Scan webapp SBOM with Grype (SARIF output)
+        if: ${{ !cancelled() && hashFiles('dist/sbom/webapp-sbom.json') != '' }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v6.7.0
+        id: grype-webapp
+        with:
+          sbom: dist/sbom/webapp-sbom.json
           fail-build: true
           severity-cutoff: high
           output-format: sarif
@@ -75,20 +100,36 @@ jobs:
       # Security. On a private repo without GHAS this upload 403s — don't
       # fail the job for it. The hard CVE gate is the Grype scan above
       # (fail-build: true on HIGH); this step only feeds the Security tab.
-      - name: Upload Grype SARIF to code scanning
-        if: always() && steps.grype-scan.outputs.sarif != ''
+      - name: Upload server Grype SARIF to code scanning
+        if: always() && steps.grype-server.outputs.sarif != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3.30.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          sarif_file: ${{ steps.grype-scan.outputs.sarif }}
+          sarif_file: ${{ steps.grype-server.outputs.sarif }}
           category: grype
 
-      - name: Upload Grype SARIF as workflow artifact
-        if: always() && steps.grype-scan.outputs.sarif != ''
+      - name: Upload webapp Grype SARIF to code scanning
+        if: always() && steps.grype-webapp.outputs.sarif != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ steps.grype-webapp.outputs.sarif }}
+          category: grype-webapp
+
+      - name: Upload server Grype SARIF as workflow artifact
+        if: always() && steps.grype-server.outputs.sarif != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: grype-sarif
-          path: ${{ steps.grype-scan.outputs.sarif }}
+          path: ${{ steps.grype-server.outputs.sarif }}
+          retention-days: 30
+
+      - name: Upload webapp Grype SARIF as workflow artifact
+        if: always() && steps.grype-webapp.outputs.sarif != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grype-webapp-sarif
+          path: ${{ steps.grype-webapp.outputs.sarif }}
           retention-days: 30
 
   codeql:
@@ -110,7 +151,7 @@ jobs:
         run: go run ./build/manifest apply
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3.30.0
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: go
           # Index from repo root so root-package files (main.go,
@@ -119,14 +160,14 @@ jobs:
           # package inside it, not a separate module.
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3.30.0
+        uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
 
       # Split analysis from upload so each step's success/failure has
       # one clear meaning. `upload: never` writes SARIF locally; the
       # explicit security-gate step then enforces the finding threshold,
       # and the upload step pushes results to GitHub Code Scanning.
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3.30.0
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         id: codeql-analyze
         with:
           category: codeql-go
@@ -149,7 +190,7 @@ jobs:
       - name: Upload CodeQL SARIF to code scanning
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3.30.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: codeql-results
           category: codeql-go

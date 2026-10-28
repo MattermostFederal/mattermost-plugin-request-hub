@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -85,6 +86,11 @@ type channelRequest struct {
 	// approval, these users get channel_admin scheme roles in the newly
 	// created channel (in addition to being members).
 	AdminMemberIDs []string `json:"admin_member_ids"`
+	// CreatedAt is when the request was submitted, in milliseconds.
+	// Requests saved by older versions get it from migratePendingRequests.
+	CreatedAt int64 `json:"created_at,omitempty"`
+	// Exercise marks a request seeded by exercise mode.
+	Exercise bool `json:"exercise,omitempty"`
 
 	// CategoryName is the optional sidebar category the requester wants the
 	// new channel placed in on approval. Matched case-insensitively; if no
@@ -98,6 +104,19 @@ type channelRequest struct {
 	DMRootPostID      string `json:"dm_root_post_id,omitempty"`
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
+
+// requestExpired reports whether a request created at createdAt (ms) is
+// older than days at now (ms). days == 0 means requests never expire. A
+// request with no CreatedAt (saved by an older version and not yet
+// migrated) is treated as new.
+func requestExpired(createdAt int64, days int, now int64) bool {
+	if days <= 0 || createdAt <= 0 {
+		return false
+	}
+	return now-createdAt > int64(days)*millisPerDay
+}
+
+const millisPerDay = int64(24 * time.Hour / time.Millisecond)
 
 // requestInput is the normalized set of values gathered from either entry point (slash command
 // dialog or webapp modal) before a request is created.
@@ -339,6 +358,7 @@ type nomineeRules struct {
 	allowBots   bool
 	allowGuests bool
 	teamID      string // when set, nominees must be active members of this team
+	channelID   string // when set, nominees must be members of this channel (approve only)
 }
 
 // checkNominees loads each nominee and returns a user-facing error for the
@@ -429,17 +449,25 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 		MemberIDs:      in.MemberIDs,
 		AdminMemberIDs: in.AdminMemberIDs,
 		CategoryName:   strings.TrimSpace(in.CategoryName),
+		CreatedAt:      model.GetMillis(),
+	}
+
+	entry := newPendingEntry(req)
+	if err = p.reservePending(pendingKindChannel, req.RequesterID, entry, config); err != nil {
+		return "", err
 	}
 
 	// Store the request before posting the approval message so the approve/deny
 	// handlers can find it by ID the moment the post is live.
 	if storeErr := p.storeRequest(req); storeErr != nil {
+		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		p.API.LogError("failed to store channel request", "error", storeErr.Error())
 		return "", errors.New("could not save your request; try again")
 	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot channel request")
 	}
 
@@ -447,8 +475,13 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 	if err != nil {
 		// Roll back the stored request so it isn't orphaned without an approval message.
 		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		p.API.LogError("failed to post channel request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
+	}
+	if approvalPostID == "" {
+		// The card went to System Admins as direct-message copies.
+		p.resolveCardsIfHandled(pendingKindChannel, req.ID)
 	}
 
 	req.ApprovalPostID = approvalPostID
@@ -516,6 +549,7 @@ type auditOutcome int
 const (
 	auditApproved auditOutcome = iota // green ✅
 	auditDenied                       // red ❌
+	auditExpired                      // gray: closed unreviewed after the expiry period
 )
 
 // logAudit posts a colored attachment card to the auto-created audit channel.
@@ -556,6 +590,8 @@ func auditCardStyle(kind auditOutcome) (color, title string) {
 		return colorApproved, "✅ Approved"
 	case auditDenied:
 		return colorDenied, "❌ Denied"
+	case auditExpired:
+		return colorExpired, "⌛ Expired"
 	default:
 		return colorPending, "• Audit"
 	}
@@ -699,14 +735,14 @@ func (p *Plugin) loadRequest(id string) (*channelRequest, []byte, error) {
 // postApprovalRequest posts a channel-creation request (with Approve/Deny buttons) for an admin to
 // act on. Returns the created post's ID and channel ID, which are empty in fallback mode (when the
 // request is DM'd to system admins instead of posted to a channel).
+// Exercise requests mention nobody, so seeding doesn't notify the channel.
 func (p *Plugin) postApprovalRequest(req *channelRequest, requester *model.User) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(req.TeamID)
-	return p.postApprovalAttachment(
-		req.ID,
-		p.approvalAttachment(req, requester),
-		teamLabel+"@channel — a new channel request needs your review.",
-		approvalChannel,
-	)
+	header := "@channel — a new channel request needs your review."
+	if req.Exercise {
+		header = exerciseMarker + ": a new channel request needs your review."
+	}
+	return p.postApprovalAttachment(req.ID, p.approvalAttachment(req, requester), teamLabel+header, approvalChannel)
 }
 
 // postApprovalAttachment delivers an approval attachment to the reviewers. When approvalChannel is
@@ -752,14 +788,14 @@ func (p *Plugin) postApprovalAttachment(requestID string, attachment *model.Mess
 // it; once one does, the others' copies resolve to an "already handled" message. Returns the IDs of
 // the posts it created.
 func (p *Plugin) postApprovalToSystemAdmins(attachment *model.MessageAttachment) ([]string, error) {
-	admins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Page: 0, PerPage: 100})
+	admins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Active: true, Page: 0, PerPage: 100})
 	if appErr != nil {
 		return nil, errors.Wrap(appErr, "failed to list System Admins")
 	}
 
 	var posted []string
 	for _, admin := range admins {
-		if admin.Id == p.botUserID {
+		if !isNotifiableUser(admin) || admin.Id == p.botUserID {
 			continue
 		}
 		dm, appErr := p.API.GetDirectChannel(admin.Id, p.botUserID)
@@ -781,6 +817,12 @@ func (p *Plugin) postApprovalToSystemAdmins(attachment *model.MessageAttachment)
 		return nil, errors.New("no System Admins are available to receive the approval request")
 	}
 	return posted, nil
+}
+
+// isNotifiableUser reports whether u should receive approval notifications:
+// an active, local, human account.
+func isNotifiableUser(u *model.User) bool {
+	return u != nil && !u.IsBot && u.DeleteAt == 0 && !u.IsRemote()
 }
 
 // approvalAttachment builds the Slack attachment (with Approve/Deny buttons) describing a request.
@@ -819,17 +861,24 @@ func (p *Plugin) approvalAttachment(req *channelRequest, requester *model.User) 
 
 	title := "Channel creation request"
 	if teamName != "" && teamName != "(unknown team)" {
-		title = fmt.Sprintf("Channel creation request — %s", teamName)
+		title = fmt.Sprintf("Channel creation request — %s", escapeMarkdown(teamName))
 	}
 
 	siteURL := "/plugins/" + manifest.Id
 	return &model.MessageAttachment{
-		Title:   title,
+		Title:   exerciseLabel(req.Exercise) + title,
 		Color:   "#0058CC",
 		Fields:  fields,
 		Text:    strings.Join(details, "\n"),
+		Footer:  requestIDFooter(req.ID),
 		Actions: p.approvalActions(req.ID, siteURL),
 	}
+}
+
+// requestIDFooter names the request on its approval card, so an approver
+// can act on it with the approve or deny subcommand.
+func requestIDFooter(requestID string) string {
+	return "Request ID: " + requestID
 }
 
 // teamDisplayName returns the team's display name for approval cards.

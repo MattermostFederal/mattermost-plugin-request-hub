@@ -20,9 +20,11 @@ const (
 
 	// colorPending is the sidebar color for the initial "ticket submitted" DM card.
 	// colorApproved and colorDenied are used when the root DM card is updated on outcome.
+	// colorExpired marks requests closed unreviewed after the expiry period.
 	colorPending  = "#E8A838"
 	colorApproved = "#2DB887"
 	colorDenied   = "#D9534F"
+	colorExpired  = "#8B8F97"
 )
 
 // threadAnchor holds all four post IDs needed to relay messages between a
@@ -310,12 +312,18 @@ func extractFirstAttachment(post *model.Post) *model.MessageAttachment {
 // in addition to the colour change on the root card. No-ops when the DM thread
 // IDs are missing (e.g. no approval channel was configured).
 func (p *Plugin) postOutcomeThreadReply(dmChannelID, dmRootPostID string, approved bool, approverUsername string) {
-	if dmChannelID == "" || dmRootPostID == "" {
-		return
-	}
 	msg := fmt.Sprintf("❌ **Denied** by @%s.", approverUsername)
 	if approved {
 		msg = fmt.Sprintf("✅ **Approved** by @%s.", approverUsername)
+	}
+	p.postTicketThreadReply(dmChannelID, dmRootPostID, msg)
+}
+
+// postTicketThreadReply posts msg under the requester's DM ticket root.
+// No-op when the ticket thread was never created.
+func (p *Plugin) postTicketThreadReply(dmChannelID, dmRootPostID, msg string) {
+	if dmChannelID == "" || dmRootPostID == "" || msg == "" {
+		return
 	}
 	if _, appErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,

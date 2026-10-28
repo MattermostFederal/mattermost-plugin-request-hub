@@ -1,7 +1,7 @@
 # Releasing
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please).
-You don't hand-edit version numbers or the changelog — you write
+You don't hand-edit version numbers or the changelog. You write
 [Conventional Commits](https://www.conventionalcommits.org/), and the tooling
 does the rest.
 
@@ -30,7 +30,7 @@ commit to main (feat:/fix:/...) ──► release-please.yml opens/updates a "Re
    publishes a GitHub Release with the bundle, checksum, SBOMs, CodeQL SARIF,
    and signature.
 
-Nothing releases until you merge the Release PR — merging normal PRs to `main`
+Nothing releases until you merge the Release PR. Merging normal PRs to `main`
 only updates the pending release, it doesn't ship.
 
 ## Commit message format
@@ -48,7 +48,7 @@ The prefix on the commit **subject** drives the version bump:
 
 Rules of thumb:
 
-- Subject lines with **no** conventional prefix are left out of the changelog —
+- Subject lines with **no** conventional prefix are left out of the changelog, so
   use `feat:`/`fix:` deliberately.
 - Squash-merging PRs? The **PR title** becomes the commit subject, so title PRs
   with a conventional prefix.
@@ -73,7 +73,7 @@ If you need to ship without release-please (hotfix, tooling outage):
 git commit -am "chore: release v0.2.0"
 git push origin main
 
-# 2. Tag and push — this fires release.yml.
+# 2. Tag and push. This fires release.yml.
 git tag -a v0.2.0 -m "release v0.2.0"
 git push origin v0.2.0
 ```
@@ -86,13 +86,13 @@ first.
 
 `release.yml` runs `make release`, which produces and attaches:
 
-- `<plugin-id>-<version>.tar.gz` — the plugin bundle (with `sbom/` and
+- `<plugin-id>-<version>.tar.gz`: the plugin bundle (with `sbom/` and
   `security/` SARIF embedded inside it)
 - `.sha256` checksum sidecar
-- `.sig` detached GPG signature (only if a signing key is configured — see
+- `.sig` detached GPG signature (only if a signing key is configured; see
   [SECURITY.md](../SECURITY.md))
-- `server-sbom.json` / `webapp-sbom.json` — CycloneDX SBOMs
-- `codeql-go.sarif` / `codeql-js.sarif` — static-analysis results
+- `server-sbom.json` / `webapp-sbom.json`: CycloneDX SBOMs
+- `codeql-go.sarif` / `codeql-js.sarif`: static-analysis results
 
 ## Pre-releases
 

@@ -42,8 +42,9 @@ func newTestPlugin(api *plugintest.API) *Plugin {
 func stubLogs(api *plugintest.API) {
 	stubLogLevels(api)
 	// CAS re-store of post IDs after approval/DM create — most queue tests
-	// don't care about the success path beyond "submitted".
-	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// don't care about the success path beyond "submitted". Pending lists are
+	// left to stubPendingLists / fakePendingLists.
+	api.On("KVCompareAndSet", isNotPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	stubApprovalTeamRecord(api)
 	// Ticket relay lookups refreshed before an approve/deny claim, and the
 	// approval card record saved at submit and cleared at close.
@@ -54,6 +55,12 @@ func stubLogs(api *plugintest.API) {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvApprovalCardsPrefix)
 	})).Return(nil).Maybe()
+}
+
+// stubLogLines registers only the permissive log expectations, for tests
+// that back the KV store with fakeKV.
+func stubLogLines(api *plugintest.API) {
+	stubLogLevels(api)
 }
 
 // stubLogLevels registers permissive log expectations and nothing else, for
@@ -372,6 +379,7 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 	// request in any team, so their team membership isn't checked.
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{
@@ -406,6 +414,10 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
+	// Pending lists only: the card record write must reach the failing mock below.
+	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", isPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVCompareAndDelete", isPendingListKey, mock.Anything).Return(true, nil).Maybe()
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{
@@ -448,6 +460,8 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 		t.Run("type "+string(taken.Type), func(t *testing.T) {
 			api := &plugintest.API{}
 			stubLogs(api)
+			stubPendingLists(api)
+			stubSubmittedRequestExists(api, kvRequestPrefix)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
 			p.setConfiguration(&configuration{
@@ -814,8 +828,8 @@ func TestApprovalAttachment_IncludesTeamProminently(t *testing.T) {
 	require.False(t, bool(att.Fields[0].Short), "Team should be full-width so it stands out")
 }
 
-// pendingKey matches the KV key of any pending channel request.
-var pendingKey = mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvRequestPrefix) })
+// isRequestRecordKey matches the KV key of any stored channel request.
+var isRequestRecordKey = mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvRequestPrefix) })
 
 // approvalConfig enables channel requests and routes approvals to the
 // auto-created approval channel in team "appteam" (mocked as "appch" by
@@ -848,13 +862,14 @@ func mockMemberRequester(api *plugintest.API) {
 func TestSubmitRequest_StoresAndPostsForApproval(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(approvalConfig())
 
 	mockMemberRequester(api)
 	var stored channelRequest
-	api.On("KVSet", pendingKey, mock.Anything).Run(func(args mock.Arguments) {
+	api.On("KVSet", isRequestRecordKey, mock.Anything).Run(func(args mock.Arguments) {
 		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &stored))
 	}).Return(nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng", DisplayName: "Engineering"}, nil)
@@ -884,12 +899,13 @@ func TestSubmitRequest_StoresAndPostsForApproval(t *testing.T) {
 func TestSubmitRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(approvalConfig())
 
 	mockMemberRequester(api)
-	api.On("KVSet", pendingKey, mock.Anything).Return(testAppErr("kv down"))
+	api.On("KVSet", isRequestRecordKey, mock.Anything).Return(testAppErr("kv down"))
 
 	_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
 
@@ -900,17 +916,18 @@ func TestSubmitRequest_StoreFailure(t *testing.T) {
 func TestSubmitRequest_ApprovalPostFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
+	stubPendingLists(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.setConfiguration(approvalConfig())
 
 	mockMemberRequester(api)
 	var key string
-	api.On("KVSet", pendingKey, mock.Anything).Run(func(args mock.Arguments) { key = args.String(0) }).Return(nil)
+	api.On("KVSet", isRequestRecordKey, mock.Anything).Run(func(args mock.Arguments) { key = args.String(0) }).Return(nil)
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng", DisplayName: "Engineering"}, nil)
 	mockApprovalChannel(api)
 	api.On("CreatePost", mock.Anything).Return(nil, testAppErr("post failed"))
-	api.On("KVDelete", pendingKey).Return(nil)
+	api.On("KVDelete", isRequestRecordKey).Return(nil)
 
 	_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
 
@@ -1001,13 +1018,15 @@ func TestPostApprovalAttachment_FallsBackToSystemAdminDMs(t *testing.T) {
 	api.On("GetDirectChannel", "a2", "bot-user-id").Return(&model.Channel{Id: "dm2"}, nil)
 	api.On("GetDirectChannel", "a3", "bot-user-id").Return(&model.Channel{Id: "dm3"}, nil)
 	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm2" })).Return(nil, testAppErr("post failed"))
-	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm3" })).Return(&model.Post{}, nil)
+	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool { return post.ChannelId == "dm3" })).Return(&model.Post{Id: "post3"}, nil)
 
 	// No approval channel resolved: the card goes to System Admin DMs.
 	postID, channelID, err := p.postApprovalAttachment("r1", &model.MessageAttachment{Title: "x"}, "header", nil)
 	require.NoError(t, err)
 	require.Empty(t, postID)
 	require.Empty(t, channelID)
+	// Only the copies that were created are recorded.
+	api.AssertCalled(t, "KVSet", kvApprovalCardsPrefix+"r1", []byte(`["post3"]`))
 	// The bot never DMs itself.
 	api.AssertNotCalled(t, "GetDirectChannel", "bot-user-id", "bot-user-id")
 }
@@ -1141,4 +1160,153 @@ func TestCreateChannelForRequest_PromotionFailureIsNonFatal(t *testing.T) {
 func TestSlugify_TruncatesToChannelNameLimit(t *testing.T) {
 	got := slugify(strings.Repeat("a", model.ChannelNameMaxLength+10))
 	require.Len(t, got, model.ChannelNameMaxLength)
+}
+
+// mockQueuedChannelRequest lets a channel request from u1 in team1 be
+// stored, posted to the approval channel and DMed to the requester.
+func mockQueuedChannelRequest(api *plugintest.API) {
+	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng"}, nil)
+	mockApprovalChannel(api)
+	api.On("GetDirectChannel", "u1", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "post1"}, nil)
+}
+
+func TestSubmitRequestPendingLimit(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	config := approvalConfig()
+	config.maxPending = 1
+	p.setConfiguration(config)
+
+	lists := fakePendingLists(api)
+	mockMemberRequester(api)
+	// The first request was reserved within the grace period, so its entry
+	// counts without its record being looked up.
+	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil).Maybe()
+	mockQueuedChannelRequest(api)
+
+	_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
+	require.NoError(t, err)
+	entries := decodeEntries(t, lists[pendingListKey(pendingKindChannel, "u1")])
+	require.Len(t, entries, 1)
+	require.Equal(t, "team1/team-marketing", entries[0].Key)
+	require.NotZero(t, entries[0].CreatedAt)
+
+	_, err = p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Sales", Prefix: "team-"})
+	require.ErrorContains(t, err, "you have 1 pending requests waiting for review")
+	api.AssertNumberOfCalls(t, "GetChannelByName", 1)
+}
+
+func TestSubmitRequestPendingLimitAppliesToQueuedSystemAdmins(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	config := approvalConfig()
+	config.maxPending = 1
+	p.setConfiguration(config)
+
+	lists := fakePendingLists(api)
+	lists[pendingListKey(pendingKindChannel, "admin1")] = entriesJSON(t, pendingEntry{ID: "r1", CreatedAt: model.GetMillis() - 2*pendingReserveGraceMillis, Key: "team1/team-other"})
+	api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
+	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil)
+
+	// System Admins' requests queue too, so the limit applies to them.
+	_, err := p.submitRequest(requestInput{RequesterID: "admin1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
+	require.ErrorContains(t, err, "you have 1 pending requests waiting for review")
+	api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
+}
+
+func TestSubmitRequestDuplicate(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(approvalConfig())
+
+	fakePendingLists(api)
+	mockMemberRequester(api)
+	// The first request was reserved within the grace period, so its entry
+	// counts without its record being looked up.
+	api.On("KVGet", isRequestRecordKey).Return([]byte("{}"), nil).Maybe()
+	mockQueuedChannelRequest(api)
+
+	in := requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"}
+	_, err := p.submitRequest(in)
+	require.NoError(t, err)
+
+	_, err = p.submitRequest(in)
+	require.EqualError(t, err, "you already have a pending request for ~team-marketing in this team")
+}
+
+func TestSubmitRequestFailureFreesPendingSlot(t *testing.T) {
+	for name, setup := range map[string]func(api *plugintest.API){
+		"store fails": func(api *plugintest.API) {
+			api.On("KVSet", isRequestRecordKey, mock.Anything).Return(testAppErr("kv down"))
+		},
+		"approval post fails": func(api *plugintest.API) {
+			api.On("KVSet", isRequestRecordKey, mock.Anything).Return(nil)
+			api.On("KVDelete", isRequestRecordKey).Return(nil)
+			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng"}, nil)
+			mockApprovalChannel(api)
+			api.On("CreatePost", mock.Anything).Return(nil, testAppErr("post failed"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogs(api)
+			defer api.AssertExpectations(t)
+			p := newTestPlugin(api)
+			p.setConfiguration(approvalConfig())
+
+			lists := fakePendingLists(api)
+			mockMemberRequester(api)
+			setup(api)
+
+			_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
+			require.Error(t, err)
+			require.Empty(t, lists, "the pending slot is given back")
+		})
+	}
+}
+
+func TestSubmitRequestPendingListUnavailable(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(approvalConfig())
+
+	mockMemberRequester(api)
+	api.On("KVGet", isPendingListKey).Return(nil, testAppErr("kv down"))
+
+	_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
+	require.EqualError(t, err, "could not save your request; try again")
+	api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
+}
+
+func TestPostApprovalToSystemAdmins_SkipsNonHumanAccounts(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	remote := "remote1"
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{
+		{Id: "bot-user-id"},
+		{Id: "otherbot", IsBot: true},
+		{Id: "gone", DeleteAt: 1},
+		{Id: "shared", RemoteId: &remote},
+		nil,
+		{Id: "sys1"},
+	}, nil)
+	api.On("GetDirectChannel", "sys1", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+
+	_, err := p.postApprovalToSystemAdmins(&model.MessageAttachment{})
+	require.NoError(t, err)
+	api.AssertNumberOfCalls(t, "GetDirectChannel", 1)
 }

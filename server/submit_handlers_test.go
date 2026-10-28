@@ -63,6 +63,7 @@ func stubChannelAdminQueue(api *plugintest.API) {
 	api.On("GetChannelMember", "ch1", testNomineeID).Return(&model.ChannelMember{}, nil)
 	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil).Maybe()
 	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Maybe()
+	stubSubmittedRequestExists(api, kvAdminRequestPrefix)
 }
 
 func stubTeamAdminQueue(nomineeID string) func(api *plugintest.API) {
@@ -441,6 +442,7 @@ func TestHandleWebappCreate_QueuesAndReplies(t *testing.T) {
 	stubTeam1(api)
 	api.On("GetUserByUsername", "nommy").Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
 	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil).Maybe()
+	stubSubmittedRequestExists(api, kvRequestPrefix)
 
 	w := serve(p, http.MethodPost, routeCreate, testSysAdminID,
 		withBodyUser(`{"team_id":"team1","display_name":"Ops Room","prefix":"team-","channel_type":"O","members":["nommy"],"admin_members":["@nommy"]}`))

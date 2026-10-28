@@ -87,6 +87,11 @@ func TestReadArgs_AutocorrectDashesReadAsFlags(t *testing.T) {
 	require.EqualError(t, err, "unknown option `--color`")
 }
 
+func TestReadArgs_UnknownOptionCantCloseCodeSpan(t *testing.T) {
+	_, _, err := readArgs([]commandArg{{Text: "Ops"}, {Text: "--a`](https://evil.test)`b"}}, "--private")
+	require.EqualError(t, err, "unknown option `--a](https://evil.test)b`")
+}
+
 func TestSplitListArgs(t *testing.T) {
 	for input, want := range map[string][]string{
 		"@a,@b":    {"@a", "@b"},
@@ -140,13 +145,18 @@ func TestExecuteCommand_ChannelAdminSplitsCommaList(t *testing.T) {
 	require.Equal(t, "unknown user: ghost", runCommand(p, "/mattermost-request-hub channel-admin @nommy,@ghost").Text)
 }
 
-func TestExecuteCommand_ArgumentFormsQueue(t *testing.T) {
-	for name, tc := range map[string]struct {
-		command  string
-		stub     func(api *plugintest.API)
-		kvPrefix string
-		want     map[string]any
-	}{
+// argumentFormCase is a newer request type filed with its argument form.
+type argumentFormCase struct {
+	command  string
+	stub     func(api *plugintest.API)
+	kvPrefix string
+	want     map[string]any
+}
+
+// argumentFormCases files one request of every newer type, as System Admin
+// testSysAdminID in team1.
+func argumentFormCases() map[string]argumentFormCase {
+	return map[string]argumentFormCase{
 		"team admin": {
 			command: "team-admin @nommy,",
 			stub: func(api *plugintest.API) {
@@ -225,7 +235,11 @@ func TestExecuteCommand_ArgumentFormsQueue(t *testing.T) {
 				"webhook_type": webhookTypeOutgoing, "channel_id": "ch1", "display_name": "Relay", "callback_url": "https://hooks.example.com/out",
 			},
 		},
-	} {
+	}
+}
+
+func TestExecuteCommand_ArgumentFormsQueue(t *testing.T) {
+	for name, tc := range argumentFormCases() {
 		t.Run(name, func(t *testing.T) {
 			// A System Admin's command queues like everyone else's.
 			p, api := newQueuePlugin(t)
@@ -247,6 +261,38 @@ func TestExecuteCommand_ArgumentFormsQueue(t *testing.T) {
 			for field, value := range tc.want {
 				require.Equal(t, value, stored[field], field)
 			}
+		})
+	}
+}
+
+func TestExecuteCommand_ArgumentFormsCloseCopiesDecidedWhilePosting(t *testing.T) {
+	for name, tc := range argumentFormCases() {
+		t.Run(name, func(t *testing.T) {
+			// A System Admin decided the request from the first direct-message
+			// copy while the copies were still being posted, so it is gone
+			// once they are recorded.
+			api := &plugintest.API{}
+			stubLogs(api)
+			api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, tc.kvPrefix) })).Return(nil, nil)
+			api.On("KVGet", isApprovalCardsKey).Return([]byte(`["posted"]`), nil)
+			stubPendingLists(api)
+			p := newTestPlugin(api)
+			stubSystemAdminQueue(api)
+			if tc.stub != nil {
+				tc.stub(api)
+			}
+			card := approvalCard("posted")
+			api.On("GetPost", "posted").Return(card, nil)
+			var closed *model.Post
+			api.On("UpdatePost", mock.Anything).Run(func(args mock.Arguments) { closed = args.Get(0).(*model.Post) }).Return(&model.Post{}, nil)
+
+			resp := runCommandAs(p, testSysAdminID, "/mattermost-request-hub "+tc.command)
+
+			require.NotContains(t, resp.Text, "Something went wrong")
+			require.NotNil(t, closed, "the recorded copy should be closed")
+			require.Equal(t, "posted", closed.Id)
+			require.Equal(t, alreadyHandledText, closed.Message)
+			api.AssertCalled(t, "KVDelete", isApprovalCardsKey)
 		})
 	}
 }

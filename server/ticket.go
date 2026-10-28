@@ -130,13 +130,21 @@ type ticketClose struct {
 	CardTitle        string
 	CardText         string
 	StatusLine       string // one-line tombstone on the approval post
+
+	// Expired closes the ticket without a decision (request expired before
+	// review). ThreadReply then replaces the Approved/Denied thread line.
+	Expired     bool
+	ThreadReply string
 }
 
 // closeTicket runs the shared close path and returns the Update payload for the
 // PostActionIntegrationResponse.
 func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 	color := colorDenied
-	if c.Approved {
+	switch {
+	case c.Expired:
+		color = colorExpired
+	case c.Approved:
 		color = colorApproved
 	}
 	p.notifyRequesterInThreadCard(c.RequesterID, c.DMRootPostID, c.DMChannelID, &model.MessageAttachment{
@@ -144,7 +152,11 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 		Title: c.CardTitle,
 		Text:  c.CardText,
 	})
-	p.postOutcomeThreadReply(c.DMChannelID, c.DMRootPostID, c.Approved, c.ApproverUsername)
+	if c.Expired {
+		p.postTicketThreadReply(c.DMChannelID, c.DMRootPostID, c.ThreadReply)
+	} else {
+		p.postOutcomeThreadReply(c.DMChannelID, c.DMRootPostID, c.Approved, c.ApproverUsername)
+	}
 	p.deleteApprovalCards(c.RequestID)
 	return p.resolvedPost(c.ApprovalPostID, c.StatusLine)
 }

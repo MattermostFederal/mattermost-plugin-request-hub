@@ -67,6 +67,7 @@ func registryHolds(postIDs ...string) any {
 
 func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	stubRequester(api)
@@ -75,13 +76,14 @@ func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 
 	_, err := p.submitBotRequest("u_req", botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"})
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to store bot request")
+	require.EqualError(t, err, "could not save your request; try again")
+	api.AssertCalled(t, "LogError", "failed to store bot request", "error", mock.Anything)
 	api.AssertNotCalled(t, "CreatePost", mock.Anything)
 }
 
 func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	cfg := *p.getConfiguration()
@@ -99,14 +101,14 @@ func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 
 	_, err := p.submitBotRequest("u_req", botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"})
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to post approval request")
+	require.EqualError(t, err, "could not send your request to the approvers; try again or contact a System Admin")
 	require.NotEmpty(t, deleted)
 	api.AssertNotCalled(t, "GetDirectChannel", mock.Anything, mock.Anything)
 }
 
 func TestSubmitWebhookRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	api.On("GetUser", "u_req").Return(regularUser(), nil)
@@ -117,13 +119,14 @@ func TestSubmitWebhookRequest_StoreFailure(t *testing.T) {
 
 	_, err := p.submitWebhookRequest("u_req", webhookTypeIncoming, "ch1", "Alerts", "", "")
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to store webhook request")
+	require.EqualError(t, err, "could not save your request; try again")
+	api.AssertCalled(t, "LogError", "failed to store webhook request", "error", mock.Anything)
 	api.AssertNotCalled(t, "CreatePost", mock.Anything)
 }
 
 func TestSubmitWebhookRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	cfg := *p.getConfiguration()
@@ -141,8 +144,7 @@ func TestSubmitWebhookRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 
 	_, err := p.submitWebhookRequest("u_req", webhookTypeIncoming, "ch1", "Alerts", "", "")
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to post approval request")
+	require.EqualError(t, err, "could not send your request to the approvers; try again or contact a System Admin")
 	require.NotEmpty(t, deleted)
 }
 
@@ -425,7 +427,8 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		stubSiteURL(api, ts.URL)
 		token, err := p.createBotToken("tok", "bot1", "desc")
 		require.NoError(t, err)
-		require.Equal(t, "secret-value", token)
+		require.Equal(t, "secret-value", token.Token)
+		require.Equal(t, "t1", token.Id)
 		require.Equal(t, []string{"POST /api/v4/users/bot1/tokens"}, srv.seen())
 	})
 
@@ -439,6 +442,35 @@ func TestCreateBotToken_Paths(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "create token")
 	})
+}
+
+func TestCreateBotToken_Lifetime(t *testing.T) {
+	for name, months := range map[string]int{
+		"default of one year": 12,
+		"one month":           1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var sent model.UserAccessToken
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(mustMarshal(t, model.UserAccessToken{Id: "t1", Token: "secret-value", ExpiresAt: sent.ExpiresAt}))
+			}))
+			t.Cleanup(ts.Close)
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			p.getConfiguration().tokenLifetimeMonths = months
+			stubSiteURL(api, ts.URL)
+
+			before := time.Now()
+			token, err := p.createBotToken("tok", "bot1", "desc")
+
+			require.NoError(t, err)
+			require.Equal(t, sent.ExpiresAt, token.ExpiresAt)
+			want := before.AddDate(0, months, 0)
+			require.WithinDuration(t, want, time.UnixMilli(sent.ExpiresAt), time.Minute)
+		})
+	}
 }
 
 func TestScheduleTokenPostDeletion_AppendsAfterRetry(t *testing.T) {
