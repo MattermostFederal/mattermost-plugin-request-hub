@@ -14,6 +14,7 @@ MM_IMAGE=mattermost/mattermost-enterprise-edition:11.3 npx playwright test
 - Needs Docker and the Node version in `.nvmrc`. On Apple Silicon the amd64 image runs under Rosetta (`MATTERMOST_PLATFORM` overrides the platform).
 - Server logs go to `logs/<name>-w<worker>.log` (one JSON object per line). Traces and screenshots of failed tests go to `test-results/`, and the HTML report to `playwright-report/`.
 - CI (`.github/workflows/e2e.yml`) builds the bundle once, then runs the suite in 2 shards against Mattermost 11.3 (`min_server_version`) and the newest release, both pinned by digest. The `e2e` job is the one check that sums them up. A nightly run repeats every test 3 times to find flaky tests. Retries stay at 0: a flaky test gets fixed, or skipped with a link to an issue.
+- A test for a known product bug asserts the correct behaviour and is marked `test.fail(true, 'BUG: ...')`. It passes while the bug is there and fails once the bug is fixed, which is the reminder to remove the marker.
 
 ## How the suite is organised
 
@@ -51,6 +52,8 @@ Because tests share a server, they must not depend on each other or on leftovers
 
 `helpers/ui.ts` has browser helpers: `login(page, hub, username)` and `openChannel(page, hub, channel)`.
 
+Each request area has its own helper file next to its spec: `channel.ts`, `bots.ts`, `webhooks.ts`, `teamrequests.ts`, `limits.ts` and `slash.ts`. They hold that area's submit wrappers, exact message texts and "nothing was stored" checks.
+
 ## Server versions and licensing
 
 - The Enterprise image without a license file runs as **Mattermost Entry**, which includes guest accounts, LDAP groups and custom profile attributes. No license secret is needed.
@@ -59,7 +62,7 @@ Because tests share a server, they must not depend on each other or on leftovers
 
 ## Coverage
 
-Feature checklist for the suite. A feature is ticked once a spec covers it end to end; anything left to unit tests says why.
+Feature checklist for the suite. A feature is ticked once a spec covers it end to end, including the requests that must be refused at submit and at approval; anything left to unit tests says why.
 
 | Area | Spec | Status |
 |---|---|---|
@@ -67,13 +70,13 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Channel request: dialog (browser and API), REST, approve, deny, Team Admin approves | `channel-request` | ✅ |
 | Bot token lifetime and token DM | `request-channels` | ✅ |
 | Bootstrap: channels, per-team approval channels, idempotent re-enable | `bootstrap` | ⬜ |
-| Channel request: inline slash, modal, prefixes, name clashes, concurrent approvals, re-checks | `channel-request` | ⬜ |
-| Channel Admin requests | `channel-admin` | ⬜ |
-| Team, Team Admin, team member and team guest requests | `team-requests` | ⬜ |
-| Bot requests: two-step approval in each approver mode | `bot-requests` | ⬜ |
-| Incoming and outgoing webhook requests | `webhook-requests` | ⬜ |
-| Pending limit, duplicates, double submit, expiry, pruning | `limits-expiry` | ⬜ |
-| Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` | ⬜ |
+| Channel request: inline slash, modal, prefixes, name clashes, concurrent approvals, re-checks | `channel-request` |✅ |
+| Channel Admin requests | `channel-admin` |✅ |
+| Team, Team Admin, team member and team guest requests | `team-requests` |✅ |
+| Bot requests: two-step approval in each approver mode | `bot-requests` |✅ |
+| Incoming and outgoing webhook requests | `webhook-requests` |✅ |
+| Pending limit, duplicates, double submit, expiry, pruning | `limits-expiry` |✅ |
+| Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` |✅ |
 | Settings toggles and the admin console | `settings` | ⬜ |
 | Webapp modals and menus | `webapp-modals` | ⬜ |
 | Exercise mode | `exercise` | ⬜ |
