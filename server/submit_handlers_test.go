@@ -330,7 +330,7 @@ func webappRoutes() map[string]webappRoute {
 				"no team": {body: `{"nominees":["nommy"]}`, wantErr: "team_id is required"},
 				"unknown nominee": {body: `{"team_id":"team1","nominees":["ghost"]}`, stub: func(api *plugintest.API) {
 					api.On("GetUserByUsername", "ghost").Return(nil, testAppErr("not found"))
-				}, wantErr: "unknown user: ghost"},
+				}, wantErr: "unknown user: `ghost`"},
 				"no nominees": {body: `{"team_id":"team1","nominees":[]}`, wantErr: "pick at least one person"},
 			},
 		},

@@ -249,7 +249,7 @@ func resolvePrefixedName(prefixes []channelPrefix, in requestInput) (string, err
 		for i := range prefixes {
 			allowed[i] = prefixes[i].Prefix
 		}
-		return "", errors.Errorf("prefix %q is not in the list of allowed prefixes: %s", selected, strings.Join(allowed, ", "))
+		return "", errors.Errorf("prefix %s is not in the list of allowed prefixes: %s", inlineCode(selected), strings.Join(allowed, ", "))
 	}
 
 	suffix := strings.TrimSpace(in.Name)

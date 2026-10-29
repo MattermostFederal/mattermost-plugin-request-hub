@@ -361,7 +361,7 @@ func TestResolvePrefixedName_PrefixWithoutHyphen(t *testing.T) {
 	require.Equal(t, "opschat", name)
 
 	_, err = resolvePrefixedName(prefixes, requestInput{Prefix: "nope", Name: "chat"})
-	require.EqualError(t, err, `prefix "nope" is not in the list of allowed prefixes: eng-, ops, ops-`)
+	require.EqualError(t, err, "prefix `nope` is not in the list of allowed prefixes: eng-, ops, ops-")
 }
 
 func TestResolvePrefixedName_AnchoredSuffixMatchesWholeSuffix(t *testing.T) {
@@ -1054,7 +1054,7 @@ func TestSubmitRequest_ChannelNameErrors(t *testing.T) {
 	}{
 		{name: "no prefixes configured", config: &configuration{}, in: requestInput{DisplayName: "Ops", Prefix: "team-"}, want: "plugin is not configured"},
 		{name: "no prefix picked", config: approvalConfig(), in: requestInput{DisplayName: "Ops"}, want: "please pick a channel prefix"},
-		{name: "unknown prefix", config: approvalConfig(), in: requestInput{DisplayName: "Ops", Prefix: "nope-"}, want: `prefix "nope-" is not in the list`},
+		{name: "unknown prefix", config: approvalConfig(), in: requestInput{DisplayName: "Ops", Prefix: "nope-"}, want: "prefix `nope-` is not in the list"},
 		{name: "suffix empty after cleanup", config: approvalConfig(), in: requestInput{DisplayName: "!!!", Name: "---", Prefix: "team-"}, want: "channel name suffix is required"},
 	}
 	for _, tc := range cases {

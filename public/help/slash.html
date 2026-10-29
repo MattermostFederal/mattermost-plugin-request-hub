@@ -129,9 +129,9 @@
             <tbody>
                 <tr><td><em>Could not read the request: a prefix and a channel name are required.</em></td><td>Give the prefix, then the name, before any option.</td></tr>
                 <tr><td><em>Could not read the request: unknown option `--x`.</em>, <em>... is given more than once</em>, <em>`--suffix` takes exactly one value</em></td><td>Check the options against the table above.</td></tr>
-                <tr><td><em>prefix "x" is not in the list of allowed prefixes</em></td><td>Run <code>/mattermost-request-hub prefixes</code> and copy one exactly.</td></tr>
+                <tr><td><em>prefix <code>x</code> is not in the list of allowed prefixes</em></td><td>Run <code>/mattermost-request-hub prefixes</code> and copy one exactly.</td></tr>
                 <tr><td><em>suffix "x" doesn't match the required pattern for prefix "y"</em></td><td>The prefix has a suffix rule; <code>prefixes</code> shows it.</td></tr>
-                <tr><td><em>unknown user: name</em></td><td>Check the spelling of each <code>@user</code>.</td></tr>
+                <tr><td><em>unknown user: <code>name</code></em></td><td>Check the spelling of each <code>@user</code>.</td></tr>
                 <tr><td><em>you must be a member of the team to request a channel in it</em></td><td>Run the command from a team you belong to.</td></tr>
                 <tr><td><em>you have N pending requests waiting for review...</em>, <em>you already have a pending request for ~name in this team</em></td><td>See <a href="troubleshooting.html#pending-limit">Pending limit</a>.</td></tr>
                 <tr><td><em>Channel requests aren't configured yet...</em></td><td>See <a href="troubleshooting.html#not-configured">Not configured</a>.</td></tr>
@@ -431,7 +431,7 @@
         <p>
             If something is wrong, the reply starts <em>Could not read the request:</em>, says what, and repeats
             the usage line; nothing is submitted. A name that isn't a user, or a channel that isn't a public
-            channel of the team or a private one you are in, replies <em>unknown user: name</em> or
+            channel of the team or a private one you are in, replies <em>unknown user: <code>name</code></em> or
             <em>unknown channel: ~name</em>.
         </p>
 

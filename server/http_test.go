@@ -1363,7 +1363,7 @@ func TestHandleRequestAdmin(t *testing.T) {
 
 		w := callHandler(p.handleRequestAdmin, http.MethodPost, routeRequestAdmin, "u1", `{"channel_id":"chX","nominees":["@ghost"]}`)
 
-		require.Equal(t, "unknown user: ghost", jsonMap(t, w)["error"])
+		require.Equal(t, "unknown user: `ghost`", jsonMap(t, w)["error"])
 	})
 
 	t.Run("validation error", func(t *testing.T) {
@@ -1399,7 +1399,7 @@ func TestHandleWebappCreate(t *testing.T) {
 
 		w := callHandler(p.handleWebappCreate, http.MethodPost, routeCreate, "u1", `{"members":["ghost"]}`)
 
-		require.Equal(t, "unknown user: ghost", jsonMap(t, w)["error"])
+		require.Equal(t, "unknown user: `ghost`", jsonMap(t, w)["error"])
 	})
 
 	t.Run("unknown channel admin", func(t *testing.T) {
@@ -1410,7 +1410,7 @@ func TestHandleWebappCreate(t *testing.T) {
 
 		w := callHandler(p.handleWebappCreate, http.MethodPost, routeCreate, "u1", `{"admin_members":["ghost"]}`)
 
-		require.Equal(t, "unknown user: ghost", jsonMap(t, w)["error"])
+		require.Equal(t, "unknown user: `ghost`", jsonMap(t, w)["error"])
 	})
 
 	t.Run("submit error", func(t *testing.T) {

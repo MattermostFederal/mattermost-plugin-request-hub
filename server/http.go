@@ -1451,7 +1451,7 @@ func (p *Plugin) resolveUsernameList(usernames []string) ([]string, error) {
 		}
 		user, appErr := p.API.GetUserByUsername(username)
 		if appErr != nil {
-			return nil, errors.Errorf("unknown user: %s", username)
+			return nil, errors.Errorf("unknown user: %s", inlineCode(username))
 		}
 		out = append(out, user.Id)
 	}

@@ -160,7 +160,7 @@ func TestRequestChannelTool_UnknownUsersAreRefused(t *testing.T) {
 				"team_id": "team1", "prefix": "team-", "display_name": "Marketing", field: []string{"@ghost"},
 			})
 
-			require.Equal(t, "unknown user: ghost", mcpToolError(t, result))
+			require.Equal(t, "unknown user: `ghost`", mcpToolError(t, result))
 			api.AssertNotCalled(t, "GetUser", mock.Anything)
 		})
 	}
@@ -243,7 +243,7 @@ func TestRequestChannelAdminTool_UnknownNomineeIsRefused(t *testing.T) {
 		"channel_id": "ch1", "nominees": []string{"ghost"},
 	})
 
-	require.Equal(t, "unknown user: ghost", mcpToolError(t, result))
+	require.Equal(t, "unknown user: `ghost`", mcpToolError(t, result))
 	api.AssertNotCalled(t, "GetUser", mock.Anything)
 }
 
@@ -526,9 +526,9 @@ func TestMCPRequestTools_ReturnValidationErrors(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		"unknown team admin nominee": {"request_team_admin", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: ghost"},
-		"unknown team member":        {"request_team_member", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: ghost"},
-		"unknown bot owner":          {"request_bot", map[string]any{"username": "svcbot", "display_name": "Svc", "owner": "ghost"}, "unknown user: ghost"},
+		"unknown team admin nominee": {"request_team_admin", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: `ghost`"},
+		"unknown team member":        {"request_team_member", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: `ghost`"},
+		"unknown bot owner":          {"request_bot", map[string]any{"username": "svcbot", "display_name": "Svc", "owner": "ghost"}, "unknown user: `ghost`"},
 		"no team admin nominees":     {"request_team_admin", map[string]any{"team_id": "team1", "nominees": []string{}}, "pick at least one person to make a Team Admin"},
 		"reserved team name":         {"request_team", map[string]any{"display_name": "Ops", "name": "signup-team"}, "reserved by Mattermost"},
 		"bad guest email":            {"request_team_guest", map[string]any{"team_id": "team1", "email": "not-an-email", "channel_ids": []string{testChannelID}}, "valid guest email"},
