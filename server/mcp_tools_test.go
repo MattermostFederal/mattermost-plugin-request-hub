@@ -97,6 +97,7 @@ func TestRequestChannelTool_RefusesWithoutUserID(t *testing.T) {
 func TestRequestChannelTool_UsesContextUserNotArgs(t *testing.T) {
 	stubMCP(t)
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -299,6 +300,7 @@ func TestMCPTools_HonorRequestTypeSettings(t *testing.T) {
 func TestRequestChannelTool_QueuesForRegularMember(t *testing.T) {
 	stubMCP(t)
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -437,6 +439,7 @@ func TestMCPRequestTools_QueueForSystemAdmin(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stubMCP(t)
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubPendingLists(api)
 			stubNewerSubmittedRequestsExist(api)
 			stubLogs(api)
@@ -468,6 +471,7 @@ func TestMCPRequestTools_QueueForRegularUser(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stubMCP(t)
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubPendingLists(api)
 			stubNewerSubmittedRequestsExist(api)
 			stubLogs(api)

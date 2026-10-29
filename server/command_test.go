@@ -244,6 +244,7 @@ func TestExecuteCommand_ChannelCreateUnknownUsers(t *testing.T) {
 
 func TestExecuteCommand_ChannelCreateSubmitsForApproval(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)

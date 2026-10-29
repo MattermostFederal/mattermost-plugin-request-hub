@@ -1446,6 +1446,7 @@ func TestHandleDialogSubmit(t *testing.T) {
 
 	t.Run("cancelled does nothing", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubNamesFree(api)
 		p := newTestPlugin(api)
 
 		w := callHandler(p.handleDialogSubmit, http.MethodPost, routeDialog, "u1", dialogBody(t, model.SubmitDialogRequest{Cancelled: true}))
@@ -1457,6 +1458,7 @@ func TestHandleDialogSubmit(t *testing.T) {
 
 	t.Run("submit error is returned to the dialog", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubNamesFree(api)
 		p := newTestPlugin(api)
 
 		w := callHandler(p.handleDialogSubmit, http.MethodPost, routeDialog, "u1", dialogBody(t, model.SubmitDialogRequest{
@@ -1473,6 +1475,7 @@ func TestHandleDialogSubmit(t *testing.T) {
 
 	t.Run("falls back to TeamId and splits member lists", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubNamesFree(api)
 		stubLogs(api)
 		stubPendingLists(api)
 		stubSubmittedRequestExists(api, kvRequestPrefix)
@@ -1506,8 +1509,9 @@ func TestHandleDialogSubmit(t *testing.T) {
 			Submission: map[string]any{
 				fieldDisplayName: "Ops",
 				fieldPrefix:      "team-",
-				fieldMembers:     " " + m1 + ", ," + m2 + " ",
-				fieldAdmins:      "   ",
+				// A multi-select arrives as a list; a comma string still works.
+				fieldMembers: []any{" " + m1, "", m2},
+				fieldAdmins:  "   ",
 			},
 		}))
 

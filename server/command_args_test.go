@@ -272,6 +272,7 @@ func TestExecuteCommand_ArgumentFormsCloseCopiesDecidedWhilePosting(t *testing.T
 			// copy while the copies were still being posted, so it is gone
 			// once they are recorded.
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubLogs(api)
 			api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, tc.kvPrefix) })).Return(nil, nil)
 			api.On("KVGet", isApprovalCardsKey).Return([]byte(`["posted"]`), nil)

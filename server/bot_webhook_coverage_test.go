@@ -67,6 +67,7 @@ func registryHolds(postIDs ...string) any {
 
 func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -83,6 +84,7 @@ func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 
 func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)

@@ -146,6 +146,7 @@ func TestEveryRequestTypeSubmitChecksPendingList(t *testing.T) {
 		// whose requester already has old pending under key.
 		newSubmit := func(t *testing.T, key string) (*plugintest.API, *Plugin, map[string][]byte) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			lists := fakePendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)

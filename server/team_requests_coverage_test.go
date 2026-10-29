@@ -84,6 +84,7 @@ func TestTeamScopedSubmit_StoreFailure(t *testing.T) {
 	for _, tc := range teamSubmits() {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
@@ -106,6 +107,7 @@ func TestTeamScopedSubmit_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	for _, tc := range teamSubmits() {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
