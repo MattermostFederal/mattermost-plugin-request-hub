@@ -82,6 +82,29 @@ test.describe('installTeamMenuOverride', () => {
             expect(await nativeClicks(page)).toBe(0);
         });
 
+        test('closes the menu with an Escape from inside it', async ({mount, page}) => {
+            // MUI menus only close on an Escape that reaches the menu itself,
+            // not one sent straight to document.
+            await routeConfig(page);
+            await mount(<DomInjectorHarness
+                injector='teamMenu'
+                markup={withCreate}
+                state={member}
+                        />);
+            await harnessInstalled(page);
+            await configLoaded(page);
+            await page.evaluate(() => document.getElementById('teamMenu')!.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    const w = window as unknown as {menuEscapes?: number};
+                    w.menuEscapes = (w.menuEscapes ?? 0) + 1;
+                }
+            }));
+
+            await page.getByRole('button', {name: 'Request a Team'}).click();
+            await page.getByRole('button', {name: 'Request Team Admin'}).click();
+            expect(await page.evaluate(() => (window as unknown as {menuEscapes?: number}).menuEscapes)).toBe(2);
+        });
+
         test('keeps the native flow for a System Admin', async ({mount, page}) => {
             await routeConfig(page);
             await mount(<DomInjectorHarness

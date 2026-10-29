@@ -1,5 +1,6 @@
 import type {Store} from 'redux';
 
+import {closeMenuFrom} from './closeMenu';
 import {makeDebug} from './debug';
 import {openRequestModal} from './store';
 
@@ -179,7 +180,7 @@ function injectRequestItem(menuRoot: HTMLElement, sibling: HTMLElement, store: S
         (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
-            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+            closeMenuFrom(injected);
             store.dispatch(openRequestModal());
         },
         true,
@@ -307,7 +308,7 @@ export function installChannelCreationOverride(store: Store): () => void {
 
         event.preventDefault();
         event.stopImmediatePropagation();
-        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+        closeMenuFrom(match);
         store.dispatch(openRequestModal());
         debug('routed click to Request modal', {viaInjected: Boolean(injected)});
     };
