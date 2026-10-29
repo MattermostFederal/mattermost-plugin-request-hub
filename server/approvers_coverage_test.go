@@ -169,10 +169,11 @@ func TestLoadApproverAttributeField_Paths(t *testing.T) {
 		require.Empty(t, api.Calls)
 	})
 
-	t.Run("missing property group", func(t *testing.T) {
+	t.Run("missing property groups", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, nil)
+		api.On("GetPropertyGroup", model.DeprecatedCPAPropertyGroupName).Return(nil, model.NewAppError("x", "x.not_found", nil, "", 404))
 		field, err := p.loadApproverAttributeField("sec")
 		require.NoError(t, err)
 		require.Nil(t, field)
@@ -195,8 +196,33 @@ func TestLoadApproverAttributeField_Paths(t *testing.T) {
 		p := newTestPlugin(api)
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 		api.On("GetPropertyFieldByName", "grp", "", "sec").Return(nil, nil)
+		api.On("GetPropertyGroup", model.DeprecatedCPAPropertyGroupName).Return(&model.PropertyGroup{ID: "old"}, nil)
+		api.On("GetPropertyFieldByName", "old", "", "sec").Return(nil, model.NewAppError("x", "x.not_found", nil, "", 404))
 		field, err := p.loadApproverAttributeField("sec")
 		require.NoError(t, err)
+		require.Nil(t, field)
+	})
+
+	// Before the group was renamed (Mattermost 11.3 among others), custom
+	// profile attributes live only in custom_profile_attributes.
+	t.Run("field in the pre-rename group", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, model.NewAppError("x", "x.not_found", nil, "", 404))
+		api.On("GetPropertyGroup", model.DeprecatedCPAPropertyGroupName).Return(&model.PropertyGroup{ID: "old"}, nil)
+		api.On("GetPropertyFieldByName", "old", "", "sec").Return(adminField("fld", ""), nil)
+		field, err := p.loadApproverAttributeField("sec")
+		require.NoError(t, err)
+		require.NotNil(t, field)
+		require.Equal(t, "old", field.GroupID)
+	})
+
+	t.Run("unexpected group error is returned", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, errors.New("database unavailable"))
+		field, err := p.loadApproverAttributeField("sec")
+		require.ErrorContains(t, err, "failed to load access_control property group")
 		require.Nil(t, field)
 	})
 
@@ -249,6 +275,7 @@ func TestUserIsApprover_MorePaths(t *testing.T) {
 		p := newTestPlugin(api)
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 		api.On("GetPropertyFieldByName", "grp", "", "sec").Return(nil, model.NewAppError("x", "x.error", nil, "", 404))
+		api.On("GetPropertyGroup", model.DeprecatedCPAPropertyGroupName).Return(nil, nil)
 		ok, err := p.userIsApprover(&model.User{Id: "u1"}, "sec")
 		require.NoError(t, err)
 		require.False(t, ok)

@@ -362,6 +362,7 @@ func newExerciseFake(t *testing.T) *exerciseFake {
 	t.Helper()
 	api := &plugintest.API{}
 	stubLogLines(api)
+	stubBotExtras(api)
 	serverConfig := &model.Config{}
 	serverConfig.SetDefaults()
 	f := &exerciseFake{

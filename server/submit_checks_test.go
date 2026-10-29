@@ -69,6 +69,7 @@ func newQueuePlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	stubLogs(api)
 	stubPendingLists(api)
 	stubNewerSubmittedRequestsExist(api)
+	stubNamesFree(api)
 	p := newTestPlugin(api)
 	return p, api
 }
@@ -270,7 +271,7 @@ func TestCheckCallbackURL(t *testing.T) {
 		{name: "https", raw: "https://hooks.example.com/in"},
 		{name: "http with spaces", raw: "  http://hooks.example.com:8080/in  "},
 		{name: "at limit", raw: "https://e.example/" + strings.Repeat("a", maxCallbackURLLen-len("https://e.example/"))},
-		{name: "too long", raw: "https://e.example/" + strings.Repeat("a", maxCallbackURLLen-len("https://e.example/")+1), wantErr: "1022 bytes or fewer"},
+		{name: "too long", raw: "https://e.example/" + strings.Repeat("a", maxCallbackURLLen-len("https://e.example/")+1), wantErr: "1020 bytes or fewer"},
 		{name: "relative path", raw: "/in", wantErr: "http or https"},
 		{name: "scheme in other case", raw: "HTTPS://hooks.example.com/in", wantErr: "http or https"},
 		{name: "other scheme", raw: "ftp://hooks.example.com/in", wantErr: "http or https"},
@@ -397,6 +398,7 @@ func runSubmitCases(t *testing.T, cases []submitCase, submit func(p *Plugin) err
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubLogs(api)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
@@ -431,6 +433,7 @@ func TestSubmitTeamCreationRequest_Refusals(t *testing.T) {
 		"description too long":       {RequesterID: "u_req", DisplayName: "Marketing", Description: strings.Repeat("x", maxTeamDescriptionBytes+1)},
 		"description too many bytes": {RequesterID: "u_req", DisplayName: "Marketing", Description: strings.Repeat("é", maxTeamDescriptionBytes/2+1)},
 		"reserved URL name":          {RequesterID: "u_req", DisplayName: "Marketing", Name: "signup-team"},
+		"URL name taken":             {RequesterID: "u_req", DisplayName: "Marketing"},
 		"requester not loaded":       {RequesterID: "u_req", DisplayName: "Marketing", Name: "Marketing Team"},
 	}
 	cases := []submitCase{
@@ -438,6 +441,9 @@ func TestSubmitTeamCreationRequest_Refusals(t *testing.T) {
 		{name: "description too long", wantErr: "description must be"},
 		{name: "description too many bytes", wantErr: "description must be 255 bytes or fewer"},
 		{name: "reserved URL name", wantErr: "reserved by Mattermost"},
+		{name: "URL name taken", setup: func(api *plugintest.API) {
+			api.On("GetTeamByName", "marketing").Return(&model.Team{Id: "t_other", Name: "marketing"}, nil)
+		}, wantErr: "a team with the URL name marketing already exists"},
 		{name: "requester not loaded", setup: func(api *plugintest.API) {
 			api.On("GetUser", "u_req").Return(nil, testAppErr("no user"))
 		}, wantErr: "could not load your account"},
@@ -490,6 +496,13 @@ func TestSubmitTeamAdminRequest_Refusals(t *testing.T) {
 			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
 			api.On("GetTeamMember", "team1", testNomineeID).Return(nil, testAppErr("no member"))
 		}, wantErr: "isn't a member of this team"}, ok},
+		{submitCase{name: "nominee already a Team Admin", setup: func(api *plugintest.API) {
+			stubTeam1(api)
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
+			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{SchemeAdmin: true}, nil)
+		}, wantErr: "@n is already a Team Admin of this team"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in
@@ -530,6 +543,12 @@ func TestSubmitTeamMemberRequest_Refusals(t *testing.T) {
 			stubRequester(api)
 			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "gone", DeleteAt: 1}, nil)
 		}, wantErr: "deactivated"}, ok},
+		{submitCase{name: "nominee already on the team", setup: func(api *plugintest.API) {
+			stubTeam1(api)
+			stubRequester(api)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
+			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{TeamId: "team1", UserId: testNomineeID}, nil)
+		}, wantErr: "@n is already a member of this team"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in
@@ -623,6 +642,12 @@ func TestSubmitBotRequest_Refusals(t *testing.T) {
 		{submitCase{name: "turned off", cfg: &configuration{}, wantErr: "disabled"}, ok},
 		{submitCase{name: "username too short", wantErr: "3-22 characters"}, with(func(in *botRequestInput) { in.Username = "@ab" })},
 		{submitCase{name: "username not allowed", wantErr: "lowercase letters"}, with(func(in *botRequestInput) { in.Username = "svc bot" })},
+		{submitCase{name: "username taken", setup: func(api *plugintest.API) {
+			api.On("GetUserByUsername", "svcbot").Return(&model.User{Id: "u_other", Username: "svcbot"}, nil)
+		}, wantErr: "The username @svcbot is taken."}, ok},
+		{submitCase{name: "username lookup fails", setup: func(api *plugintest.API) {
+			api.On("GetUserByUsername", "svcbot").Return(nil, testAppErr("db down"))
+		}, wantErr: "could not check whether that name is free"}, ok},
 		{submitCase{name: "display name too long", wantErr: "Display name must be"}, with(func(in *botRequestInput) { in.DisplayName = long })},
 		{submitCase{name: "description too long", wantErr: "Description must be"}, with(func(in *botRequestInput) { in.Description = strings.Repeat("d", maxDescriptionLen+1) })},
 		{submitCase{name: "incoming hook name too long", wantErr: "Incoming webhook name must be"}, with(func(in *botRequestInput) { in.IncomingWebhookDisplayName = long })},

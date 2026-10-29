@@ -234,16 +234,17 @@ func TestExecuteCommand_ChannelCreateUnknownUsers(t *testing.T) {
 	api.On("GetUserByUsername", "alice").Return(&model.User{Id: "id_alice"}, nil)
 
 	resp := runCommand(p, "/mattermost-request-hub channel team- Marketing --members @ghost")
-	require.Equal(t, "unknown user: ghost", resp.Text)
+	require.Equal(t, "unknown user: `ghost`", resp.Text)
 
 	resp = runCommand(p, "/mattermost-request-hub channel team- Marketing --members @alice --admins @ghost")
-	require.Equal(t, "unknown user: ghost", resp.Text)
+	require.Equal(t, "unknown user: `ghost`", resp.Text)
 
 	api.AssertNotCalled(t, "GetUser", mock.Anything)
 }
 
 func TestExecuteCommand_ChannelCreateSubmitsForApproval(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -333,7 +334,7 @@ func TestExecuteCommand_ChannelAdminUnknownUser(t *testing.T) {
 
 	resp := runCommand(p, "/mattermost-request-hub channel-admin @ghost")
 
-	require.Equal(t, "unknown user: ghost", resp.Text)
+	require.Equal(t, "unknown user: `ghost`", resp.Text)
 }
 
 func TestExecuteCommand_ChannelAdminRejectedBySubmit(t *testing.T) {

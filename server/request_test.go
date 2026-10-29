@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,6 +62,56 @@ func stubLogs(api *plugintest.API) {
 // that back the KV store with fakeKV.
 func stubLogLines(api *plugintest.API) {
 	stubLogLevels(api)
+}
+
+// unclaimed matches an argument at index of method only when no other
+// expectation on api (other than ours) would take it, so a catch-all stub
+// gives way to a test's own expectations whichever was registered first.
+func unclaimed[T any](api *plugintest.API, ours *[]*mock.Call, method string, index int) func(T) bool {
+	return func(v T) bool {
+		for _, c := range api.ExpectedCalls {
+			if c.Method != method || slices.Contains(*ours, c) || len(c.Arguments) <= index {
+				continue
+			}
+			if _, diffs := c.Arguments[index : index+1].Diff([]any{v}); diffs == 0 {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// stubBotExtras lets the final approver create webhooks for others and has
+// the plugin API create bot tokens, for tests of the final approval that
+// aren't about either. A test's own expectations for these calls win.
+func stubBotExtras(api *plugintest.API) {
+	var ours []*mock.Call
+	isWebhookPermission := func(permission *model.Permission) bool {
+		return (permission == model.PermissionManageOthersIncomingWebhooks || permission == model.PermissionManageOthersOutgoingWebhooks) &&
+			unclaimed[*model.Permission](api, &ours, "HasPermissionToTeam", 2)(permission)
+	}
+	ours = append(ours,
+		api.On("HasPermissionToTeam", mock.Anything, mock.Anything, mock.MatchedBy(isWebhookPermission)).Return(true).Maybe(),
+		api.On("CreateUserAccessToken", mock.MatchedBy(unclaimed[*model.UserAccessToken](api, &ours, "CreateUserAccessToken", 0))).
+			Return(func(tok *model.UserAccessToken) (*model.UserAccessToken, *model.AppError) {
+				return &model.UserAccessToken{Id: "tok-id", Token: "secret-token", UserId: tok.UserId, ExpiresAt: tok.ExpiresAt}, nil
+			}).Maybe(),
+	)
+}
+
+// stubNamesFree answers the submit-time checks that a requested channel,
+// bot username or team URL name is free, and that a nominee isn't already
+// on a team, with "not found". A test's own expectations for those lookups
+// win.
+func stubNamesFree(api *plugintest.API) {
+	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
+	var ours []*mock.Call
+	ours = append(ours,
+		api.On("GetChannelByName", mock.Anything, mock.MatchedBy(unclaimed[string](api, &ours, "GetChannelByName", 1)), true).Return(nil, notFound).Maybe(),
+		api.On("GetUserByUsername", mock.MatchedBy(unclaimed[string](api, &ours, "GetUserByUsername", 0))).Return(nil, notFound).Maybe(),
+		api.On("GetTeamByName", mock.MatchedBy(unclaimed[string](api, &ours, "GetTeamByName", 0))).Return(nil, notFound).Maybe(),
+		api.On("GetTeamMember", mock.Anything, mock.MatchedBy(unclaimed[string](api, &ours, "GetTeamMember", 1))).Return(nil, notFound).Maybe(),
+	)
 }
 
 // stubLogLevels registers permissive log expectations and nothing else, for
@@ -310,7 +361,7 @@ func TestResolvePrefixedName_PrefixWithoutHyphen(t *testing.T) {
 	require.Equal(t, "opschat", name)
 
 	_, err = resolvePrefixedName(prefixes, requestInput{Prefix: "nope", Name: "chat"})
-	require.EqualError(t, err, `prefix "nope" is not in the list of allowed prefixes: eng-, ops, ops-`)
+	require.EqualError(t, err, "prefix `nope` is not in the list of allowed prefixes: eng-, ops, ops-")
 }
 
 func TestResolvePrefixedName_AnchoredSuffixMatchesWholeSuffix(t *testing.T) {
@@ -378,6 +429,7 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 	// System Admins get an approval card like everyone else. They may
 	// request in any team, so their team membership isn't checked.
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -413,6 +465,7 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 
 func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogLevels(api)
 	// Pending lists only: the card record write must reach the failing mock below.
 	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
@@ -459,6 +512,7 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 	} {
 		t.Run("type "+string(taken.Type), func(t *testing.T) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubLogs(api)
 			stubPendingLists(api)
 			stubSubmittedRequestExists(api, kvRequestPrefix)
@@ -859,8 +913,37 @@ func mockMemberRequester(api *plugintest.API) {
 	api.On("GetTeamMember", "team1", "u1").Return(&model.TeamMember{TeamId: "team1", UserId: "u1"}, nil)
 }
 
+func TestSubmitRequest_RefusesATakenName(t *testing.T) {
+	for name, tc := range map[string]struct {
+		channel *model.Channel
+		appErr  *model.AppError
+		wantErr string
+	}{
+		"channel exists":   {channel: &model.Channel{Id: "c1", Name: "team-marketing"}, wantErr: "a channel named ~team-marketing already exists in this team"},
+		"channel archived": {channel: &model.Channel{Id: "c1", Name: "team-marketing", DeleteAt: 1}, wantErr: "already exists"},
+		"lookup fails":     {appErr: testAppErr("db down"), wantErr: "could not check whether that name is free"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogs(api)
+			p := newTestPlugin(api)
+			p.setConfiguration(approvalConfig())
+			mockMemberRequester(api)
+			// Archived channels hold their name too, so the lookup includes them.
+			api.On("GetChannelByName", "team1", "team-marketing", true).Return(tc.channel, tc.appErr)
+
+			_, err := p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Marketing", Prefix: "team-"})
+			require.ErrorContains(t, err, tc.wantErr)
+			// Refused before a pending slot is reserved or anything is posted.
+			api.AssertNotCalled(t, "KVGet", pendingListKey(pendingKindChannel, "u1"))
+			api.AssertNotCalled(t, "CreatePost", mock.Anything)
+		})
+	}
+}
+
 func TestSubmitRequest_StoresAndPostsForApproval(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -898,6 +981,7 @@ func TestSubmitRequest_StoresAndPostsForApproval(t *testing.T) {
 
 func TestSubmitRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -915,6 +999,7 @@ func TestSubmitRequest_StoreFailure(t *testing.T) {
 
 func TestSubmitRequest_ApprovalPostFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)
@@ -969,7 +1054,7 @@ func TestSubmitRequest_ChannelNameErrors(t *testing.T) {
 	}{
 		{name: "no prefixes configured", config: &configuration{}, in: requestInput{DisplayName: "Ops", Prefix: "team-"}, want: "plugin is not configured"},
 		{name: "no prefix picked", config: approvalConfig(), in: requestInput{DisplayName: "Ops"}, want: "please pick a channel prefix"},
-		{name: "unknown prefix", config: approvalConfig(), in: requestInput{DisplayName: "Ops", Prefix: "nope-"}, want: `prefix "nope-" is not in the list`},
+		{name: "unknown prefix", config: approvalConfig(), in: requestInput{DisplayName: "Ops", Prefix: "nope-"}, want: "prefix `nope-` is not in the list"},
 		{name: "suffix empty after cleanup", config: approvalConfig(), in: requestInput{DisplayName: "!!!", Name: "---", Prefix: "team-"}, want: "channel name suffix is required"},
 	}
 	for _, tc := range cases {
@@ -1174,6 +1259,7 @@ func mockQueuedChannelRequest(api *plugintest.API) {
 
 func TestSubmitRequestPendingLimit(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -1197,11 +1283,14 @@ func TestSubmitRequestPendingLimit(t *testing.T) {
 
 	_, err = p.submitRequest(requestInput{RequesterID: "u1", TeamID: "team1", DisplayName: "Sales", Prefix: "team-"})
 	require.ErrorContains(t, err, "you have 1 pending requests waiting for review")
-	api.AssertNumberOfCalls(t, "GetChannelByName", 1)
+	// Each submit checks that its name is free; only the first one goes on
+	// to look up the approval channel.
+	api.AssertNumberOfCalls(t, "GetChannelByName", 3)
 }
 
 func TestSubmitRequestPendingLimitAppliesToQueuedSystemAdmins(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -1222,6 +1311,7 @@ func TestSubmitRequestPendingLimitAppliesToQueuedSystemAdmins(t *testing.T) {
 
 func TestSubmitRequestDuplicate(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -1257,6 +1347,7 @@ func TestSubmitRequestFailureFreesPendingSlot(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubLogs(api)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
@@ -1275,6 +1366,7 @@ func TestSubmitRequestFailureFreesPendingSlot(t *testing.T) {
 
 func TestSubmitRequestPendingListUnavailable(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)

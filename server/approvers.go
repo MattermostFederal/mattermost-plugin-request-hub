@@ -246,27 +246,9 @@ func (p *Plugin) loadApproverAttributeField(attrName string) (*model.PropertyFie
 		return nil, nil
 	}
 
-	group, err := p.API.GetPropertyGroup(model.AccessControlPropertyGroupName)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to load access_control property group")
-	}
-	if group == nil {
-		return nil, nil
-	}
-
-	// Custom profile attribute fields carry no target, so they're looked up by
-	// name with an empty targetID.
-	field, err := p.API.GetPropertyFieldByName(group.ID, "", attrName)
-	if err != nil {
-		// Most installs surface "not found" as an AppError — treat that as
-		// pool-not-ready rather than a hard failure so Approve isn't blocked.
-		if isNotFoundErr(err) {
-			return nil, nil
-		}
-		return nil, errors.Wrapf(err, "failed to load approver attribute %q", attrName)
-	}
-	if field == nil {
-		return nil, nil
+	field, group, err := p.findAttributeField(attrName)
+	if err != nil || field == nil {
+		return nil, err
 	}
 	// User-writable CPA fields must not grant approval rights — only admin-managed,
 	// LDAP/SAML-synced, or owner-managed fields are trusted.
@@ -280,6 +262,44 @@ func (p *Plugin) loadApproverAttributeField(attrName string) (*model.PropertyFie
 		field.GroupID = group.ID
 	}
 	return field, nil
+}
+
+// attributeGroupNames are the property groups custom profile attributes
+// live in. Mattermost renamed custom_profile_attributes to access_control;
+// servers before the rename (11.3 among them) only have the old group.
+var attributeGroupNames = []string{model.AccessControlPropertyGroupName, model.DeprecatedCPAPropertyGroupName}
+
+// findAttributeField looks attrName up in each attribute group in turn and
+// returns the first match with its group, or nil when no group has it.
+func (p *Plugin) findAttributeField(attrName string) (*model.PropertyField, *model.PropertyGroup, error) {
+	for _, groupName := range attributeGroupNames {
+		group, err := p.API.GetPropertyGroup(groupName)
+		if err != nil {
+			if isNotFoundErr(err) {
+				continue
+			}
+			return nil, nil, errors.Wrapf(err, "failed to load %s property group", groupName)
+		}
+		if group == nil {
+			continue
+		}
+
+		// Custom profile attribute fields carry no target, so they're looked
+		// up by name with an empty targetID.
+		field, err := p.API.GetPropertyFieldByName(group.ID, "", attrName)
+		if err != nil {
+			// Most installs surface "not found" as an AppError: treat that as
+			// pool-not-ready rather than a hard failure so Approve isn't blocked.
+			if isNotFoundErr(err) {
+				continue
+			}
+			return nil, nil, errors.Wrapf(err, "failed to load approver attribute %q", attrName)
+		}
+		if field != nil {
+			return field, group, nil
+		}
+	}
+	return nil, nil, nil
 }
 
 // isNotFoundErr reports Mattermost AppErrors (and plain messages) that mean a

@@ -271,6 +271,7 @@ func TestTwoStepActionHandlers_LostFinalClaimRepliesPrivately(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				api := &plugintest.API{}
+				stubBotExtras(api)
 				stubLogs(api)
 				defer api.AssertExpectations(t)
 				p := newTestPlugin(api)

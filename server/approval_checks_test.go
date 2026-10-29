@@ -485,3 +485,55 @@ func TestApprovalCheckHelpers(t *testing.T) {
 		require.Empty(t, p.nomineeBlocker([]string{"n1"}, nomineeRules{role: "a Team Admin", teamID: "team1", channelID: "ch1"}))
 	})
 }
+
+func TestWebhookCreatorBlocker(t *testing.T) {
+	for _, tc := range []struct {
+		webhookType string
+		permission  *model.Permission
+	}{
+		{webhookTypeIncoming, model.PermissionManageOthersIncomingWebhooks},
+		{webhookTypeOutgoing, model.PermissionManageOthersOutgoingWebhooks},
+	} {
+		t.Run(tc.webhookType+" allowed", func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			api.On("HasPermissionToTeam", "approver", "team1", tc.permission).Return(true)
+			require.Empty(t, p.webhookCreatorBlocker("approver", "team1", tc.webhookType))
+		})
+		t.Run(tc.webhookType+" refused", func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			api.On("HasPermissionToTeam", "approver", "team1", tc.permission).Return(false)
+			msg := p.webhookCreatorBlocker("approver", "team1", tc.webhookType)
+			require.Contains(t, msg, "You can't give the final approval: it creates an "+tc.webhookType+" webhook")
+			require.Contains(t, msg, "Team Admins and System Admins have it")
+		})
+	}
+}
+
+func TestBotWebhookCreatorBlocker(t *testing.T) {
+	t.Run("no webhooks asked for makes no calls", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		require.Empty(t, p.botWebhookCreatorBlocker(&botRequest{RequestToken: true}, "approver"))
+		require.Empty(t, api.Calls)
+	})
+
+	t.Run("checks each webhook's team", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetChannel", "in").Return(&model.Channel{Id: "in", TeamId: "team1"}, nil)
+		api.On("GetChannel", "out").Return(&model.Channel{Id: "out", TeamId: "team2"}, nil)
+		api.On("HasPermissionToTeam", "approver", "team1", model.PermissionManageOthersIncomingWebhooks).Return(true)
+		api.On("HasPermissionToTeam", "approver", "team2", model.PermissionManageOthersOutgoingWebhooks).Return(false)
+		msg := p.botWebhookCreatorBlocker(&botRequest{IncomingWebhookChannelID: "in", OutgoingWebhookChannelID: "out"}, "approver")
+		require.Contains(t, msg, "it creates an outgoing webhook")
+	})
+
+	t.Run("a channel that can't be loaded asks to try again", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetChannel", "in").Return(nil, testAppErr("db down"))
+		require.Equal(t, approvalCheckRetryText, p.botWebhookCreatorBlocker(&botRequest{IncomingWebhookChannelID: "in"}, "approver"))
+	})
+}

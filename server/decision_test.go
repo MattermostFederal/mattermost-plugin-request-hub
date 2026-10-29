@@ -458,6 +458,7 @@ func TestResolveCardsIfHandled(t *testing.T) {
 func TestSubmitRequest_ShowsTheIDAndRecordsSystemAdminCopies(t *testing.T) {
 	t.Run("approval channel", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubNamesFree(api)
 		stubLogs(api)
 		stubPendingLists(api)
 		defer api.AssertExpectations(t)
@@ -486,6 +487,7 @@ func TestSubmitRequest_ShowsTheIDAndRecordsSystemAdminCopies(t *testing.T) {
 
 	t.Run("System Admin direct messages", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubNamesFree(api)
 		stubLogs(api)
 		stubPendingLists(api)
 		stubSubmittedRequestExists(api, kvRequestPrefix)

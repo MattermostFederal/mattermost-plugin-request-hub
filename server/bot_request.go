@@ -97,6 +97,10 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 	if strings.TrimSpace(input.DisplayName) == "" {
 		return "", errors.New("A display name is required.")
 	}
+	_, appErr := p.API.GetUserByUsername(username)
+	if err := p.nameFree(appErr, fmt.Sprintf("The username @%s is taken.", username), "@"+username); err != nil {
+		return "", err
+	}
 	for _, check := range []error{
 		checkTextLen("Display name", input.DisplayName, maxDisplayNameLen),
 		checkTextLen("Description", input.Description, maxDescriptionLen),

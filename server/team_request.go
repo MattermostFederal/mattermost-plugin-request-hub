@@ -82,6 +82,10 @@ func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error)
 	if model.IsReservedTeamName(name) {
 		return "", errors.Errorf("%q is reserved by Mattermost; choose a different team URL name", name)
 	}
+	_, appErr := p.API.GetTeamByName(name)
+	if err := p.nameFree(appErr, fmt.Sprintf("a team with the URL name %s already exists; choose a different team URL name", name), "team "+name); err != nil {
+		return "", err
+	}
 
 	teamType := in.Type
 	if teamType != "O" && teamType != "I" {

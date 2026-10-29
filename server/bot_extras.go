@@ -17,22 +17,20 @@ type tokenPostEntry struct {
 	ExpiresAt int64  `json:"expires_at"` // Unix timestamp
 }
 
-// createBotToken creates a personal access token for botUserID using the
-// approving admin's session token. The token lasts for the configured Bot
-// token lifetime. The token, with its value, is returned to the caller and
-// never stored — the value exists only in the approval DM, which
-// auto-deletes.
-func (p *Plugin) createBotToken(authToken, botUserID, description string) (*model.UserAccessToken, error) {
-	internalURL := p.internalBaseURL()
-	if internalURL == "" {
-		return nil, fmt.Errorf("SiteURL not configured")
-	}
-	expiresAt := time.Now().AddDate(0, p.getConfiguration().TokenLifetimeMonths(), 0).UnixMilli()
-	client := model.NewAPIv4Client(internalURL)
-	client.SetToken(authToken)
-	token, _, err := client.CreateUserAccessToken(context.Background(), botUserID, description, expiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("create token: %w", err)
+// createBotToken creates a personal access token for botUserID through the
+// plugin API, so it doesn't depend on the final approver's permissions (a
+// system approver need not be a System Admin). The token lasts for the
+// configured Bot token lifetime on servers that support token expiry. The
+// token, with its value, is returned to the caller and never stored: the
+// value exists only in the approval DM, which auto-deletes.
+func (p *Plugin) createBotToken(botUserID, description string) (*model.UserAccessToken, error) {
+	token, appErr := p.API.CreateUserAccessToken(&model.UserAccessToken{
+		UserId:      botUserID,
+		Description: description,
+		ExpiresAt:   time.Now().AddDate(0, p.getConfiguration().TokenLifetimeMonths(), 0).UnixMilli(),
+	})
+	if appErr != nil {
+		return nil, fmt.Errorf("create token: %w", appErr)
 	}
 	return token, nil
 }

@@ -77,7 +77,7 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 			return "", errors.New("you must be a member of the team to request Team Admin access")
 		}
 	}
-	if err := p.checkNominees(nominees, nomineeRules{role: "a Team Admin", teamID: teamID}); err != nil {
+	if err := p.checkNominees(nominees, nomineeRules{role: "a Team Admin", teamID: teamID, notTeamAdmin: true}); err != nil {
 		return "", err
 	}
 

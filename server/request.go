@@ -55,9 +55,11 @@ const (
 	maxWebhookNameBytes        = 64
 	maxWebhookDescriptionBytes = 500
 	maxTeamDescriptionBytes    = model.TeamDescriptionMaxLength
-	// Mattermost checks an outgoing webhook's callback list as printed,
-	// "[url]", against 1024 bytes, leaving 1022 for a single URL.
-	maxCallbackURLLen = 1022
+	// Mattermost stores an outgoing webhook's callback list as JSON,
+	// ["url"], in a 1024-byte column, leaving 1020 for a single URL. (Its
+	// own check, on the list printed as [url], would let 1022 through and
+	// then fail to save.)
+	maxCallbackURLLen = 1020
 
 	// maxMembersPerList caps the regular-member and channel-admin lists
 	// independently so a single request can't fan out into thousands of
@@ -109,6 +111,21 @@ type channelRequest struct {
 // older than days at now (ms). days == 0 means requests never expire. A
 // request with no CreatedAt (saved by an older version and not yet
 // migrated) is treated as new.
+// nameFree turns the result of looking up a name that a request would
+// create into a refusal when the name is taken, so the request doesn't
+// reach approvers who could only watch it fail. appErr is the lookup's
+// error: nil means the name exists.
+func (p *Plugin) nameFree(appErr *model.AppError, taken, what string) error {
+	if appErr == nil {
+		return errors.New(taken)
+	}
+	if isNotFound(appErr) {
+		return nil
+	}
+	p.API.LogWarn("failed to check whether a name is free", "name", what, "error", appErr.Error())
+	return errors.New("could not check whether that name is free; try again")
+}
+
 func requestExpired(createdAt int64, days int, now int64) bool {
 	if days <= 0 || createdAt <= 0 {
 		return false
@@ -232,7 +249,7 @@ func resolvePrefixedName(prefixes []channelPrefix, in requestInput) (string, err
 		for i := range prefixes {
 			allowed[i] = prefixes[i].Prefix
 		}
-		return "", errors.Errorf("prefix %q is not in the list of allowed prefixes: %s", selected, strings.Join(allowed, ", "))
+		return "", errors.Errorf("prefix %s is not in the list of allowed prefixes: %s", inlineCode(selected), strings.Join(allowed, ", "))
 	}
 
 	suffix := strings.TrimSpace(in.Name)
@@ -359,6 +376,14 @@ type nomineeRules struct {
 	allowGuests bool
 	teamID      string // when set, nominees must be active members of this team
 	channelID   string // when set, nominees must be members of this channel (approve only)
+
+	// notTeamAdmin, with teamID, refuses nominees who are already Team
+	// Admins of that team: approving would change nothing.
+	notTeamAdmin bool
+
+	// notInTeamID, when set, refuses nominees who are already active members
+	// of that team.
+	notInTeamID string
 }
 
 // checkNominees loads each nominee and returns a user-facing error for the
@@ -382,6 +407,15 @@ func (p *Plugin) checkNominees(ids []string, rules nomineeRules) error {
 			member, appErr := p.API.GetTeamMember(rules.teamID, id)
 			if appErr != nil || member == nil || member.DeleteAt != 0 {
 				return errors.Errorf("@%s isn't a member of this team", user.Username)
+			}
+			if rules.notTeamAdmin && member.SchemeAdmin {
+				return errors.Errorf("@%s is already a Team Admin of this team", user.Username)
+			}
+		}
+		if rules.notInTeamID != "" {
+			member, appErr := p.API.GetTeamMember(rules.notInTeamID, id)
+			if appErr == nil && member != nil && member.DeleteAt == 0 {
+				return errors.Errorf("@%s is already a member of this team", user.Username)
 			}
 		}
 	}
@@ -435,6 +469,10 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 
 	name, err := p.resolveChannelName(config, in)
 	if err != nil {
+		return "", err
+	}
+	_, lookupErr := p.API.GetChannelByName(in.TeamID, name, true)
+	if err = p.nameFree(lookupErr, fmt.Sprintf("a channel named ~%s already exists in this team; choose another name", name), "channel "+name); err != nil {
 		return "", err
 	}
 
