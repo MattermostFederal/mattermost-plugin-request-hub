@@ -32,7 +32,7 @@ const TOKEN_EXPIRY_SERVER_VERSION = '11.9.0';
 
 test('an approved bot token expires after the configured lifetime', async ({hub}) => {
     const requester = await hub.createUser();
-    const username = uid('e2e-bot-');
+    const username = uid('bot');
 
     // In system_admin mode one System Admin can approve both bot steps.
     await hub.withPluginConfig({twostepapprovermode: 'system_admin', bottokenlifetimemonths: String(TOKEN_LIFETIME_MONTHS)}, async () => {

@@ -45,10 +45,13 @@ let uidCounter = 0;
 
 // A short name that is unique on the server, for channels, users and
 // request fields: lowercase letters and digits only, so it is valid in
-// every kind of name.
+// every kind of name. Each server lives for one run of one worker, so the
+// counter makes it unique; the time part only tells runs apart in logs.
+// Keep it short: bot usernames stop at 22 characters and the test prefixes
+// allow 32-character channel suffixes.
 export function uid(prefix = 'e2e'): string {
     uidCounter++;
-    return `${prefix}${Date.now().toString(36)}${process.pid.toString(36)}${uidCounter}`;
+    return `${prefix}${(Date.now() % 36 ** 4).toString(36)}${uidCounter}`;
 }
 
 function findPluginBundle(): string {
