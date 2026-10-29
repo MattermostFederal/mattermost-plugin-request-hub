@@ -471,8 +471,8 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, appErr = p.API.GetChannelByName(in.TeamID, name, true)
-	if err = p.nameFree(appErr, fmt.Sprintf("a channel named ~%s already exists in this team; choose another name", name), "channel "+name); err != nil {
+	_, lookupErr := p.API.GetChannelByName(in.TeamID, name, true)
+	if err = p.nameFree(lookupErr, fmt.Sprintf("a channel named ~%s already exists in this team; choose another name", name), "channel "+name); err != nil {
 		return "", err
 	}
 
