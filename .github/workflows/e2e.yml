@@ -1,30 +1,32 @@
 # Runs the Playwright suite in e2e/ against a real Mattermost server: the
-# PR's `make dist` bundle is installed on an unlicensed Enterprise image
-# started by testcontainers (same pattern as mattermost-plugin-agents and
-# mattermost-plugin-boards). Not a required check yet; add it to the main
-# ruleset once it has proven stable.
+# PR's `make dist` bundle is installed on an Enterprise image started by
+# testcontainers (same pattern as mattermost-plugin-agents and
+# mattermost-plugin-boards). The bundle is built once, then the suite runs
+# sharded against the oldest supported server and the newest release. The
+# `e2e` job at the end is the single check to require on main.
+#
+# The nightly run repeats every test three times to surface flaky tests.
 name: E2E
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      # Set the MM_IMAGE repository variable to test another server image;
-      # defaults to the tag docker-compose.dev.yml uses.
-      MM_IMAGE: ${{ vars.MM_IMAGE }}
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,6 +47,45 @@ jobs:
       - name: Build bundle
         run: make dist
 
+      - name: Upload bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-bundle
+          path: dist/*.tar.gz
+          retention-days: 1
+
+  shard:
+    name: e2e (${{ matrix.server.name }}, ${{ matrix.shard }}/2)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned by digest so a new image can't change results under a PR.
+        # 11.3 is plugin.json's min_server_version; bump the newest one by
+        # hand when a new release ships.
+        server:
+          - name: '11.3'
+            image: mattermost/mattermost-enterprise-edition@sha256:8be5995e0340ec06ee46922bf7f5f60f3aa51f8477b97c893f251f0798a9cdf1
+          - name: '12.0.1'
+            image: mattermost/mattermost-enterprise-edition@sha256:38e75219defb95e9db3a38baee606d09319cd3e59f919c02acb77c98ac027b6d
+        # Raise the shard count (here, in the job name and in the merge
+        # step) as spec files are added.
+        shard: [1, 2]
+    env:
+      MM_IMAGE: ${{ matrix.server.image }}
+      E2E_SERVER: ${{ matrix.server.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugin-bundle
+          path: dist
+
       # testcontainers needs Node >= 22, so e2e/ has its own .nvmrc.
       - name: Set up Node.js for e2e
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -63,20 +104,79 @@ jobs:
         run: cd e2e && npx playwright install --with-deps chromium
 
       - name: Playwright e2e tests
-        run: cd e2e && npm test
+        env:
+          REPEAT: ${{ github.event_name == 'schedule' && '3' || '1' }}
+        run: cd e2e && npx playwright test --shard=${{ matrix.shard }}/2 --repeat-each="$REPEAT" --pass-with-no-tests
 
-      - name: Upload Playwright report
+      - name: Upload blob report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report
-          path: e2e/playwright-report/
-          retention-days: 14
+          name: blob-report-${{ matrix.server.name }}-${{ matrix.shard }}
+          path: e2e/blob-report/
+          retention-days: 1
 
       - name: Upload server logs
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: server-logs
+          name: server-logs-${{ matrix.server.name }}-${{ matrix.shard }}
           path: e2e/logs/
           retention-days: 14
+
+  # The required check: green only when the bundle built and every shard
+  # on every server passed. Also merges the shards' reports into one.
+  e2e:
+    needs: [build, shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js for e2e
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: e2e/.nvmrc
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        run: cd e2e && npm ci
+
+      - name: Download blob reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: blob-report-*
+          path: e2e/blobs
+
+      # Every shard names its blob report-<shard>.zip, so prefix each with
+      # its artifact name before merging them into one directory.
+      - name: Merge reports
+        run: |
+          cd e2e
+          mkdir -p all-blobs
+          for f in blobs/*/*.zip; do
+            [ -e "$f" ] || continue
+            cp "$f" "all-blobs/$(basename "$(dirname "$f")")-$(basename "$f")"
+          done
+          if ls all-blobs/*.zip >/dev/null 2>&1; then
+            npx playwright merge-reports --reporter html ./all-blobs
+          fi
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Check results
+        env:
+          BUILD: ${{ needs.build.result }}
+          SHARDS: ${{ needs.shard.result }}
+        run: |
+          echo "build: $BUILD, shards: $SHARDS"
+          [ "$BUILD" = success ] && [ "$SHARDS" = success ]

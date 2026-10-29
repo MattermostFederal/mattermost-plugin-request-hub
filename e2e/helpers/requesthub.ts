@@ -1,5 +1,6 @@
 // Starts a server with the plugin bundle from `make dist` installed, a team
-// "test" and a fixed set of users, and wraps the plugin's REST routes.
+// "test" and a fixed set of users, and wraps the plugin's REST routes, the
+// slash command, the request channels and the plugin's KV store.
 import fs from 'fs';
 import path from 'path';
 
@@ -11,21 +12,44 @@ import MattermostContainer from './mmcontainer';
 const repoRoot = path.join(__dirname, '..', '..');
 export const PLUGIN_ID: string = JSON.parse(fs.readFileSync(path.join(repoRoot, 'plugin.json'), 'utf8')).id;
 export const SLASH_COMMAND = '/mattermost-request-hub';
-export const APPROVAL_CHANNEL = 'mattermost-channel-requests';
+export const HUB_BOT = 'mattermost-request-hub';
+
+// Channels the plugin creates in the approval team on activation.
+export const REQUEST_CHANNELS = {
+    channel: 'mattermost-channel-requests',
+    bot: 'mattermost-bot-requests',
+    webhook: 'mattermost-webhook-requests',
+    team: 'mattermost-team-requests',
+    audit: 'mattermost-audit-requests',
+} as const;
+export const APPROVAL_CHANNEL = REQUEST_CHANNELS.channel;
 
 export const TEAM = 'test';
 export const PASSWORD = 'Password-123!';
 export const ADMIN = 'sysadmin';
 
-// alice requests, bob and carol are added as members, tadmin is a Team
-// Admin of "test".
+// Fixed users shared by every test on a server: bob and carol are added as
+// members, tadmin is a Team Admin of "test". Tests that submit requests
+// should use hub.createUser() instead of alice, so they don't share alice's
+// pending-request allowance with every other spec on the same server.
 export const USERS = ['alice', 'bob', 'carol', 'tadmin'] as const;
 
 // Keys under PluginSettings.Plugins are lowercased by the server.
-export const DEFAULT_PLUGIN_CONFIG = {
+export type PluginConfig = Record<string, unknown>;
+export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
     approvalteam: TEAM,
     channelnameprefixes: 'team-|Team channels|32\nproj-|Project channels|32',
 };
+
+let uidCounter = 0;
+
+// A short name that is unique on the server, for channels, users and
+// request fields: lowercase letters and digits only, so it is valid in
+// every kind of name.
+export function uid(prefix = 'e2e'): string {
+    uidCounter++;
+    return `${prefix}${Date.now().toString(36)}${process.pid.toString(36)}${uidCounter}`;
+}
 
 function findPluginBundle(): string {
     const dist = path.join(repoRoot, 'dist');
@@ -36,16 +60,54 @@ function findPluginBundle(): string {
     return path.join(dist, bundles[0]);
 }
 
+export type TestUser = {username: string; id: string};
+
+export type CreateUserOptions = {
+    prefix?: string;
+    systemAdmin?: boolean;
+    teamAdmin?: boolean;
+
+    // Defaults to true: the user joins team "test".
+    inTeam?: boolean;
+};
+
+// Compares dotted versions numerically: atLeast('11.10.1', '11.9') is true.
+export function atLeast(version: string, minimum: string): boolean {
+    const a = version.split('.').map(Number);
+    const b = minimum.split('.').map(Number);
+    for (let i = 0; i < b.length; i++) {
+        if ((a[i] ?? 0) !== b[i]) {
+            return (a[i] ?? 0) > b[i];
+        }
+    }
+    return true;
+}
+
 export type RequestHub = {
     mm: MattermostContainer;
+
+    // The server's version, e.g. "11.3.0", for features that need a newer
+    // server than the plugin's min_server_version.
+    serverVersion: string;
     teamId: string;
     userIds: Record<string, string>;
     client: (username: string) => Promise<Client4>;
+    createUser: (options?: CreateUserOptions) => Promise<TestUser>;
     pluginFetch: <T = Record<string, string>>(username: string, route: string, body?: unknown) => Promise<T>;
+    slash: (username: string, args: string, channelName?: string) => Promise<string>;
+    channelId: (name: string) => Promise<string>;
     approvalChannelId: () => Promise<string>;
     findCard: (needle: string) => Promise<Post>;
+    findCardIn: (channelName: string, needle: string) => Promise<Post>;
+    findDM: (username: string, needle: string) => Promise<Post>;
+    auditLines: (needle: string) => Promise<string[]>;
     waitForChannel: (name: string) => Promise<string | undefined>;
-    pluginErrors: () => string[];
+    kv: <T = Record<string, unknown>>(key: string) => Promise<T | undefined>;
+    kvKeys: (prefix: string) => Promise<string[]>;
+    rewindRequest: (key: string, days: number) => Promise<void>;
+    withPluginConfig: <T>(patch: PluginConfig, fn: () => Promise<T>) => Promise<T>;
+    logLineCount: () => number;
+    pluginErrors: (sinceLine?: number) => string[];
     stop: () => Promise<void>;
 };
 
@@ -73,7 +135,11 @@ async function dismissOnboarding(client: Client4) {
     ]);
 }
 
-export async function startRequestHub(name: string, pluginConfig: Record<string, unknown> = DEFAULT_PLUGIN_CONFIG): Promise<RequestHub> {
+// SQL string literal; the values tests pass are generated, but quote them
+// properly anyway.
+const sqlString = (s: string) => `'${s.replace(/'/g, "''")}'`;
+
+export async function startRequestHub(name: string, pluginConfig: PluginConfig = DEFAULT_PLUGIN_CONFIG): Promise<RequestHub> {
     const mm = await new MattermostContainer().start(name);
     try {
         await mm.mmctl('user', 'create', '--email', `${ADMIN}@example.com`, '--username', ADMIN, '--password', PASSWORD, '--system-admin', '--email-verified');
@@ -92,6 +158,7 @@ export async function startRequestHub(name: string, pluginConfig: Record<string,
         const admin = await client(ADMIN);
         await admin.completeSetup({organization: TEAM, install_plugins: []});
         const teamId = (await admin.getTeamByName(TEAM)).id;
+        const serverVersion = (await admin.getClientConfig()).Version;
         const userIds: Record<string, string> = {};
         for (const u of [ADMIN, ...USERS]) {
             userIds[u] = (await admin.getUserByUsername(u)).id;
@@ -101,9 +168,28 @@ export async function startRequestHub(name: string, pluginConfig: Record<string,
 
         await mm.container.copyFilesToContainer([{source: findPluginBundle(), target: '/tmp/plugin.tar.gz'}]);
         await mm.mmctl('plugin', 'add', '/tmp/plugin.tar.gz');
-        const config = await admin.getConfig();
-        await admin.patchConfig({PluginSettings: {...config.PluginSettings, Plugins: {...config.PluginSettings.Plugins, [PLUGIN_ID]: pluginConfig}}});
+
+        const setPluginConfig = async (config: PluginConfig) => {
+            const current = await admin.getConfig();
+            await admin.patchConfig({PluginSettings: {...current.PluginSettings, Plugins: {...current.PluginSettings.Plugins, [PLUGIN_ID]: config}}});
+        };
+        await setPluginConfig(pluginConfig);
         await mm.mmctl('plugin', 'enable', PLUGIN_ID);
+
+        const createUser = async (options: CreateUserOptions = {}): Promise<TestUser> => {
+            const username = uid(options.prefix ?? 'user');
+            await mm.mmctl('user', 'create', '--email', `${username}@example.com`, '--username', username, '--password', PASSWORD, '--email-verified', ...(options.systemAdmin ? ['--system-admin'] : []));
+            const id = (await admin.getUserByUsername(username)).id;
+            if (options.inTeam ?? true) {
+                await admin.addToTeam(teamId, id);
+                if (options.teamAdmin) {
+                    await admin.updateTeamMemberSchemeRoles(teamId, id, true, true);
+                }
+            }
+            userIds[username] = id;
+            await dismissOnboarding(await client(username));
+            return {username, id};
+        };
 
         const pluginFetch = async <T>(username: string, route: string, body?: unknown): Promise<T> => {
             const c = await client(username);
@@ -115,26 +201,118 @@ export async function startRequestHub(name: string, pluginConfig: Record<string,
             return res.json() as Promise<T>;
         };
 
-        const approvalChannelId = async () => (await admin.getChannelByName(teamId, APPROVAL_CHANNEL)).id;
+        const channelId = async (channelName: string) => (await admin.getChannelByName(teamId, channelName)).id;
 
-        // Newest bot post in the approval channel whose content mentions needle.
-        const findCard = async (needle: string): Promise<Post> => {
-            const card = await poll(async () => {
-                const list = await admin.getPosts(await approvalChannelId(), 0, 30);
-                return list.order.map((id) => list.posts[id]).find((p) => JSON.stringify(p).includes(needle));
-            });
-            if (!card) {
-                throw new Error(`No approval card mentioning "${needle}" in ~${APPROVAL_CHANNEL}`);
-            }
-            return card;
+        // Runs "/mattermost-request-hub <args>" as username and returns the
+        // ephemeral reply text ("" when the command opened a dialog).
+        const slash = async (username: string, args: string, channelName = 'town-square') => {
+            const c = await client(username);
+            const channel = await c.getChannelByName(teamId, channelName);
+            const res = await c.executeCommand(`${SLASH_COMMAND} ${args}`.trim(), {channel_id: channel.id, team_id: teamId} as Parameters<Client4['executeCommand']>[1]);
+            return res.text ?? '';
         };
 
-        const waitForChannel = (channelName: string) => poll(async () => (await admin.getChannelByName(teamId, channelName)).id);
+        // Newest post in channelId whose JSON mentions needle, read as username.
+        const findPost = async (c: Client4, chId: string, needle: string, what: string): Promise<Post> => {
+            const post = await poll(async () => {
+                const list = await c.getPosts(chId, 0, 60);
+                return list.order.map((id) => list.posts[id]).find((p) => JSON.stringify(p).includes(needle));
+            });
+            if (!post) {
+                throw new Error(`No post mentioning "${needle}" in ${what}`);
+            }
+            return post;
+        };
+
+        const findCardIn = async (channelName: string, needle: string) => findPost(admin, await channelId(channelName), needle, `~${channelName}`);
+        const findCard = (needle: string) => findCardIn(APPROVAL_CHANNEL, needle);
+
+        // The requester's DM with the Request Hub bot: ticket threads, token
+        // DMs and decision notices.
+        const findDM = async (username: string, needle: string) => {
+            const c = await client(username);
+            const bot = await c.getUserByUsername(HUB_BOT);
+            const dm = await c.createDirectChannel([userIds[username] ?? (await c.getMe()).id, bot.id]); // returns the existing DM
+            return findPost(c, dm.id, needle, `@${username}'s DM with @${HUB_BOT}`);
+        };
+
+        const auditLines = async (needle: string) => {
+            const list = await admin.getPosts(await channelId(REQUEST_CHANNELS.audit), 0, 200);
+            return list.order.map((id) => list.posts[id].message).filter((m) => m.includes(needle));
+        };
+
+        const waitForChannel = (channelName: string) => poll(async () => channelId(channelName));
+
+        const kvWhere = (key: string) => `pluginid = ${sqlString(PLUGIN_ID)} AND pkey = ${sqlString(key)}`;
+
+        // A plugin KV value decoded as JSON, read straight from Postgres.
+        const kv = async <T>(key: string): Promise<T | undefined> => {
+            const raw = await mm.psql(`SELECT convert_from(pvalue, 'UTF8') FROM pluginkeyvaluestore WHERE ${kvWhere(key)}`);
+            return raw === '' ? undefined : JSON.parse(raw) as T;
+        };
+
+        const kvKeys = async (prefix: string) => {
+            const out = await mm.psql(`SELECT pkey FROM pluginkeyvaluestore WHERE pluginid = ${sqlString(PLUGIN_ID)} AND pkey LIKE ${sqlString(prefix.replace(/[\\%_]/g, '\\$&') + '%')} ORDER BY pkey`);
+            return out === '' ? [] : out.split('\n');
+        };
+
+        // Moves a stored request's created_at back by days, so expiry and
+        // pruning can be tested without waiting. The plugin reads records
+        // from the KV store on every use and keeps no copy in memory.
+        const rewindRequest = async (key: string, days: number) => {
+            const millis = Math.round(days * 24 * 60 * 60 * 1000);
+            const value = `convert_from(pvalue, 'UTF8')::jsonb`;
+            const updated = await mm.psql(
+                `UPDATE pluginkeyvaluestore SET pvalue = convert_to(jsonb_set(${value}, '{created_at}', to_jsonb((${value}->>'created_at')::bigint - ${millis}))::text, 'UTF8') ` +
+                `WHERE ${kvWhere(key)} AND ${value} ? 'created_at' RETURNING pkey`,
+            );
+            if (updated !== key) {
+                throw new Error(`rewindRequest: no KV record ${key} with a created_at`);
+            }
+        };
+
+        // Applies patch on top of the current plugin config for the length
+        // of fn, then puts the old config back. OnConfigurationChange runs
+        // before patchConfig returns, so the new values apply straight away.
+        const withPluginConfig = async <T>(patch: PluginConfig, fn: () => Promise<T>): Promise<T> => {
+            const before = (await admin.getConfig()).PluginSettings.Plugins[PLUGIN_ID] as PluginConfig;
+            await setPluginConfig({...before, ...patch});
+            try {
+                return await fn();
+            } finally {
+                await setPluginConfig(before);
+            }
+        };
+
+        const logLineCount = () => mm.logLines().length;
 
         // Error-level server log lines that came from the plugin.
-        const pluginErrors = () => mm.logLines().filter((l) => l.includes(`"plugin_id":"${PLUGIN_ID}"`) && l.includes('"level":"error"'));
+        const pluginErrors = (sinceLine = 0) => mm.logLines().slice(sinceLine).filter((l) => l.includes(`"plugin_id":"${PLUGIN_ID}"`) && l.includes('"level":"error"'));
 
-        return {mm, teamId, userIds, client, pluginFetch, approvalChannelId, findCard, waitForChannel, pluginErrors, stop: mm.stop};
+        return {
+            mm,
+            serverVersion,
+            teamId,
+            userIds,
+            client,
+            createUser,
+            pluginFetch,
+            slash,
+            channelId,
+            approvalChannelId: () => channelId(APPROVAL_CHANNEL),
+            findCard,
+            findCardIn,
+            findDM,
+            auditLines,
+            waitForChannel,
+            kv,
+            kvKeys,
+            rewindRequest,
+            withPluginConfig,
+            logLineCount,
+            pluginErrors,
+            stop: mm.stop,
+        };
     } catch (error) {
         await mm.stop().catch(() => undefined);
         throw error;

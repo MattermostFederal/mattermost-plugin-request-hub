@@ -32,6 +32,7 @@ export default class MattermostContainer {
         MM_SQLSETTINGS_DATASOURCE: 'postgres://user:pass@db:5432/mattermost_test?sslmode=disable&connect_timeout=10',
         MM_SERVICESETTINGS_ENABLELOCALMODE: 'true',
         MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW: 'false',
+        MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: 'true',
         MM_PLUGINSETTINGS_ENABLEUPLOADS: 'true',
         MM_PLUGINSETTINGS_AUTOMATICPREPACKAGEDPLUGINS: 'false',
         MM_LOGSETTINGS_CONSOLELEVEL: 'DEBUG',
@@ -77,6 +78,16 @@ export default class MattermostContainer {
             await new Promise((resolve) => setTimeout(resolve, 500));
         }
         throw new Error(`mmctl local mode not ready after ${timeoutMs}ms: ${lastOutput}`);
+    };
+
+    // Runs SQL against the server's database and returns psql's unaligned,
+    // tuples-only output. Tests use it to read and rewind plugin KV records.
+    psql = async (sql: string): Promise<string> => {
+        const {output, exitCode} = await this.pgContainer.exec(['psql', '-U', 'user', '-d', 'mattermost_test', '-Atq', '-v', 'ON_ERROR_STOP=1', '-c', sql]);
+        if (exitCode !== 0) {
+            throw new Error(`psql exited with code ${exitCode}: ${output.trim()}`);
+        }
+        return output.trim();
     };
 
     // Server log lines written since the container started, one JSON object
