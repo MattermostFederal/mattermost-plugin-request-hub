@@ -100,8 +100,9 @@ func stubBotExtras(api *plugintest.API) {
 }
 
 // stubNamesFree answers the submit-time checks that a requested channel,
-// bot username or team URL name is free with "not found". A test's own
-// expectations for those lookups win.
+// bot username or team URL name is free, and that a nominee isn't already
+// on a team, with "not found". A test's own expectations for those lookups
+// win.
 func stubNamesFree(api *plugintest.API) {
 	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
 	var ours []*mock.Call
@@ -109,6 +110,7 @@ func stubNamesFree(api *plugintest.API) {
 		api.On("GetChannelByName", mock.Anything, mock.MatchedBy(unclaimed[string](api, &ours, "GetChannelByName", 1)), true).Return(nil, notFound).Maybe(),
 		api.On("GetUserByUsername", mock.MatchedBy(unclaimed[string](api, &ours, "GetUserByUsername", 0))).Return(nil, notFound).Maybe(),
 		api.On("GetTeamByName", mock.MatchedBy(unclaimed[string](api, &ours, "GetTeamByName", 0))).Return(nil, notFound).Maybe(),
+		api.On("GetTeamMember", mock.Anything, mock.MatchedBy(unclaimed[string](api, &ours, "GetTeamMember", 1))).Return(nil, notFound).Maybe(),
 	)
 }
 

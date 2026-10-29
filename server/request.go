@@ -376,6 +376,14 @@ type nomineeRules struct {
 	allowGuests bool
 	teamID      string // when set, nominees must be active members of this team
 	channelID   string // when set, nominees must be members of this channel (approve only)
+
+	// notTeamAdmin, with teamID, refuses nominees who are already Team
+	// Admins of that team: approving would change nothing.
+	notTeamAdmin bool
+
+	// notInTeamID, when set, refuses nominees who are already active members
+	// of that team.
+	notInTeamID string
 }
 
 // checkNominees loads each nominee and returns a user-facing error for the
@@ -399,6 +407,15 @@ func (p *Plugin) checkNominees(ids []string, rules nomineeRules) error {
 			member, appErr := p.API.GetTeamMember(rules.teamID, id)
 			if appErr != nil || member == nil || member.DeleteAt != 0 {
 				return errors.Errorf("@%s isn't a member of this team", user.Username)
+			}
+			if rules.notTeamAdmin && member.SchemeAdmin {
+				return errors.Errorf("@%s is already a Team Admin of this team", user.Username)
+			}
+		}
+		if rules.notInTeamID != "" {
+			member, appErr := p.API.GetTeamMember(rules.notInTeamID, id)
+			if appErr == nil && member != nil && member.DeleteAt == 0 {
+				return errors.Errorf("@%s is already a member of this team", user.Username)
 			}
 		}
 	}

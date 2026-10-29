@@ -496,6 +496,13 @@ func TestSubmitTeamAdminRequest_Refusals(t *testing.T) {
 			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
 			api.On("GetTeamMember", "team1", testNomineeID).Return(nil, testAppErr("no member"))
 		}, wantErr: "isn't a member of this team"}, ok},
+		{submitCase{name: "nominee already a Team Admin", setup: func(api *plugintest.API) {
+			stubTeam1(api)
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
+			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{SchemeAdmin: true}, nil)
+		}, wantErr: "@n is already a Team Admin of this team"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in
@@ -536,6 +543,12 @@ func TestSubmitTeamMemberRequest_Refusals(t *testing.T) {
 			stubRequester(api)
 			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "gone", DeleteAt: 1}, nil)
 		}, wantErr: "deactivated"}, ok},
+		{submitCase{name: "nominee already on the team", setup: func(api *plugintest.API) {
+			stubTeam1(api)
+			stubRequester(api)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
+			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{TeamId: "team1", UserId: testNomineeID}, nil)
+		}, wantErr: "@n is already a member of this team"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in

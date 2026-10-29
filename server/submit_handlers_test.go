@@ -77,6 +77,8 @@ func stubTeamAdminQueue(nomineeID string) func(api *plugintest.API) {
 func stubTeamMemberQueue(api *plugintest.API) {
 	stubTeam1(api)
 	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
+	// The nominee isn't on the team yet.
+	api.On("GetTeamMember", "team1", testNomineeID).Return(nil, model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)).Maybe()
 }
 
 func stubTeamGuestQueue(api *plugintest.API) {
