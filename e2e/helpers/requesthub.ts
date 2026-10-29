@@ -60,6 +60,32 @@ function findPluginBundle(): string {
     return path.join(dist, bundles[0]);
 }
 
+// Request kinds as the plugin names them in KV keys: the record is
+// <recordPrefix><id> and the requester's pending list is
+// pending_<kind>_<userId>.
+export const REQUEST_KINDS = {
+    channel: {recordPrefix: 'request_'},
+    admin: {recordPrefix: 'admin_request_'},
+    team: {recordPrefix: 'team_request_'},
+    team_admin: {recordPrefix: 'team_admin_request_'},
+    team_member: {recordPrefix: 'team_member_request_'},
+    team_guest: {recordPrefix: 'team_guest_request_'},
+    bot: {recordPrefix: 'bot_request_'},
+    webhook: {recordPrefix: 'webhook_request_'},
+} as const;
+export type RequestKind = keyof typeof REQUEST_KINDS;
+
+// The request ID printed in an approval card's footer. (The server strips
+// the buttons' integration context from posts it sends to clients.)
+export function cardRequestId(card: Post): string {
+    const attachments = card.props?.attachments as Array<{footer?: string}> | undefined;
+    const id = attachments?.map((a) => (/Request ID: (\w+)/).exec(a.footer ?? '')?.[1]).find(Boolean);
+    if (!id) {
+        throw new Error(`Post ${card.id} has no request ID footer`);
+    }
+    return id;
+}
+
 export type TestUser = {username: string; id: string};
 
 export type CreateUserOptions = {
@@ -100,11 +126,11 @@ export type RequestHub = {
     findCard: (needle: string) => Promise<Post>;
     findCardIn: (channelName: string, needle: string) => Promise<Post>;
     findDM: (username: string, needle: string) => Promise<Post>;
-    auditLines: (needle: string) => Promise<string[]>;
+    findAudit: (needle: string) => Promise<Post>;
     waitForChannel: (name: string) => Promise<string | undefined>;
     kv: <T = Record<string, unknown>>(key: string) => Promise<T | undefined>;
     kvKeys: (prefix: string) => Promise<string[]>;
-    rewindRequest: (key: string, days: number) => Promise<void>;
+    rewindRequest: (kind: RequestKind, requesterId: string, requestId: string, days: number) => Promise<void>;
     withPluginConfig: <T>(patch: PluginConfig, fn: () => Promise<T>) => Promise<T>;
     logLineCount: () => number;
     pluginErrors: (sinceLine?: number) => string[];
@@ -134,6 +160,11 @@ async function dismissOnboarding(client: Client4) {
         {user_id: me.id, category: 'drafts', name: 'drafts_tour_tip_showed', value: JSON.stringify({drafts_tour_tip_showed: true})},
     ]);
 }
+
+// Undoes the plugin's escapeMarkdown in a JSON-encoded post (backslashes
+// before markdown characters, zero-width spaces after @ and in ://), so
+// tests can look for names as they typed them.
+const unescaped = (json: string) => json.replace(/\\\\/g, '').replace(/​/g, '');
 
 // SQL string literal; the values tests pass are generated, but quote them
 // properly anyway.
@@ -216,7 +247,7 @@ export async function startRequestHub(name: string, pluginConfig: PluginConfig =
         const findPost = async (c: Client4, chId: string, needle: string, what: string): Promise<Post> => {
             const post = await poll(async () => {
                 const list = await c.getPosts(chId, 0, 60);
-                return list.order.map((id) => list.posts[id]).find((p) => JSON.stringify(p).includes(needle));
+                return list.order.map((id) => list.posts[id]).find((p) => unescaped(JSON.stringify(p)).includes(needle));
             });
             if (!post) {
                 throw new Error(`No post mentioning "${needle}" in ${what}`);
@@ -236,10 +267,8 @@ export async function startRequestHub(name: string, pluginConfig: PluginConfig =
             return findPost(c, dm.id, needle, `@${username}'s DM with @${HUB_BOT}`);
         };
 
-        const auditLines = async (needle: string) => {
-            const list = await admin.getPosts(await channelId(REQUEST_CHANNELS.audit), 0, 200);
-            return list.order.map((id) => list.posts[id].message).filter((m) => m.includes(needle));
-        };
+        // Audit posts carry their text in an attachment, not the message.
+        const findAudit = (needle: string) => findCardIn(REQUEST_CHANNELS.audit, needle);
 
         const waitForChannel = (channelName: string) => poll(async () => channelId(channelName));
 
@@ -256,18 +285,33 @@ export async function startRequestHub(name: string, pluginConfig: PluginConfig =
             return out === '' ? [] : out.split('\n');
         };
 
-        // Moves a stored request's created_at back by days, so expiry and
-        // pruning can be tested without waiting. The plugin reads records
-        // from the KV store on every use and keeps no copy in memory.
-        const rewindRequest = async (key: string, days: number) => {
+        // Moves a request's created_at back by days, in both its record and
+        // its entry in the requester's pending list, so expiry and pruning
+        // can be tested without waiting. The plugin reads both from the KV
+        // store on every use and keeps no copy in memory.
+        const rewindRequest = async (kind: RequestKind, requesterId: string, requestId: string, days: number) => {
             const millis = Math.round(days * 24 * 60 * 60 * 1000);
+            const rewound = (json: string) => `jsonb_set(${json}, '{created_at}', to_jsonb((${json}->>'created_at')::bigint - ${millis}))`;
             const value = `convert_from(pvalue, 'UTF8')::jsonb`;
-            const updated = await mm.psql(
-                `UPDATE pluginkeyvaluestore SET pvalue = convert_to(jsonb_set(${value}, '{created_at}', to_jsonb((${value}->>'created_at')::bigint - ${millis}))::text, 'UTF8') ` +
-                `WHERE ${kvWhere(key)} AND ${value} ? 'created_at' RETURNING pkey`,
+
+            const recordKey = REQUEST_KINDS[kind].recordPrefix + requestId;
+            const record = await mm.psql(
+                `UPDATE pluginkeyvaluestore SET pvalue = convert_to(${rewound(value)}::text, 'UTF8') ` +
+                `WHERE ${kvWhere(recordKey)} AND ${value} ? 'created_at' RETURNING pkey`,
             );
-            if (updated !== key) {
-                throw new Error(`rewindRequest: no KV record ${key} with a created_at`);
+            if (record !== recordKey) {
+                throw new Error(`rewindRequest: no KV record ${recordKey} with a created_at`);
+            }
+
+            const listKey = `pending_${kind}_${requesterId}`;
+            const list = await mm.psql(
+                `UPDATE pluginkeyvaluestore SET pvalue = convert_to((` +
+                `SELECT jsonb_agg(CASE WHEN e->>'id' = ${sqlString(requestId)} THEN ${rewound('e')} ELSE e END ORDER BY n) ` +
+                `FROM jsonb_array_elements(${value}) WITH ORDINALITY AS t(e, n))::text, 'UTF8') ` +
+                `WHERE ${kvWhere(listKey)} AND ${value} @> ${sqlString(JSON.stringify([{id: requestId}]))}::jsonb RETURNING pkey`,
+            );
+            if (list !== listKey) {
+                throw new Error(`rewindRequest: ${requestId} is not in ${listKey}`);
             }
         };
 
@@ -303,7 +347,7 @@ export async function startRequestHub(name: string, pluginConfig: PluginConfig =
             findCard,
             findCardIn,
             findDM,
-            auditLines,
+            findAudit,
             waitForChannel,
             kv,
             kvKeys,

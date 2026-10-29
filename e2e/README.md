@@ -41,9 +41,10 @@ Because tests share a server, they must not depend on each other or on leftovers
 | `slash(username, args, channel?)` | Runs `/mattermost-request-hub <args>` and returns the ephemeral reply |
 | `findCard(needle)`, `findCardIn(channel, needle)` | Newest post mentioning `needle` in a request channel (`REQUEST_CHANNELS.channel`, `.bot`, `.webhook`, `.team`, `.audit`) |
 | `findDM(username, needle)` | Newest post mentioning `needle` in the user's DM with the Request Hub bot |
-| `auditLines(needle)` | Messages in the audit channel that mention `needle` |
+| `findAudit(needle)` | Newest audit-channel post mentioning `needle` |
 | `kv(key)`, `kvKeys(prefix)` | Plugin KV records, read from Postgres |
-| `rewindRequest(key, days)` | Moves a stored request's `created_at` back, to test expiry and pruning |
+| `rewindRequest(kind, requesterId, requestId, days)` | Moves a request's `created_at` back in its record and the requester's pending list, to test expiry and pruning |
+| `cardRequestId(card)` | The request ID in an approval card's footer |
 | `withPluginConfig(patch, fn)` | Runs `fn` with plugin settings changed (keys are lowercase) |
 | `serverVersion`, `atLeast(version, min)` | For features newer than `min_server_version` |
 | `mm.mmctl(...)`, `mm.psql(sql)` | Run `mmctl --local` in the server container, or SQL against its database |
