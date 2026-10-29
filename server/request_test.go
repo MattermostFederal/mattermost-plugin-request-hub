@@ -64,32 +64,51 @@ func stubLogLines(api *plugintest.API) {
 	stubLogLevels(api)
 }
 
+// unclaimed matches an argument at index of method only when no other
+// expectation on api (other than ours) would take it, so a catch-all stub
+// gives way to a test's own expectations whichever was registered first.
+func unclaimed[T any](api *plugintest.API, ours *[]*mock.Call, method string, index int) func(T) bool {
+	return func(v T) bool {
+		for _, c := range api.ExpectedCalls {
+			if c.Method != method || slices.Contains(*ours, c) || len(c.Arguments) <= index {
+				continue
+			}
+			if _, diffs := c.Arguments[index : index+1].Diff([]any{v}); diffs == 0 {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// stubBotExtras lets the final approver create webhooks for others and has
+// the plugin API create bot tokens, for tests of the final approval that
+// aren't about either. A test's own expectations for these calls win.
+func stubBotExtras(api *plugintest.API) {
+	var ours []*mock.Call
+	isWebhookPermission := func(permission *model.Permission) bool {
+		return (permission == model.PermissionManageOthersIncomingWebhooks || permission == model.PermissionManageOthersOutgoingWebhooks) &&
+			unclaimed[*model.Permission](api, &ours, "HasPermissionToTeam", 2)(permission)
+	}
+	ours = append(ours,
+		api.On("HasPermissionToTeam", mock.Anything, mock.Anything, mock.MatchedBy(isWebhookPermission)).Return(true).Maybe(),
+		api.On("CreateUserAccessToken", mock.MatchedBy(unclaimed[*model.UserAccessToken](api, &ours, "CreateUserAccessToken", 0))).
+			Return(func(tok *model.UserAccessToken) (*model.UserAccessToken, *model.AppError) {
+				return &model.UserAccessToken{Id: "tok-id", Token: "secret-token", UserId: tok.UserId, ExpiresAt: tok.ExpiresAt}, nil
+			}).Maybe(),
+	)
+}
+
 // stubNamesFree answers the submit-time checks that a requested channel,
-// bot username or team URL name is free with "not found". It only answers
-// lookups that no other expectation on api covers, so a test's own mocks
-// for those methods win whichever order they were registered in.
+// bot username or team URL name is free with "not found". A test's own
+// expectations for those lookups win.
 func stubNamesFree(api *plugintest.API) {
 	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
 	var ours []*mock.Call
-	// unclaimed reports whether no other expectation for method takes name
-	// as its argument at index.
-	unclaimed := func(method string, index int) func(string) bool {
-		return func(name string) bool {
-			for _, c := range api.ExpectedCalls {
-				if c.Method != method || slices.Contains(ours, c) || len(c.Arguments) <= index {
-					continue
-				}
-				if _, diffs := c.Arguments[index : index+1].Diff([]any{name}); diffs == 0 {
-					return false
-				}
-			}
-			return true
-		}
-	}
 	ours = append(ours,
-		api.On("GetChannelByName", mock.Anything, mock.MatchedBy(unclaimed("GetChannelByName", 1)), true).Return(nil, notFound).Maybe(),
-		api.On("GetUserByUsername", mock.MatchedBy(unclaimed("GetUserByUsername", 0))).Return(nil, notFound).Maybe(),
-		api.On("GetTeamByName", mock.MatchedBy(unclaimed("GetTeamByName", 0))).Return(nil, notFound).Maybe(),
+		api.On("GetChannelByName", mock.Anything, mock.MatchedBy(unclaimed[string](api, &ours, "GetChannelByName", 1)), true).Return(nil, notFound).Maybe(),
+		api.On("GetUserByUsername", mock.MatchedBy(unclaimed[string](api, &ours, "GetUserByUsername", 0))).Return(nil, notFound).Maybe(),
+		api.On("GetTeamByName", mock.MatchedBy(unclaimed[string](api, &ours, "GetTeamByName", 0))).Return(nil, notFound).Maybe(),
 	)
 }
 

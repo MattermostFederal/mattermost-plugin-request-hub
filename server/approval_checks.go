@@ -300,6 +300,43 @@ func (p *Plugin) botApprovalBlocker(req *botRequest, requester *model.User, requ
 	return ""
 }
 
+// webhookCreatorBlocker refuses the final approval when actingUserID can't
+// create a webhook owned by someone else in teamID. Webhooks are created
+// with the final approver's session, and by default only Team Admins and
+// System Admins may create one for another user; without the permission
+// the hook would fail after the request was approved.
+func (p *Plugin) webhookCreatorBlocker(actingUserID, teamID, webhookType string) string {
+	permission := model.PermissionManageOthersIncomingWebhooks
+	if webhookType == webhookTypeOutgoing {
+		permission = model.PermissionManageOthersOutgoingWebhooks
+	}
+	if p.API.HasPermissionToTeam(actingUserID, teamID, permission) {
+		return ""
+	}
+	return fmt.Sprintf("You can't give the final approval: it creates an %s webhook, which needs permission to manage other people's %s webhooks in that team (Team Admins and System Admins have it). Ask someone who has it to approve.", webhookType, webhookType)
+}
+
+// botWebhookCreatorBlocker applies webhookCreatorBlocker to each webhook a
+// bot request asks for.
+func (p *Plugin) botWebhookCreatorBlocker(req *botRequest, actingUserID string) string {
+	for _, hook := range []struct{ channelID, webhookType string }{
+		{req.IncomingWebhookChannelID, webhookTypeIncoming},
+		{req.OutgoingWebhookChannelID, webhookTypeOutgoing},
+	} {
+		if hook.channelID == "" {
+			continue
+		}
+		channel, appErr := p.API.GetChannel(hook.channelID)
+		if appErr != nil || channel == nil {
+			return approvalCheckRetryText
+		}
+		if msg := p.webhookCreatorBlocker(actingUserID, channel.TeamId, hook.webhookType); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
 // webhookApprovalBlocker re-checks a webhook request before either step.
 func (p *Plugin) webhookApprovalBlocker(req *webhookRequest, requester *model.User, requesterErr *model.AppError, channel *model.Channel, channelErr *model.AppError) string {
 	if msg := p.requesterBlocker(req.RequesterID, requester, requesterErr); msg != "" {

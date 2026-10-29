@@ -381,6 +381,7 @@ func TestHandleBotAction_BotJoinsChannelBeforeOwningIncomingWebhook(t *testing.T
 	capture := &hookCapture{}
 	ts := capture.server(t)
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
@@ -423,6 +424,7 @@ func TestHandleBotAction_BotAlreadyOnTeamOnlyJoinsChannel(t *testing.T) {
 	capture := &hookCapture{}
 	ts := capture.server(t)
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)
@@ -455,9 +457,10 @@ func TestHandleBotAction_ChannelJoinFailureSkipsIncomingWebhook(t *testing.T) {
 		{
 			name: "channel can't be loaded",
 			stub: func(api *plugintest.API) {
-				// The channel passes the approve-time check, then can't be
-				// loaded when the webhook is created.
-				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team1"}, nil).Once()
+				// The channel passes the approve-time check and the webhook
+				// permission check, then can't be loaded when the webhook is
+				// created.
+				api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team1"}, nil).Twice()
 				api.On("GetChannel", "ch1").Return(nil, testAppErr("gone")).Once()
 				api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 			},
@@ -489,6 +492,7 @@ func TestHandleBotAction_ChannelJoinFailureSkipsIncomingWebhook(t *testing.T) {
 			capture := &hookCapture{}
 			ts := capture.server(t)
 			api := &plugintest.API{}
+			stubBotExtras(api)
 			stubPendingLists(api)
 			stubLogs(api)
 			defer api.AssertExpectations(t)
@@ -521,6 +525,7 @@ func TestHandleBotAction_UndeliverableTokenClearsCards(t *testing.T) {
 			capture := &hookCapture{}
 			ts := capture.server(t)
 			api := &plugintest.API{}
+			stubBotExtras(api)
 			stubLogLevels(api)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
@@ -549,6 +554,7 @@ func TestHandleBotAction_UndeliverableTokenClearsCards(t *testing.T) {
 
 func TestHandleWebhookAction_UndeliverableURLClearsCards(t *testing.T) {
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -583,6 +589,7 @@ func TestHandleWebhookAction_UndeliverableURLClearsCards(t *testing.T) {
 func TestTwoStepActionHandlers_LostRequestClearsCards(t *testing.T) {
 	t.Run("bot", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubBotExtras(api)
 		stubLogLevels(api)
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
@@ -612,6 +619,7 @@ func TestTwoStepActionHandlers_LostRequestClearsCards(t *testing.T) {
 	})
 	t.Run("webhook", func(t *testing.T) {
 		api := &plugintest.API{}
+		stubBotExtras(api)
 		stubLogLevels(api)
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)

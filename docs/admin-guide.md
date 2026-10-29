@@ -210,11 +210,11 @@ End-user guides document the same flow with request-type examples:
 
 A single bot approval ticket can cover three operations: creating the bot account, generating an access token, and creating incoming and/or outgoing webhooks.
 
-Bot requests need a **security** approval and a **system** approval from two different people. When both steps are filled, the server creates the bot and optional extras. If creation fails, the card stays pending so the final approver can retry.
+Bot requests need a **security** approval and a **system** approval from two different people. When both steps are filled, the server creates the bot and optional extras. If creation fails, the card stays pending so the final approver can retry. Webhooks are created with the final approver's session, so when a bot request asks for a webhook, the final approver must be allowed to manage other people's webhooks in that team (Team Admins and System Admins are, by default). Anyone else gets a private reply asking for someone who is, and the request stays pending.
 
 ### Token delivery
 
-Access tokens are generated at approve-time through a short-lived session for the final approver, which is revoked right after; no credential is stored. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token expires after **Bot token lifetime** (1 to 12 months, default 12), and the DM gives the date. Token expiry needs Mattermost 11.9 or later.
+Access tokens are generated at approve-time by the plugin, whoever the final approver is; no credential is stored. The token value is sent to the requester in a direct message that **auto-deletes after 72 hours**. The token expires after **Bot token lifetime** (1 to 12 months, default 12), and the DM gives the date. Token expiry needs Mattermost 11.9 or later.
 
 ### Token expiry reminders
 
@@ -230,7 +230,7 @@ If a token is suspected compromised, revoke it in **System Console → User Mana
 
 ## Webhook approvals in detail
 
-Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call and is never stored.
+Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call and is never stored, so the final approver must be allowed to manage other people's webhooks in the channel's team (Team Admins and System Admins are, by default). Anyone else gets a private reply asking for someone who is, and the request stays pending.
 
 **Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different system approver (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
 

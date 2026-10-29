@@ -19,6 +19,7 @@ func newerTypeFixture(t *testing.T) (*plugintest.API, *Plugin, map[string][]byte
 	t.Helper()
 	api := &plugintest.API{}
 	stubLogLines(api)
+	stubBotExtras(api)
 	t.Cleanup(func() { api.AssertExpectations(t) })
 	p := newTestPlugin(api)
 	store := fakeKV(api)
