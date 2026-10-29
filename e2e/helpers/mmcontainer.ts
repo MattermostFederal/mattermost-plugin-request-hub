@@ -33,6 +33,9 @@ export default class MattermostContainer {
         MM_SERVICESETTINGS_ENABLELOCALMODE: 'true',
         MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW: 'false',
         MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: 'true',
+        // Tests make their own users, and a shared server passes the
+        // default cap of 50 members per team within a few spec files.
+        MM_TEAMSETTINGS_MAXUSERSPERTEAM: '100000',
         MM_PLUGINSETTINGS_ENABLEUPLOADS: 'true',
         MM_PLUGINSETTINGS_AUTOMATICPREPACKAGEDPLUGINS: 'false',
         MM_LOGSETTINGS_CONSOLELEVEL: 'DEBUG',
