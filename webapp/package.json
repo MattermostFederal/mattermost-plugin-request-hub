@@ -24,12 +24,12 @@
     "@mattermost/types": "11.9.0",
     "@playwright/experimental-ct-react": "1.62.1",
     "@playwright/test": "1.62.1",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/react-redux": "7.1.35",
-    "@typescript-eslint/eslint-plugin": "8.72.0",
-    "@typescript-eslint/parser": "8.72.0",
+    "@typescript-eslint/eslint-plugin": "8.72.1",
+    "@typescript-eslint/parser": "8.72.1",
     "ajv": "8.20.0",
     "babel-loader": "9.2.1",
     "babel-plugin-polyfill-corejs3": "1.0.0",
@@ -40,17 +40,17 @@
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.1.1",
     "react-dom": "19.3.1",
-    "sass": "1.106.1",
-    "sass-loader": "17.0.1",
+    "sass": "1.107.0",
+    "sass-loader": "17.1.0",
     "style-loader": "4.0.0",
     "typescript": "6.0.3",
-    "webpack": "5.112.0",
-    "webpack-cli": "7.2.3"
+    "webpack": "5.112.2",
+    "webpack-cli": "7.3.0"
   },
   "dependencies": {
     "core-js": "3.51.0",
     "react": "19.3.1",
-    "react-redux": "9.3.0",
+    "react-redux": "9.3.1",
     "redux": "5.0.1"
   }
 }
