@@ -76,7 +76,7 @@ func (p *Plugin) hasActiveTeamApprovers(teamID string) bool {
 			return true // safe default: assume monitored
 		}
 		for _, m := range members {
-			if m.SchemeAdmin || slices.Contains(strings.Fields(m.Roles), model.TeamAdminRoleId) {
+			if isTeamAdminMember(m) {
 				return true
 			}
 			if sysAdmins[m.UserId] {
@@ -463,7 +463,7 @@ func (p *Plugin) addTeamApproversToChannel(teamID, channelID string) {
 			return
 		}
 		for _, m := range members {
-			isTeamAdmin := m.SchemeAdmin || slices.Contains(strings.Fields(m.Roles), model.TeamAdminRoleId)
+			isTeamAdmin := isTeamAdminMember(m)
 			if !isTeamAdmin && !sysAdmins[m.UserId] {
 				continue
 			}
@@ -669,8 +669,7 @@ func (p *Plugin) UserHasJoinedTeam(_ *plugin.Context, teamMember *model.TeamMemb
 		return
 	}
 
-	isTeamAdmin := teamMember.SchemeAdmin ||
-		slices.Contains(strings.Fields(teamMember.Roles), model.TeamAdminRoleId)
+	isTeamAdmin := isTeamAdminMember(teamMember)
 	isSysAdmin := false
 	if actor != nil && actor.Id == teamMember.UserId {
 		isSysAdmin = actor.IsSystemAdmin()

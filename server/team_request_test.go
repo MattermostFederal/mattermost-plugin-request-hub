@@ -43,6 +43,7 @@ func TestSubmitTeamCreationRequest_InvalidURLName(t *testing.T) {
 
 func TestSubmitTeamCreationRequest_StoresAndPostsRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)

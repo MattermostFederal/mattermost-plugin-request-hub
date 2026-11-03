@@ -454,6 +454,7 @@ func TestUserHasJoinedTeam_NoOpWhenFeatureDisabled(t *testing.T) {
 
 func TestSubmitRequest_RoutesToPerTeamChannel(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubLogs(api)
 	stubPendingLists(api)
 	defer api.AssertExpectations(t)

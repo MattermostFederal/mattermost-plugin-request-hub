@@ -183,7 +183,6 @@ test.describe('team creation', () => {
     });
 
     test('refused at submit when the URL name is already taken', async ({hub}) => {
-        test.fail(true, 'BUG: submitTeamCreationRequest never checks GetTeamByName; a taken URL only fails when a System Admin approves');
         const requester = await hub.createUser();
         const taken = (await makeTeam(hub)).name;
         const res = await submit(hub, requester, 'team', {display_name: 'Taken', name: taken});
@@ -344,7 +343,7 @@ test.describe('Team Admin', () => {
         const otherTeam = await makeTeam(hub);
         const dialog = (teamId: string, members: string) => submitDialog(hub, requester, '/api/v1/team_admin_dialog', 'team_admin_request', teamId, {members});
 
-        expect(await hub.slash(requester.username, `team-admin @${uid('nobody')}`)).toMatch(/^unknown user: nobody/);
+        expect(await hub.slash(requester.username, `team-admin @${uid('nobody')}`)).toMatch(/^unknown user: `nobody/);
         expect(await hub.slash(requester.username, 'team-admin')).toBe(''); // opens the form instead
         expect(await hub.slash(requester.username, `team-admin @${gone.username}`)).toBe(`@${gone.username} is deactivated and can't be made a Team Admin`);
         expect(await hub.slash(requester.username, `team-admin @${bot.username}`)).toBe(`@${bot.username} is a bot and can't be made a Team Admin`);
@@ -369,7 +368,6 @@ test.describe('Team Admin', () => {
     });
 
     test('refused at submit when every nominee is already a Team Admin', async ({hub}) => {
-        test.fail(true, 'BUG: checkNominees does not skip or refuse nominees who are already Team Admin; the request queues and approval is a no-op');
         const requester = await hub.createUser();
         const ta = await hub.createUser({teamAdmin: true});
         expect(await hub.slash(requester.username, `team-admin @${ta.username}`)).not.toContain(SUBMITTED.team_admin);
@@ -540,8 +538,8 @@ test.describe('team member', () => {
         const nobody = uid('nobody');
         const body = (nominees: string[], extra: Record<string, unknown> = {}) => ({team_id: hub.teamId, nominees, ...extra});
 
-        expect(await submit(hub, requester, 'team_member', body([nobody]))).toEqual({error: `unknown user: ${nobody}`});
-        expect(await hub.slash(requester.username, `team-member @${nobody}`)).toBe(`unknown user: ${nobody}`);
+        expect(await submit(hub, requester, 'team_member', body([nobody]))).toEqual({error: `unknown user: \`${nobody}\``});
+        expect(await hub.slash(requester.username, `team-member @${nobody}`)).toBe(`unknown user: \`${nobody}\``);
         expect(await submit(hub, requester, 'team_member', body([gone.username]))).toEqual({error: `@${gone.username} is deactivated and can't be made a team member`});
         expect(await submit(hub, requester, 'team_member', body([]))).toEqual({error: 'pick at least one person to add to the team'});
         expect(await hub.slash(requester.username, 'team-member --reason x')).toContain('Could not read the request: name at least one user.');
@@ -563,7 +561,6 @@ test.describe('team member', () => {
     });
 
     test('refused at submit when every nominee is already on the team', async ({hub}) => {
-        test.fail(true, 'BUG: submitTeamMemberRequest accepts users already on the team; approval then reports them as "Added"');
         const requester = await hub.createUser();
         const member = await hub.createUser();
         expect(await hub.slash(requester.username, `team-member @${member.username}`)).not.toContain(SUBMITTED.team_member);
@@ -794,7 +791,6 @@ test.describe('team menu', () => {
     });
 
     test('choosing a plugin item closes the team menu', async ({hub, page}) => {
-        test.fail(true, 'BUG: teamMenuOverride dispatches Escape on document, which the MUI menu ignores; its backdrop stays over the form and swallows the first click');
         const requester = await hub.createUser();
         await login(page, hub, requester.username);
         await openChannel(page, hub, 'town-square');
@@ -815,7 +811,6 @@ test.describe('team menu', () => {
     });
 
     test('slash team-admin form: a nominee picked in the dialog is submitted', async ({hub, page}) => {
-        test.fail(true, 'BUG: the multi-select arrives as an array but handleTeamAdminDialogSubmit reads it with submissionString, so every submit says "pick at least one person"');
         const requester = await hub.createUser();
         const nominee = await hub.createUser();
         await login(page, hub, requester.username);

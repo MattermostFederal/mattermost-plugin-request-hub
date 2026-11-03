@@ -138,8 +138,8 @@ test.describe('submit', () => {
         const ghost = uid('ghost');
 
         expect(await submitAdmin(hub, requester.username, channel.id, [])).toEqual({error: 'pick at least one person to make a Channel Admin'});
-        expect(await submitAdmin(hub, requester.username, channel.id, [`@${ghost}`])).toEqual({error: `unknown user: ${ghost}`});
-        expect(await hub.slash(requester.username, `channel-admin @${ghost}`, channel.name)).toBe(`unknown user: ${ghost}`);
+        expect(await submitAdmin(hub, requester.username, channel.id, [`@${ghost}`])).toEqual({error: `unknown user: \`${ghost}\``});
+        expect(await hub.slash(requester.username, `channel-admin @${ghost}`, channel.name)).toBe(`unknown user: \`${ghost}\``);
         expect(await hub.slash(requester.username, 'channel-admin ,', channel.name)).toBe('Name at least one channel member: `/mattermost-request-hub channel-admin @user [@user ...]`');
         expect(await submitAdminDialog(hub, requester.username, channel.id, [])).toBe('pick at least one person to make a Channel Admin');
         expect(await submitAdminDialog(hub, requester.username, channel.id, ['not-an-id'])).toBe('Channel Admin nominees must be picked from the list');

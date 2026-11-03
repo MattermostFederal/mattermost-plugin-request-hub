@@ -244,6 +244,10 @@ func (p *Plugin) decideBotRequest(actingUserID, requestID, clickedPostID string,
 		}, p.botApprovalHeader(req.Exercise), func() *model.MessageAttachment { return p.botApprovalAttachment(&newReq, requester) })
 	}
 
+	if msg := p.botWebhookCreatorBlocker(req, actingUser.Id); msg != "" {
+		return decisionResult{Reply: msg}
+	}
+
 	if res, ok := p.claimRecord(key, rawReq, cards, "bot request"); !ok {
 		return res
 	}
@@ -284,7 +288,7 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	authToken := ""
 	siteURL := p.siteURL()
 	if adminSession, sessErr := p.createUserSession(actingUser.Id); sessErr != nil {
-		p.API.LogWarn("failed to create admin session — token/webhook extras will be skipped", "error", sessErr.Error())
+		p.API.LogWarn("failed to create admin session — webhook extras will be skipped", "error", sessErr.Error())
 	} else {
 		authToken = adminSession.Token
 		defer func() {
@@ -303,15 +307,15 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	wantsToken := req.RequestToken
 	wantsIncoming := req.IncomingWebhookChannelID != ""
 	wantsOutgoing := req.OutgoingWebhookChannelID != ""
-	if (wantsToken || wantsIncoming || wantsOutgoing) && authToken == "" {
-		partialErrors = append(partialErrors, "token/webhook extras were skipped because an admin session could not be created")
+	if (wantsIncoming || wantsOutgoing) && authToken == "" {
+		partialErrors = append(partialErrors, "webhook extras were skipped because an admin session could not be created")
 	}
 	if (wantsIncoming || wantsOutgoing) && siteURL == "" {
 		partialErrors = append(partialErrors, "webhook extras were skipped because SiteURL is not configured")
 	}
 
-	if wantsToken && authToken != "" {
-		tok, tokErr := p.createBotToken(authToken, bot.UserId, "API token for @"+req.Username)
+	if wantsToken {
+		tok, tokErr := p.createBotToken(bot.UserId, "API token for @"+req.Username)
 		if tokErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("token generation failed: %s", tokErr.Error()))
 			p.API.LogError("failed to create bot token", "bot_user_id", bot.UserId, "error", tokErr.Error())
@@ -512,6 +516,10 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 			Title: "Webhook Request Update",
 			Text:  fmt.Sprintf("Your %s webhook request for **%s** received the %s approval; awaiting the other approval.", req.WebhookType, escapeMarkdown(req.DisplayName), step),
 		}, p.webhookApprovalHeader(req.Exercise), func() *model.MessageAttachment { return p.webhookApprovalAttachment(&newReq, requester, channel) })
+	}
+
+	if msg := p.webhookCreatorBlocker(actingUser.Id, channel.TeamId, req.WebhookType); msg != "" {
+		return decisionResult{Reply: msg}
 	}
 
 	if res, ok := p.claimRecord(key, rawReq, cards, "webhook request"); !ok {

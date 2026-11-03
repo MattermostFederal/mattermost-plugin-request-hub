@@ -19,6 +19,7 @@ func TestSubmitTeamMemberRequest_Disabled(t *testing.T) {
 
 func TestSubmitTeamMemberRequest_QueuesForApproval(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	defer api.AssertExpectations(t)

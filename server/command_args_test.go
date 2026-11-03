@@ -142,7 +142,7 @@ func TestExecuteCommand_ChannelAdminSplitsCommaList(t *testing.T) {
 	api.On("GetUserByUsername", "nommy").Return(&model.User{Id: testNomineeID}, nil)
 	api.On("GetUserByUsername", "ghost").Return(nil, testAppErr("not found"))
 
-	require.Equal(t, "unknown user: ghost", runCommand(p, "/mattermost-request-hub channel-admin @nommy,@ghost").Text)
+	require.Equal(t, "unknown user: `ghost`", runCommand(p, "/mattermost-request-hub channel-admin @nommy,@ghost").Text)
 }
 
 // argumentFormCase is a newer request type filed with its argument form.
@@ -272,6 +272,7 @@ func TestExecuteCommand_ArgumentFormsCloseCopiesDecidedWhilePosting(t *testing.T
 			// copy while the copies were still being posted, so it is gone
 			// once they are recorded.
 			api := &plugintest.API{}
+			stubNamesFree(api)
 			stubLogs(api)
 			api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, tc.kvPrefix) })).Return(nil, nil)
 			api.On("KVGet", isApprovalCardsKey).Return([]byte(`["posted"]`), nil)
@@ -361,9 +362,9 @@ func TestExecuteCommand_ArgumentFormsUsage(t *testing.T) {
 
 func TestExecuteCommand_ArgumentFormsUnknownNames(t *testing.T) {
 	for command, want := range map[string]string{
-		"team-admin @ghost":                                                 "unknown user: ghost",
-		"team-member @ghost --reason x":                                     "unknown user: ghost",
-		"bot svcbot Svc --owner @ghost":                                     "unknown user: ghost",
+		"team-admin @ghost":                                                 "unknown user: `ghost`",
+		"team-member @ghost --reason x":                                     "unknown user: `ghost`",
+		"bot svcbot Svc --owner @ghost":                                     "unknown user: `ghost`",
 		"team-guest a@b.co --channels ~nope":                                "unknown channel: ~nope",
 		"webhook-incoming ~nope Alerts":                                     "unknown channel: ~nope",
 		"webhook-outgoing ~nope Relay --callback https://hooks.example.com": "unknown channel: ~nope",

@@ -155,6 +155,19 @@ func (p *Plugin) nomineeBlocker(ids []string, rules nomineeRules) string {
 			if appErr != nil || member == nil || member.DeleteAt != 0 {
 				return fmt.Sprintf("@%s is no longer a member of the team. Deny this request instead.", user.Username)
 			}
+			if rules.notTeamAdmin && isTeamAdminMember(member) {
+				return fmt.Sprintf("@%s is already a Team Admin of this team. Deny this request instead.", user.Username)
+			}
+		}
+		if rules.notInTeamID != "" {
+			member, appErr := p.API.GetTeamMember(rules.notInTeamID, id)
+			if lookupFailed(appErr) {
+				p.API.LogWarn("failed to check nominee's team membership for approval", "user_id", id, "team_id", rules.notInTeamID, "error", appErr.Error())
+				return approvalCheckRetryText
+			}
+			if appErr == nil && member != nil && member.DeleteAt == 0 {
+				return fmt.Sprintf("@%s is already a member of this team. Deny this request instead.", user.Username)
+			}
 		}
 		if rules.channelID != "" {
 			member, appErr := p.API.GetChannelMember(rules.channelID, id)
@@ -215,7 +228,7 @@ func (p *Plugin) teamAdminApprovalBlocker(req *teamAdminRequest, team *model.Tea
 	if msg := p.requesterTeamBlocker(req.TeamID, requester); msg != "" {
 		return msg
 	}
-	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a Team Admin", teamID: req.TeamID})
+	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a Team Admin", teamID: req.TeamID, notTeamAdmin: true})
 }
 
 // teamMemberApprovalBlocker re-checks a team member request. Submit doesn't
@@ -231,7 +244,7 @@ func (p *Plugin) teamMemberApprovalBlocker(req *teamMemberRequest, team *model.T
 	if msg := p.requesterBlocker(req.RequesterID, requester, requesterErr); msg != "" {
 		return msg
 	}
-	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a team member", allowBots: true, allowGuests: true})
+	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a team member", allowBots: true, allowGuests: true, notInTeamID: req.TeamID})
 }
 
 // teamGuestApprovalBlocker re-checks a guest invite request.
@@ -294,6 +307,43 @@ func (p *Plugin) botApprovalBlocker(req *botRequest, requester *model.User, requ
 		}
 		channel, appErr := p.API.GetChannel(hook.channelID)
 		if msg := p.webhookChannelBlocker(hook.channelID, hook.webhookType, channel, appErr, requester); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// webhookCreatorBlocker refuses the final approval when actingUserID can't
+// create a webhook owned by someone else in teamID. Webhooks are created
+// with the final approver's session, and by default only Team Admins and
+// System Admins may create one for another user; without the permission
+// the hook would fail after the request was approved.
+func (p *Plugin) webhookCreatorBlocker(actingUserID, teamID, webhookType string) string {
+	permission := model.PermissionManageOthersIncomingWebhooks
+	if webhookType == webhookTypeOutgoing {
+		permission = model.PermissionManageOthersOutgoingWebhooks
+	}
+	if p.API.HasPermissionToTeam(actingUserID, teamID, permission) {
+		return ""
+	}
+	return fmt.Sprintf("You can't give the final approval: it creates an %s webhook, which needs permission to manage other people's %s webhooks in that team (Team Admins and System Admins have it). Ask someone who has it to approve.", webhookType, webhookType)
+}
+
+// botWebhookCreatorBlocker applies webhookCreatorBlocker to each webhook a
+// bot request asks for.
+func (p *Plugin) botWebhookCreatorBlocker(req *botRequest, actingUserID string) string {
+	for _, hook := range []struct{ channelID, webhookType string }{
+		{req.IncomingWebhookChannelID, webhookTypeIncoming},
+		{req.OutgoingWebhookChannelID, webhookTypeOutgoing},
+	} {
+		if hook.channelID == "" {
+			continue
+		}
+		channel, appErr := p.API.GetChannel(hook.channelID)
+		if appErr != nil || channel == nil {
+			return approvalCheckRetryText
+		}
+		if msg := p.webhookCreatorBlocker(actingUserID, channel.TeamId, hook.webhookType); msg != "" {
 			return msg
 		}
 	}

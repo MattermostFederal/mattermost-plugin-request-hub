@@ -613,8 +613,8 @@ func (p *Plugin) handleDialogSubmit(w http.ResponseWriter, r *http.Request) {
 		Prefix:         submissionString(submission.Submission, fieldPrefix),
 		Purpose:        submissionString(submission.Submission, fieldPurpose),
 		ChannelType:    submissionString(submission.Submission, fieldType),
-		MemberIDs:      splitIDs(submissionString(submission.Submission, fieldMembers)),
-		AdminMemberIDs: splitIDs(submissionString(submission.Submission, fieldAdmins)),
+		MemberIDs:      submissionIDList(submission.Submission, fieldMembers),
+		AdminMemberIDs: submissionIDList(submission.Submission, fieldAdmins),
 		CategoryName:   submissionString(submission.Submission, fieldCategory),
 	}
 
@@ -837,7 +837,7 @@ func (p *Plugin) handleChannelAdminDialogSubmit(w http.ResponseWriter, r *http.R
 	}
 
 	channelID := submissionString(submission.Submission, fieldChannelID)
-	nomineeIDs := splitIDs(submissionString(submission.Submission, fieldNominees))
+	nomineeIDs := submissionIDList(submission.Submission, fieldNominees)
 
 	message, err := p.submitAdminRequest(userID, channelID, nomineeIDs)
 	if err != nil {
@@ -874,7 +874,7 @@ func (p *Plugin) handleTeamAdminDialogSubmit(w http.ResponseWriter, r *http.Requ
 	if teamID == "" {
 		teamID = submission.TeamId
 	}
-	nomineeIDs := splitIDs(submissionString(submission.Submission, fieldMembers))
+	nomineeIDs := submissionIDList(submission.Submission, fieldMembers)
 
 	message, err := p.submitTeamAdminRequest(userID, teamID, nomineeIDs)
 	if err != nil {
@@ -1451,7 +1451,7 @@ func (p *Plugin) resolveUsernameList(usernames []string) ([]string, error) {
 		}
 		user, appErr := p.API.GetUserByUsername(username)
 		if appErr != nil {
-			return nil, errors.Errorf("unknown user: %s", username)
+			return nil, errors.Errorf("unknown user: %s", inlineCode(username))
 		}
 		out = append(out, user.Id)
 	}
@@ -1550,10 +1550,13 @@ func (p *Plugin) isTeamAdminOfTeamID(userID, teamID string) bool {
 	if appErr != nil || member == nil || member.DeleteAt != 0 {
 		return false
 	}
-	if slices.Contains(strings.Fields(member.Roles), model.TeamAdminRoleId) {
-		return true
-	}
-	return member.SchemeAdmin
+	return isTeamAdminMember(member)
+}
+
+// isTeamAdminMember reports whether a loaded team membership grants Team
+// Admin, by either the scheme flag or the classic roles string.
+func isTeamAdminMember(member *model.TeamMember) bool {
+	return member.SchemeAdmin || slices.Contains(strings.Fields(member.Roles), model.TeamAdminRoleId)
 }
 
 // isApprovalTeamAdmin reports whether the user is a Team Admin of the

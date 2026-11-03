@@ -77,16 +77,13 @@ async function expectStillPending(hub: RequestHub, requester: TestUser, s: Submi
 // security and system pools, and deletes them afterwards: a server allows
 // only a few Custom Profile Attribute fields.
 type Pools = {security: (u: TestUser) => Promise<void>; system: (u: TestUser) => Promise<void>};
-async function withAttributePools(hub: RequestHub, fn: (pools: Pools) => Promise<void>, {extra = {}, poolsMustWork = true}: {extra?: Record<string, string>; poolsMustWork?: boolean} = {}) {
+async function withAttributePools(hub: RequestHub, fn: (pools: Pools) => Promise<void>, {extra = {}}: {extra?: Record<string, string>} = {}) {
     const securityAttr = uid('sec');
     const systemAttr = uid('sys');
     const securityField = await createAttribute(hub, securityAttr);
     const systemField = await createAttribute(hub, systemAttr);
     const admin = await hub.client(ADMIN);
     try {
-        if (poolsMustWork) {
-            test.fail(await attributeGroupName(hub, securityField) !== 'access_control', ATTRIBUTE_GROUP_BUG);
-        }
         await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, systemapproverattribute: systemAttr, ...extra}, () => fn({
             security: (u) => setAttribute(hub, u.id, securityField, 'yes'),
             system: (u) => setAttribute(hub, u.id, systemField, 'yes'),
@@ -96,13 +93,6 @@ async function withAttributePools(hub: RequestHub, fn: (pools: Pools) => Promise
         await admin.deleteCustomProfileAttributeField(systemField);
     }
 }
-
-// Mattermost 11.3 keeps Custom Profile Attributes in the
-// custom_profile_attributes property group; later versions moved them to
-// access_control, the only group the plugin looks in.
-const ATTRIBUTE_GROUP_BUG = 'BUG: attribute mode finds no approvers where Custom Profile Attributes are not in the access_control group (Mattermost 11.3)';
-const attributeGroupName = (hub: RequestHub, fieldId: string) =>
-    hub.mm.psql(`SELECT g.name FROM propertyfields f JOIN propertygroups g ON g.id = f.groupid WHERE f.id = '${fieldId}'`);
 
 // Checks a fully approved request: the bot exists and belongs to owner, the
 // card and ticket are closed, the audit post is there and the pending
@@ -242,9 +232,6 @@ test.describe('submit', () => {
     });
 
     test('a username that is already taken is refused', async ({hub}) => {
-        // The username is only checked when the bot is created, after both
-        // approvals: see 'a username taken before the final approval'.
-        test.fail(true, 'BUG: submit does not check that the bot username is free, so a doomed request reaches the approvers');
         const requester = await hub.createUser();
         const taken = await hub.createUser({prefix: 'tk'});
         const res = await submitBot(hub, requester.username, {username: taken.username});
@@ -256,7 +243,7 @@ test.describe('submit', () => {
     test.describe('slash usage errors', () => {
         const cases: Array<[string, (u: string) => string, string]> = [
             ['no display name', (u) => `bot ${u}`, 'Could not read the request: a bot username and a display name are required.\nUsage: `/mattermost-request-hub bot <username> <Display name>'],
-            ['unknown owner', (u) => `bot ${u} Name --owner @nosuchuser${u}`, 'unknown user: nosuchuser'],
+            ['unknown owner', (u) => `bot ${u} Name --owner @nosuchuser${u}`, 'unknown user: `nosuchuser'],
             ['short username', () => 'bot ab Short Bot', 'Bot username must be 3-22 characters.'],
         ];
         for (const [title, args, reply] of cases) {
@@ -641,11 +628,6 @@ test.describe('attribute mode', () => {
     });
 
     test('a token is delivered when the final approver is not a System Admin', async ({hub}) => {
-        // The token is created with the final approver's session, and only
-        // System Admins may create tokens for another user's bot. The bot
-        // is created and the request closed as fully approved, but the
-        // requester gets "token generation failed" instead of a token.
-        test.fail(true, 'BUG: a system-pool approver who is not a System Admin cannot create the requested bot token');
         const requester = await hub.createUser();
         const security = await hub.createUser();
         const system = await hub.createUser();
@@ -697,7 +679,7 @@ test.describe('attribute mode', () => {
             expect(attachmentOf(card)?.fields?.[0]).toMatchObject({title: '🔒 Security review required first:'});
             expect(card.message).toContain(HEADER);
             await expectStillPending(hub, requester, s, before, username);
-        }, {poolsMustWork: false});
+        });
     });
 
     test('a system-pool member cannot approve before security has', async ({hub}) => {
@@ -776,7 +758,7 @@ test.describe('attribute mode', () => {
                 value: `**@${requester.username}** (who created this ticket) clicked **Approve**. Requesters cannot approve their own request — another security or system approver must review it.`,
             });
             await expectStillPending(hub, requester, s, before, username);
-        }, {poolsMustWork: false});
+        });
     });
 
     test('a user outside both pools cannot approve or deny', async ({hub}) => {
@@ -797,7 +779,7 @@ test.describe('attribute mode', () => {
                 ephemerals.close();
             }
             await expectStillPending(hub, requester, s, before, username);
-        }, {poolsMustWork: false});
+        });
     });
 
     test('a user-writable attribute grants nothing', async ({hub}) => {
@@ -875,7 +857,7 @@ test.describe('attribute mode', () => {
 
             await click(hub, secondAdmin.username, s.card.id, 'approve');
             await expectApproved(hub, requester, s, username, secondAdmin.username);
-        }, {extra: {securityapproverattribute: ''}, poolsMustWork: false});
+        }, {extra: {securityapproverattribute: ''}});
     });
 });
 

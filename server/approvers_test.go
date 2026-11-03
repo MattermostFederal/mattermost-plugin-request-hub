@@ -153,6 +153,8 @@ func TestCanApproveStep(t *testing.T) {
 		api.On("GetPropertyFieldByName", "grp", "", "security_approver").Return(
 			nil, model.NewAppError("GetPropertyFieldByName", "app.property_field.get_by_name.app_error", nil, "not found", 404),
 		)
+		// Nor is it in the group's pre-rename name.
+		api.On("GetPropertyGroup", model.DeprecatedCPAPropertyGroupName).Return(nil, nil)
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSecurity)
 		require.NoError(t, err)
 		require.False(t, ok, "forced security review: System Admins must not cover a configured security pool")

@@ -66,7 +66,7 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 		p.API.LogWarn("failed to load requesting user", "user_id", requesterID, "error", appErr.Error())
 		return "", errors.New("could not load your account; try again")
 	}
-	if err := p.checkNominees(nominees, nomineeRules{role: "a team member", allowBots: true, allowGuests: true}); err != nil {
+	if err := p.checkNominees(nominees, nomineeRules{role: "a team member", allowBots: true, allowGuests: true, notInTeamID: teamID}); err != nil {
 		return "", err
 	}
 

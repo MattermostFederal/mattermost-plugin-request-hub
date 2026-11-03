@@ -304,7 +304,7 @@ test.describe('webhook requests: refused at submit', () => {
                 ['ftp callback', 'outgoing', (n) => ({display_name: n, callback_url: 'ftp://example.com/hook'}), badScheme, (n) => n],
                 ['javascript callback', 'outgoing', (n) => ({display_name: n, callback_url: 'javascript:alert(1)'}), badScheme, (n) => n],
                 ['callback without a scheme', 'outgoing', (n) => ({display_name: n, callback_url: 'example.com/hook'}), badScheme, (n) => n],
-                ['1023-byte callback URL', 'outgoing', (n) => ({display_name: n, callback_url: longCallback(1023)}), tooLong('the callback URL', 1022), (n) => n],
+                ['1023-byte callback URL', 'outgoing', (n) => ({display_name: n, callback_url: longCallback(1023)}), tooLong('the callback URL', 1020), (n) => n],
             ];
             for (const [what, type, fields, error, needle] of cases) {
                 await test.step(what, async () => {
@@ -340,10 +340,7 @@ test.describe('webhook requests: refused at submit', () => {
 
     test('a callback URL too long for Mattermost to store is refused', async ({hub}) => {
         // Mattermost stores callback_urls as a JSON array in a 1024-character
-        // column, so one URL can be at most 1020 bytes. The plugin allows
-        // 1022, and a 1021- or 1022-byte URL fails only at final approval
-        // with "Unable to save the OutgoingWebhook".
-        test.fail(true, 'BUG: maxCallbackURLLen is 1022 but Mattermost can only store a 1020-byte callback URL');
+        // column, so one URL can be at most 1020 bytes.
         await hub.withPluginConfig(SYSTEM_ADMIN_MODE, async () => {
             const requester = await hub.createUser();
             const channel = await createChannel(hub, 'O', [requester]);

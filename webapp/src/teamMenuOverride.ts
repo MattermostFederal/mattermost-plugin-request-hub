@@ -1,6 +1,7 @@
 import type {Store} from 'redux';
 
 import {fetchEnabledRequestTypes} from './client';
+import {closeMenuFrom} from './closeMenu';
 import {makeDebug} from './debug';
 import {openTeamAdminRequestModal, openTeamCreationModal} from './store';
 import type {GlobalState} from './store';
@@ -200,7 +201,7 @@ function injectRequestTeam(menuRoot: HTMLElement, store: Store): void {
         (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
-            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+            closeMenuFrom(injected);
             fetchEnabledRequestTypes().then((enabled) => {
                 if (!enabled.team) {
                     debug('team requests disabled — injected Request a Team ignored');
@@ -287,7 +288,7 @@ function injectRequestTeamAdmin(menuRoot: HTMLElement, store: Store): void {
         (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
-            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+            closeMenuFrom(injected);
             fetchEnabledRequestTypes().then((enabled) => {
                 if (!enabled.teamAdmin) {
                     debug('team admin requests disabled — ignoring Request Team Admin click');
@@ -619,7 +620,7 @@ export function installTeamMenuOverride(store: Store): () => void {
 
         event.preventDefault();
         event.stopImmediatePropagation();
-        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+        closeMenuFrom(intercepted);
         store.dispatch(openTeamCreationModal());
         debug('routed "Create a team" click to Request Team modal');
     };

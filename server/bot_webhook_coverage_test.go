@@ -67,6 +67,7 @@ func registryHolds(postIDs ...string) any {
 
 func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -83,6 +84,7 @@ func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 
 func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	api := &plugintest.API{}
+	stubNamesFree(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -411,36 +413,25 @@ func TestDeleteWebhook_Paths(t *testing.T) {
 }
 
 func TestCreateBotToken_Paths(t *testing.T) {
-	t.Run("no site URL", func(t *testing.T) {
-		api := &plugintest.API{}
-		p := newTestPlugin(api)
-		api.On("GetConfig").Return(&model.Config{})
-		_, err := p.createBotToken("tok", "bot1", "desc")
-		require.EqualError(t, err, "SiteURL not configured")
-	})
-
 	t.Run("token returned", func(t *testing.T) {
-		srv := &restServer{status: http.StatusOK, body: `{"id":"t1","token":"secret-value","user_id":"bot1"}`}
-		ts := srv.start(t)
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		stubSiteURL(api, ts.URL)
-		token, err := p.createBotToken("tok", "bot1", "desc")
+		api.On("CreateUserAccessToken", mock.MatchedBy(func(tok *model.UserAccessToken) bool {
+			return tok.UserId == "bot1" && tok.Description == "desc"
+		})).Return(&model.UserAccessToken{Id: "t1", Token: "secret-value", UserId: "bot1"}, nil)
+		token, err := p.createBotToken("bot1", "desc")
 		require.NoError(t, err)
 		require.Equal(t, "secret-value", token.Token)
 		require.Equal(t, "t1", token.Id)
-		require.Equal(t, []string{"POST /api/v4/users/bot1/tokens"}, srv.seen())
 	})
 
-	t.Run("REST failure", func(t *testing.T) {
-		srv := &restServer{status: http.StatusForbidden, body: `{"id":"x","message":"no","status_code":403}`}
-		ts := srv.start(t)
+	t.Run("failure", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		stubSiteURL(api, ts.URL)
-		_, err := p.createBotToken("tok", "bot1", "desc")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "create token")
+		api.On("CreateUserAccessToken", mock.Anything).Return(nil, testAppErr("tokens are turned off"))
+		_, err := p.createBotToken("bot1", "desc")
+		require.ErrorContains(t, err, "create token")
+		require.ErrorContains(t, err, "tokens are turned off")
 	})
 }
 
@@ -450,25 +441,22 @@ func TestCreateBotToken_Lifetime(t *testing.T) {
 		"one month":           1,
 	} {
 		t.Run(name, func(t *testing.T) {
-			var sent model.UserAccessToken
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write(mustMarshal(t, model.UserAccessToken{Id: "t1", Token: "secret-value", ExpiresAt: sent.ExpiresAt}))
-			}))
-			t.Cleanup(ts.Close)
 			api := &plugintest.API{}
 			p := newTestPlugin(api)
 			p.getConfiguration().tokenLifetimeMonths = months
-			stubSiteURL(api, ts.URL)
+			var sent *model.UserAccessToken
+			api.On("CreateUserAccessToken", mock.Anything).Run(func(args mock.Arguments) {
+				sent = args.Get(0).(*model.UserAccessToken)
+			}).Return(func(tok *model.UserAccessToken) (*model.UserAccessToken, *model.AppError) {
+				return &model.UserAccessToken{Id: "t1", Token: "secret-value", ExpiresAt: tok.ExpiresAt}, nil
+			})
 
 			before := time.Now()
-			token, err := p.createBotToken("tok", "bot1", "desc")
+			token, err := p.createBotToken("bot1", "desc")
 
 			require.NoError(t, err)
 			require.Equal(t, sent.ExpiresAt, token.ExpiresAt)
-			want := before.AddDate(0, months, 0)
-			require.WithinDuration(t, want, time.UnixMilli(sent.ExpiresAt), time.Minute)
+			require.WithinDuration(t, before.AddDate(0, months, 0), time.UnixMilli(sent.ExpiresAt), time.Minute)
 		})
 	}
 }

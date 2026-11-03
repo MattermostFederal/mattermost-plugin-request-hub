@@ -111,6 +111,7 @@ func TestTwoStepActionHandlers_FinalClaimErrorChangesNothing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &plugintest.API{}
+			stubBotExtras(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
 			raw := mustMarshal(t, tc.record)
@@ -410,13 +411,15 @@ func finalBot(t *testing.T, api *plugintest.API, req *botRequest) {
 
 func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	api.On("GetConfig").Return(&model.Config{})
-	finalBot(t, api, finalBotApproval(botRequest{RequestToken: true, IncomingWebhookChannelID: "ch1", DMChannelID: "dm1", DMRootPostID: "dm-root"}))
-	// Only the approve-time check loads the extras channel.
-	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Once()
+	finalBot(t, api, finalBotApproval(botRequest{IncomingWebhookChannelID: "ch1", DMChannelID: "dm1", DMRootPostID: "dm-root"}))
+	// Only the approve-time checks load the extras channel: the re-check
+	// and the webhook permission check.
+	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "town"}, nil).Twice()
 	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	api.On("CreateSession", mock.Anything).Return(nil, testAppErr("no session"))
 	replies := extrasReply(api)
@@ -426,16 +429,17 @@ func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	require.NotNil(t, resp.Update)
 	require.Contains(t, resp.Update.Message, "Fully approved (security + system) for @reqer. Bot **@svcbot** created.")
 	all := strings.Join(*replies, "\n")
-	require.Contains(t, all, "token/webhook extras were skipped because an admin session could not be created")
+	require.Contains(t, all, "webhook extras were skipped because an admin session could not be created")
 	require.Contains(t, all, "webhook extras were skipped because SiteURL is not configured")
 	api.AssertNotCalled(t, "RevokeSession", mock.Anything)
-	api.AssertNumberOfCalls(t, "GetChannel", 1)
+	api.AssertNumberOfCalls(t, "GetChannel", 2)
 }
 
 func TestHandleBotAction_ExtrasFailuresAreReported(t *testing.T) {
 	capture := &hookCapture{status: http.StatusForbidden}
 	ts := capture.server(t)
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -447,6 +451,7 @@ func TestHandleBotAction_ExtrasFailuresAreReported(t *testing.T) {
 	}))
 	api.On("CreateSession", mock.Anything).Return(&model.Session{Id: "sess1", Token: "tok1"}, nil)
 	api.On("RevokeSession", "sess1").Return(testAppErr("revoke failed")).Once()
+	api.On("CreateUserAccessToken", mock.Anything).Return(nil, testAppErr("tokens are turned off"))
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team1"}, nil)
 	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("GetChannel", "ch2").Return(&model.Channel{Id: "ch2", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
@@ -472,6 +477,7 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 	capture := &hookCapture{}
 	ts := capture.server(t)
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -496,7 +502,7 @@ func TestHandleBotAction_TokenDeliveredAfterReopeningDM(t *testing.T) {
 
 	require.NotNil(t, resp.Update)
 	require.Contains(t, resp.Update.Message, "Bot **@svcbot** created.")
-	require.Contains(t, tokenReply, "tok-value")
+	require.Contains(t, tokenReply, "secret-token")
 	// The expiry is kept for the reminders; the token value is not.
 	require.Equal(t, "new-bot-id", tracked.BotUserID)
 	require.Equal(t, "svcbot", tracked.BotUsername)
@@ -536,6 +542,7 @@ func TestHandleBotAction_UndeliverableIncomingWebhookIsRemoved(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := incomingHookServer(t, tc.hookID)
 			api := &plugintest.API{}
+			stubBotExtras(api)
 			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
@@ -614,6 +621,7 @@ func TestHandleWebhookAction_DenyClosesTicket(t *testing.T) {
 
 func TestHandleWebhookAction_ApproveCreatesWebhookAfterReopeningDM(t *testing.T) {
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -655,6 +663,7 @@ func TestHandleWebhookAction_ApproveCreatesWebhookAfterReopeningDM(t *testing.T)
 
 func TestHandleWebhookAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) {
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
 	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) { return "", "", errors.New("hooks are off") }
@@ -683,6 +692,7 @@ func TestHandleWebhookAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) 
 
 func TestHandleWebhookAction_UndeliverableURLRemovalFailureAsksAdmin(t *testing.T) {
 	api := &plugintest.API{}
+	stubBotExtras(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)

@@ -221,6 +221,7 @@ func TestHandleTeamMemberAction_ApproveReportsEachOutcome(t *testing.T) {
 			stubRequester(api)
 			for _, id := range []string{"n1", "n2"} {
 				api.On("GetUser", id).Return(&model.User{Id: id, Username: id}, nil).Maybe()
+				api.On("GetTeamMember", "team1", id).Return(nil, notFoundErr()).Maybe()
 				if tc.failing[id] {
 					api.On("CreateTeamMember", "team1", id).Return(nil, testAppErr("cannot join")).Maybe()
 				} else {

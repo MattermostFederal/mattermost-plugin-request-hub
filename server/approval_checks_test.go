@@ -106,6 +106,12 @@ func TestTeamAdminApproveRechecks(t *testing.T) {
 		recheckCase{"nominee's team membership lookup fails", func(api *plugintest.API) {
 			api.On("GetTeamMember", "team1", "n1").Return(nil, testAppErr("db down"))
 		}, approvalCheckRetryText},
+		recheckCase{"nominee became a Team Admin", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(&model.TeamMember{TeamId: "team1", UserId: "n1", SchemeAdmin: true}, nil)
+		}, "@nom is already a Team Admin of this team. Deny this request instead."},
+		recheckCase{"nominee became a Team Admin by role", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(&model.TeamMember{TeamId: "team1", UserId: "n1", Roles: "team_user team_admin"}, nil)
+		}, "@nom is already a Team Admin of this team. Deny this request instead."},
 	)
 	record := &teamAdminRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: []string{"n1"}, ApprovalPostID: "post1"}
 	runRecheckCases(t, cases, teamAdminActionHandler, kvTeamAdminRequestPrefix+"r1", record, func(api *plugintest.API) {
@@ -148,12 +154,19 @@ func TestTeamMemberApproveRechecks(t *testing.T) {
 		recheckCase{"nominee deactivated", func(api *plugintest.API) {
 			api.On("GetUser", "n1").Return(&model.User{Id: "n1", Username: "nom", DeleteAt: 1}, nil)
 		}, "@nom is deactivated. Deny this request instead."},
+		recheckCase{"nominee joined the team", func(api *plugintest.API) {
+			stubActiveTeamMember(api, "team1", "n1")
+		}, "@nom is already a member of this team. Deny this request instead."},
+		recheckCase{"nominee's team membership lookup fails", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(nil, testAppErr("db down"))
+		}, approvalCheckRetryText},
 	)
 	record := &teamMemberRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: []string{"n1"}, ApprovalPostID: "post1"}
 	runRecheckCases(t, cases, teamMemberActionHandler, kvTeamMemberRequestPrefix+"r1", record, func(api *plugintest.API) {
 		stubLiveTeam(api, "team1")
 		api.On("GetUser", "u_req").Return(regularUser(), nil).Maybe()
 		api.On("GetUser", "n1").Return(activeUser("n1", "nom"), nil).Maybe()
+		api.On("GetTeamMember", "team1", "n1").Return(nil, notFoundErr()).Maybe()
 	})
 }
 
@@ -169,6 +182,7 @@ func TestTeamMemberApproveAllowsBotAndGuestNominees(t *testing.T) {
 	stubRequester(api)
 	api.On("GetUser", "b1").Return(&model.User{Id: "b1", Username: "botty", IsBot: true}, nil)
 	api.On("GetUser", "g1").Return(&model.User{Id: "g1", Username: "guesty", Roles: model.SystemGuestRoleId}, nil)
+	api.On("GetTeamMember", "team1", mock.Anything).Return(nil, notFoundErr())
 	api.On("KVCompareAndDelete", kvTeamMemberRequestPrefix+"r1", raw).Return(false, testAppErr("kv down"))
 
 	resp := runAsAdmin(t, p, teamMemberActionHandler, true)
@@ -483,5 +497,57 @@ func TestApprovalCheckHelpers(t *testing.T) {
 		api.On("GetChannelMember", "ch1", "n1").Return(&model.ChannelMember{}, nil)
 		p := newTestPlugin(api)
 		require.Empty(t, p.nomineeBlocker([]string{"n1"}, nomineeRules{role: "a Team Admin", teamID: "team1", channelID: "ch1"}))
+	})
+}
+
+func TestWebhookCreatorBlocker(t *testing.T) {
+	for _, tc := range []struct {
+		webhookType string
+		permission  *model.Permission
+	}{
+		{webhookTypeIncoming, model.PermissionManageOthersIncomingWebhooks},
+		{webhookTypeOutgoing, model.PermissionManageOthersOutgoingWebhooks},
+	} {
+		t.Run(tc.webhookType+" allowed", func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			api.On("HasPermissionToTeam", "approver", "team1", tc.permission).Return(true)
+			require.Empty(t, p.webhookCreatorBlocker("approver", "team1", tc.webhookType))
+		})
+		t.Run(tc.webhookType+" refused", func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			api.On("HasPermissionToTeam", "approver", "team1", tc.permission).Return(false)
+			msg := p.webhookCreatorBlocker("approver", "team1", tc.webhookType)
+			require.Contains(t, msg, "You can't give the final approval: it creates an "+tc.webhookType+" webhook")
+			require.Contains(t, msg, "Team Admins and System Admins have it")
+		})
+	}
+}
+
+func TestBotWebhookCreatorBlocker(t *testing.T) {
+	t.Run("no webhooks asked for makes no calls", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		require.Empty(t, p.botWebhookCreatorBlocker(&botRequest{RequestToken: true}, "approver"))
+		require.Empty(t, api.Calls)
+	})
+
+	t.Run("checks each webhook's team", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetChannel", "in").Return(&model.Channel{Id: "in", TeamId: "team1"}, nil)
+		api.On("GetChannel", "out").Return(&model.Channel{Id: "out", TeamId: "team2"}, nil)
+		api.On("HasPermissionToTeam", "approver", "team1", model.PermissionManageOthersIncomingWebhooks).Return(true)
+		api.On("HasPermissionToTeam", "approver", "team2", model.PermissionManageOthersOutgoingWebhooks).Return(false)
+		msg := p.botWebhookCreatorBlocker(&botRequest{IncomingWebhookChannelID: "in", OutgoingWebhookChannelID: "out"}, "approver")
+		require.Contains(t, msg, "it creates an outgoing webhook")
+	})
+
+	t.Run("a channel that can't be loaded asks to try again", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := newTestPlugin(api)
+		api.On("GetChannel", "in").Return(nil, testAppErr("db down"))
+		require.Equal(t, approvalCheckRetryText, p.botWebhookCreatorBlocker(&botRequest{IncomingWebhookChannelID: "in"}, "approver"))
 	})
 }

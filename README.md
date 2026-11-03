@@ -33,7 +33,7 @@ Governance plugin for Mattermost: non-admins **request** channels, Channel Admin
 
 In Mattermost, **`/mattermost-request-hub docs`** replies with a link to the bundled HTML guide, served by the plugin at `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/public/help/docs.html`, with a slash command reference and a troubleshooting page. The System Console settings page links to it.
 
-Requires Mattermost 11.3 or later.
+Requires Mattermost 11.3 or later. Bot token expiry (**Bot token lifetime**) needs Mattermost 11.9 or later; on older servers bot tokens never expire.
 
 ## Build and deploy
 

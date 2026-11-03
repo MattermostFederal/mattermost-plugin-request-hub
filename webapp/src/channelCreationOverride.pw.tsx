@@ -56,6 +56,22 @@ test.describe('channelCreationOverride', () => {
             expect(await recorded(page)).toEqual({actions: [{type: OPEN_REQUEST_MODAL}], escapes: 1});
         });
 
+        test('closes the menu with an Escape from inside it', async ({mount, page}) => {
+            // MUI menus only close on an Escape that reaches the menu itself,
+            // not one sent straight to document.
+            await mount(<DomInjectorHarness
+                injector='channelCreation'
+                markup={menuWithNativeById}
+                state={member}
+                        />);
+            await harnessInstalled(page);
+            const menuEscapes = page.evaluate(() => new Promise<string>((resolve) => {
+                document.querySelector('[role="menu"]')!.addEventListener('keydown', (e) => resolve((e as KeyboardEvent).key), {once: true});
+            }));
+            await page.locator('#createNewChannelMenuItem').click();
+            expect(await menuEscapes).toBe('Escape');
+        });
+
         test('relabels it by text and opens the request modal on click', async ({mount, page}) => {
             await mount(<DomInjectorHarness
                 injector='channelCreation'

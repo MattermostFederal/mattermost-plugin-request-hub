@@ -1,7 +1,6 @@
 package main
 
 import (
-	"slices"
 	"strings"
 	"time"
 
@@ -297,7 +296,7 @@ func (p *Plugin) userIsTeamAdmin(teamID, userID string) bool {
 	if appErr != nil || m == nil || m.DeleteAt != 0 {
 		return false
 	}
-	return m.SchemeAdmin || slices.Contains(strings.Fields(m.Roles), model.TeamAdminRoleId)
+	return isTeamAdminMember(m)
 }
 
 // addUserToTwoStepApprovalChannels ensures the user is on the approval team and

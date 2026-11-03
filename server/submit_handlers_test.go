@@ -77,6 +77,8 @@ func stubTeamAdminQueue(nomineeID string) func(api *plugintest.API) {
 func stubTeamMemberQueue(api *plugintest.API) {
 	stubTeam1(api)
 	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
+	// The nominee isn't on the team yet.
+	api.On("GetTeamMember", "team1", testNomineeID).Return(nil, model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)).Maybe()
 }
 
 func stubTeamGuestQueue(api *plugintest.API) {
@@ -106,15 +108,16 @@ func dialogRoutes() map[string]dialogRoute {
 			route:    routeChannelAdminDialog,
 			kvPrefix: kvAdminRequestPrefix,
 			stub:     stubChannelAdminQueue,
-			ok:       model.SubmitDialogRequest{Submission: map[string]any{fieldChannelID: "ch1", fieldNominees: testNomineeID}},
-			bad:      model.SubmitDialogRequest{Submission: map[string]any{fieldNominees: testNomineeID}},
-			wantErr:  "a channel is required",
+			// Multi-selects arrive as lists from the webapp.
+			ok:      model.SubmitDialogRequest{Submission: map[string]any{fieldChannelID: "ch1", fieldNominees: []any{testNomineeID}}},
+			bad:     model.SubmitDialogRequest{Submission: map[string]any{fieldNominees: testNomineeID}},
+			wantErr: "a channel is required",
 		},
 		"team admin": {
 			route:    routeTeamAdminDialog,
 			kvPrefix: kvTeamAdminRequestPrefix,
 			stub:     stubTeamAdminQueue(testNomineeID),
-			ok:       model.SubmitDialogRequest{TeamId: "team1", Submission: map[string]any{fieldMembers: testNomineeID}},
+			ok:       model.SubmitDialogRequest{TeamId: "team1", Submission: map[string]any{fieldMembers: []any{testNomineeID}}},
 			bad:      model.SubmitDialogRequest{Submission: map[string]any{fieldMembers: testNomineeID}},
 			wantErr:  "a team is required",
 		},
@@ -327,7 +330,7 @@ func webappRoutes() map[string]webappRoute {
 				"no team": {body: `{"nominees":["nommy"]}`, wantErr: "team_id is required"},
 				"unknown nominee": {body: `{"team_id":"team1","nominees":["ghost"]}`, stub: func(api *plugintest.API) {
 					api.On("GetUserByUsername", "ghost").Return(nil, testAppErr("not found"))
-				}, wantErr: "unknown user: ghost"},
+				}, wantErr: "unknown user: `ghost`"},
 				"no nominees": {body: `{"team_id":"team1","nominees":[]}`, wantErr: "pick at least one person"},
 			},
 		},

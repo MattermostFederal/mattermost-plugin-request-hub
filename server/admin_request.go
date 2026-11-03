@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -307,7 +306,7 @@ func (p *Plugin) adminApproverIDs(teamID string) []string {
 				if m.UserId == "" || m.DeleteAt != 0 || seen[m.UserId] {
 					continue
 				}
-				if m.SchemeAdmin || slices.Contains(strings.Fields(m.Roles), model.TeamAdminRoleId) {
+				if isTeamAdminMember(m) {
 					teamAdminIDs = append(teamAdminIDs, m.UserId)
 				}
 			}
