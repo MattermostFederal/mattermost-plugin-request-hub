@@ -1,8 +1,9 @@
 import {defineConfig, devices} from '@playwright/test';
 
-// Each spec file starts its own Mattermost + Postgres containers in
-// beforeAll (see helpers/requesthub.ts), so files are independent but
-// heavy. One worker in CI keeps the runner's memory in check.
+// Each worker starts one Mattermost + Postgres pair and every spec file it
+// runs shares it (see helpers/fixtures.ts). Tests in a file run in order;
+// files are spread over workers locally and over shards in CI. One worker
+// per CI job keeps the runner's memory in check.
 export default defineConfig({
     testDir: './tests',
     fullyParallel: false,
@@ -11,7 +12,9 @@ export default defineConfig({
     // No retries: a flaky e2e test should show up as a failure, not get hidden.
     retries: 0,
     workers: process.env.CI ? 1 : 2,
-    reporter: [['html', {open: 'never'}], ['list']],
+
+    // CI shards write blob reports that the workflow merges into one HTML report.
+    reporter: process.env.CI ? [['blob'], ['list']] : [['html', {open: 'never'}], ['list']],
     timeout: 60_000,
     use: {
         trace: 'retain-on-failure',
@@ -19,7 +22,9 @@ export default defineConfig({
     },
     projects: [
         {
-            name: 'chromium',
+            // CI runs the suite once per server image; naming the project
+            // after it keeps the runs apart in the merged report.
+            name: process.env.E2E_SERVER ? `chromium (${process.env.E2E_SERVER})` : 'chromium',
             use: {...devices['Desktop Chrome']},
         },
     ],
