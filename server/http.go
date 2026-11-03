@@ -1550,10 +1550,13 @@ func (p *Plugin) isTeamAdminOfTeamID(userID, teamID string) bool {
 	if appErr != nil || member == nil || member.DeleteAt != 0 {
 		return false
 	}
-	if slices.Contains(strings.Fields(member.Roles), model.TeamAdminRoleId) {
-		return true
-	}
-	return member.SchemeAdmin
+	return isTeamAdminMember(member)
+}
+
+// isTeamAdminMember reports whether a loaded team membership grants Team
+// Admin, by either the scheme flag or the classic roles string.
+func isTeamAdminMember(member *model.TeamMember) bool {
+	return member.SchemeAdmin || slices.Contains(strings.Fields(member.Roles), model.TeamAdminRoleId)
 }
 
 // isApprovalTeamAdmin reports whether the user is a Team Admin of the

@@ -503,6 +503,13 @@ func TestSubmitTeamAdminRequest_Refusals(t *testing.T) {
 			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
 			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{SchemeAdmin: true}, nil)
 		}, wantErr: "@n is already a Team Admin of this team"}, ok},
+		{submitCase{name: "nominee already a Team Admin by role", setup: func(api *plugintest.API) {
+			stubTeam1(api)
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "n"}, nil)
+			api.On("GetTeamMember", "team1", testNomineeID).Return(&model.TeamMember{Roles: "team_user team_admin"}, nil)
+		}, wantErr: "@n is already a Team Admin of this team"}, ok},
 	}
 	for _, tc := range cases {
 		in := tc.in

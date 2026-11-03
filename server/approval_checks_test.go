@@ -106,6 +106,12 @@ func TestTeamAdminApproveRechecks(t *testing.T) {
 		recheckCase{"nominee's team membership lookup fails", func(api *plugintest.API) {
 			api.On("GetTeamMember", "team1", "n1").Return(nil, testAppErr("db down"))
 		}, approvalCheckRetryText},
+		recheckCase{"nominee became a Team Admin", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(&model.TeamMember{TeamId: "team1", UserId: "n1", SchemeAdmin: true}, nil)
+		}, "@nom is already a Team Admin of this team. Deny this request instead."},
+		recheckCase{"nominee became a Team Admin by role", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(&model.TeamMember{TeamId: "team1", UserId: "n1", Roles: "team_user team_admin"}, nil)
+		}, "@nom is already a Team Admin of this team. Deny this request instead."},
 	)
 	record := &teamAdminRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: []string{"n1"}, ApprovalPostID: "post1"}
 	runRecheckCases(t, cases, teamAdminActionHandler, kvTeamAdminRequestPrefix+"r1", record, func(api *plugintest.API) {
@@ -148,12 +154,19 @@ func TestTeamMemberApproveRechecks(t *testing.T) {
 		recheckCase{"nominee deactivated", func(api *plugintest.API) {
 			api.On("GetUser", "n1").Return(&model.User{Id: "n1", Username: "nom", DeleteAt: 1}, nil)
 		}, "@nom is deactivated. Deny this request instead."},
+		recheckCase{"nominee joined the team", func(api *plugintest.API) {
+			stubActiveTeamMember(api, "team1", "n1")
+		}, "@nom is already a member of this team. Deny this request instead."},
+		recheckCase{"nominee's team membership lookup fails", func(api *plugintest.API) {
+			api.On("GetTeamMember", "team1", "n1").Return(nil, testAppErr("db down"))
+		}, approvalCheckRetryText},
 	)
 	record := &teamMemberRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: []string{"n1"}, ApprovalPostID: "post1"}
 	runRecheckCases(t, cases, teamMemberActionHandler, kvTeamMemberRequestPrefix+"r1", record, func(api *plugintest.API) {
 		stubLiveTeam(api, "team1")
 		api.On("GetUser", "u_req").Return(regularUser(), nil).Maybe()
 		api.On("GetUser", "n1").Return(activeUser("n1", "nom"), nil).Maybe()
+		api.On("GetTeamMember", "team1", "n1").Return(nil, notFoundErr()).Maybe()
 	})
 }
 
@@ -169,6 +182,7 @@ func TestTeamMemberApproveAllowsBotAndGuestNominees(t *testing.T) {
 	stubRequester(api)
 	api.On("GetUser", "b1").Return(&model.User{Id: "b1", Username: "botty", IsBot: true}, nil)
 	api.On("GetUser", "g1").Return(&model.User{Id: "g1", Username: "guesty", Roles: model.SystemGuestRoleId}, nil)
+	api.On("GetTeamMember", "team1", mock.Anything).Return(nil, notFoundErr())
 	api.On("KVCompareAndDelete", kvTeamMemberRequestPrefix+"r1", raw).Return(false, testAppErr("kv down"))
 
 	resp := runAsAdmin(t, p, teamMemberActionHandler, true)

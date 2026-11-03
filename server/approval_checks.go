@@ -155,6 +155,19 @@ func (p *Plugin) nomineeBlocker(ids []string, rules nomineeRules) string {
 			if appErr != nil || member == nil || member.DeleteAt != 0 {
 				return fmt.Sprintf("@%s is no longer a member of the team. Deny this request instead.", user.Username)
 			}
+			if rules.notTeamAdmin && isTeamAdminMember(member) {
+				return fmt.Sprintf("@%s is already a Team Admin of this team. Deny this request instead.", user.Username)
+			}
+		}
+		if rules.notInTeamID != "" {
+			member, appErr := p.API.GetTeamMember(rules.notInTeamID, id)
+			if lookupFailed(appErr) {
+				p.API.LogWarn("failed to check nominee's team membership for approval", "user_id", id, "team_id", rules.notInTeamID, "error", appErr.Error())
+				return approvalCheckRetryText
+			}
+			if appErr == nil && member != nil && member.DeleteAt == 0 {
+				return fmt.Sprintf("@%s is already a member of this team. Deny this request instead.", user.Username)
+			}
 		}
 		if rules.channelID != "" {
 			member, appErr := p.API.GetChannelMember(rules.channelID, id)
@@ -215,7 +228,7 @@ func (p *Plugin) teamAdminApprovalBlocker(req *teamAdminRequest, team *model.Tea
 	if msg := p.requesterTeamBlocker(req.TeamID, requester); msg != "" {
 		return msg
 	}
-	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a Team Admin", teamID: req.TeamID})
+	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a Team Admin", teamID: req.TeamID, notTeamAdmin: true})
 }
 
 // teamMemberApprovalBlocker re-checks a team member request. Submit doesn't
@@ -231,7 +244,7 @@ func (p *Plugin) teamMemberApprovalBlocker(req *teamMemberRequest, team *model.T
 	if msg := p.requesterBlocker(req.RequesterID, requester, requesterErr); msg != "" {
 		return msg
 	}
-	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a team member", allowBots: true, allowGuests: true})
+	return p.nomineeBlocker(req.NomineeIDs, nomineeRules{role: "a team member", allowBots: true, allowGuests: true, notInTeamID: req.TeamID})
 }
 
 // teamGuestApprovalBlocker re-checks a guest invite request.

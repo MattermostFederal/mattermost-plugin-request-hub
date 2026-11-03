@@ -408,7 +408,7 @@ func (p *Plugin) checkNominees(ids []string, rules nomineeRules) error {
 			if appErr != nil || member == nil || member.DeleteAt != 0 {
 				return errors.Errorf("@%s isn't a member of this team", user.Username)
 			}
-			if rules.notTeamAdmin && member.SchemeAdmin {
+			if rules.notTeamAdmin && isTeamAdminMember(member) {
 				return errors.Errorf("@%s is already a Team Admin of this team", user.Username)
 			}
 		}

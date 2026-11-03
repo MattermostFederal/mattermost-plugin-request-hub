@@ -120,6 +120,7 @@ func TestExecuteDecision_TeamTypesRefuseOtherUsers(t *testing.T) {
 func TestExecuteDecision_TeamMemberApproveAddsAndClosesEveryCopy(t *testing.T) {
 	api, p, store, updated := newerTypeFixture(t)
 	stubActiveTeamMember(api, "team1", "u_req")
+	api.On("GetTeamMember", "team1", "n1").Return(nil, notFoundErr())
 	api.On("CreateTeamMember", "team1", "n1").Return(&model.TeamMember{}, nil)
 	id := model.NewId()
 	storeDMFallback(t, store, pendingKindTeamMember, id, newerTypeRecord(pendingKindTeamMember, id, twoStepState{}))
