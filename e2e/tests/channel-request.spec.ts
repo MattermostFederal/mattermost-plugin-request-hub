@@ -221,7 +221,7 @@ test.describe('submit', () => {
     test('an unknown or missing prefix is refused', async ({hub}) => {
         const requester = await hub.createUser();
         const displayName = uid('prefix-');
-        const unknown = 'prefix "zzz-" is not in the list of allowed prefixes: team-, proj-';
+        const unknown = 'prefix `zzz-` is not in the list of allowed prefixes: team-, proj-';
 
         expect(await submitChannel(hub, requester.username, {prefix: 'zzz-', display_name: displayName})).toEqual({error: unknown});
         expect(await submitChannel(hub, requester.username, {prefix: '', display_name: displayName})).toEqual({error: 'please pick a channel prefix (e.g., team-, project-, ops-) from the dropdown'});
@@ -255,9 +255,9 @@ test.describe('submit', () => {
         const displayName = uid('members-');
         const ghost = uid('ghost');
 
-        expect(await submitChannel(hub, requester.username, {display_name: displayName, members: [`@${ghost}`]})).toEqual({error: `unknown user: ${ghost}`});
-        expect(await submitChannel(hub, requester.username, {display_name: displayName, admin_members: [ghost]})).toEqual({error: `unknown user: ${ghost}`});
-        expect(await hub.slash(requester.username, `channel proj- ${displayName} --admins @${ghost}`)).toBe(`unknown user: ${ghost}`);
+        expect(await submitChannel(hub, requester.username, {display_name: displayName, members: [`@${ghost}`]})).toEqual({error: `unknown user: \`${ghost}\``});
+        expect(await submitChannel(hub, requester.username, {display_name: displayName, admin_members: [ghost]})).toEqual({error: `unknown user: \`${ghost}\``});
+        expect(await hub.slash(requester.username, `channel proj- ${displayName} --admins @${ghost}`)).toBe(`unknown user: \`${ghost}\``);
         expect(await submitChannelDialog(hub, requester.username, {display_name: displayName, members: 'not-an-id'})).toBe('members and channel admins must be valid users');
         await expectNothingStored(hub, 'channel', requester.id, displayName);
     });
@@ -293,7 +293,6 @@ test.describe('submit', () => {
     });
 
     test('a channel name that already exists is refused at submit', async ({hub}) => {
-        test.fail(true, 'BUG: submitRequest never checks whether the channel name is taken, so the request queues and only fails at approval');
         const requester = await hub.createUser();
         const displayName = uid('taken-');
         const admin = await hub.client(ADMIN);

@@ -195,10 +195,10 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         await expectReplies(hub, user, [
             ['channel team-', usage('a prefix and a channel name are required', 'channel')],
             ['channel --private', usage('a prefix and a channel name are required', 'channel')],
-            ['channel zzz- Foo', 'prefix "zzz-" is not in the list of allowed prefixes: team-, proj-'],
+            ['channel zzz- Foo', 'prefix `zzz-` is not in the list of allowed prefixes: team-, proj-'],
             ['channel team- !!!', 'channel name suffix is required (letters/numbers, becomes the part after the prefix)'],
-            ['channel team- Foo --members @nosuchuser', 'unknown user: nosuchuser'],
-            ['channel team- Foo --members @carol --admins nosuchuser', 'unknown user: nosuchuser'],
+            ['channel team- Foo --members @nosuchuser', 'unknown user: `nosuchuser`'],
+            ['channel team- Foo --members @carol --admins nosuchuser', 'unknown user: `nosuchuser`'],
             [`channel team- ${'x'.repeat(65)}`, 'channel name must be 64 characters or fewer'],
         ]);
         await expectNoRequest(hub, user);
@@ -208,7 +208,7 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         const user = await hub.createUser();
         const room = await privateChannel(hub, [user]);
         await expectReplies(hub, user, [
-            ['channel-admin @nosuchuser', 'unknown user: nosuchuser'],
+            ['channel-admin @nosuchuser', 'unknown user: `nosuchuser`'],
             ['channel-admin ,', 'Name at least one channel member: `/mattermost-request-hub channel-admin @user [@user ...]`'],
             ['channel-admin @carol --now', usage('unknown option `--now`', 'channel-admin')],
             ['channel-admin @carol', 'everyone you nominate must already be a member of the channel'],
@@ -234,7 +234,7 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         const user = await hub.createUser();
         const outsider = await hub.createUser({inTeam: false});
         await expectReplies(hub, user, [
-            ['team-admin @nosuchuser', 'unknown user: nosuchuser'],
+            ['team-admin @nosuchuser', 'unknown user: `nosuchuser`'],
             ['team-admin ,', usage('name at least one team member', 'team-admin')],
             ['team-admin @carol --reason x', usage('unknown option `--reason`', 'team-admin')],
             [`team-admin @${outsider.username}`, `@${outsider.username} isn't a member of this team`],
@@ -249,7 +249,7 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         await (await hub.client(ADMIN)).updateUserActive(gone.id, false);
         await expectReplies(hub, user, [
             ['team-member --reason hi', usage('name at least one user', 'team-member')],
-            ['team-member @nosuchuser', 'unknown user: nosuchuser'],
+            ['team-member @nosuchuser', 'unknown user: `nosuchuser`'],
             ['team-member @carol --reason', usage('`--reason` needs some text', 'team-member')],
             ['team-member @carol --channels ~town-square', usage('unknown option `--channels`', 'team-member')],
             [`team-member @${gone.username}`, `@${gone.username} is deactivated and can't be made a team member`],
@@ -286,7 +286,7 @@ test.describe('inline request forms refuse what they cannot submit', () => {
             ['bot onlyname', usage('a bot username and a display name are required', 'bot')],
             ['bot ab Some Bot', 'Bot username must be 3-22 characters.'],
             ['bot bad!name Some Bot', 'Bot username must be lowercase letters, numbers, and . - _ (3-22 characters).'],
-            ['bot goodbot Some Bot --owner @nosuchuser', 'unknown user: nosuchuser'],
+            ['bot goodbot Some Bot --owner @nosuchuser', 'unknown user: `nosuchuser`'],
             ['bot goodbot Some Bot --owner @carol @bob', usage('`--owner` takes exactly one value', 'bot')],
             ['bot goodbot Some Bot --description', usage('`--description` needs some text', 'bot')],
             ['bot goodbot Some Bot --token', usage('unknown option `--token`', 'bot')],
