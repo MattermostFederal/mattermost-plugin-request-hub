@@ -17,6 +17,7 @@ type ticketThread struct {
 	DMChannelID       string
 	Kind              string // requestType* constant
 	ScopeID           string // optional: team ID (channel create) or channel ID (channel-admin)
+	RequestID         string // the request, for auditing relayed messages
 }
 
 func (t ticketThread) toAnchor() threadAnchor {
@@ -49,6 +50,7 @@ type ticketPersist struct {
 // if the CAS loses or errors, approve/deny still work because the approval
 // cards were recorded when they were posted; thread relay may not.
 func (p *Plugin) persistTicketPosts(tp ticketPersist) {
+	tp.Thread.RequestID = tp.RequestID
 	ok, casErr := p.kvUpdateIfUnchanged(tp.KVKey, tp.RawBefore, tp.Record)
 	if casErr != nil {
 		p.API.LogWarn("failed to re-store "+tp.Label+" with post IDs", "request_id", tp.RequestID, "error", casErr.Error())

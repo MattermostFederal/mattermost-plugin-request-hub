@@ -471,7 +471,7 @@ func TestScheduleTokenPostDeletion_AppendsAfterRetry(t *testing.T) {
 	api.On("KVCompareAndSet", tokenPostRegistryKey, existing, registryHolds("old", "new")).
 		Return(true, nil).Once()
 
-	p.scheduleTokenPostDeletion("new")
+	p.scheduleTokenPostDeletion("new", "")
 
 	api.AssertNumberOfCalls(t, "KVCompareAndSet", 2)
 	api.AssertNotCalled(t, "DeletePost", mock.Anything)

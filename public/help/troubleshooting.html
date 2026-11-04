@@ -189,10 +189,40 @@
             plugin.
         </p>
 
+        <h2 id="audit">Audit trail</h2>
+        <p>
+            Every event on every request is recorded: the submission (and a submission that was refused, or failed
+            and was withdrawn), each step of a two-step approval, the approval or denial, an Approve or Deny that
+            was refused, an approval that failed and left the request pending, an approval that lost the request,
+            a token or webhook URL that couldn't be delivered, expiry, every message in the request's ticket threads
+            (with its text), bot token reminders, and exercise mode seeding and teardown. Each event says who did it
+            and when. Tokens and incoming webhook URLs are never recorded.
+        </p>
+        <p>Events go to three places:</p>
+        <ul>
+            <li><strong>The request history</strong>, which the plugin keeps for good, after the request is decided.
+                System Admins read it with <a href="slash.html#audit"><code>/mattermost-request-hub audit</code></a>
+                and download all of it as CSV or JSON from the links <code>audit recent</code> shows.</li>
+            <li><strong>The server audit log</strong>, as <code>requesthub_</code> events such as
+                <code>requesthub_approved</code>, when audit logging is turned on for the server (System Console →
+                Compliance → Audit Logging, or <code>ExperimentalAuditSettings</code> in the server configuration; a
+                restart is needed). Use this to keep the trail with the rest of your compliance records.</li>
+            <li><strong>The audit channel</strong>, <code>mattermost-audit-requests</code>, as cards people can read.
+                <em>Audit channel detail</em> in System Console → Plugins → Mattermost Request Hub picks what is
+                posted there: decisions only, every lifecycle event (the default), or everything including refused
+                approvals and every relayed message. It changes only the channel: the history and the server audit
+                log always get every event.</li>
+        </ul>
+        <p>
+            If the history can't be saved, the server log has <em>failed to save request audit history</em> with the
+            whole event, so nothing is lost silently.
+        </p>
+
         <h2 id="audit-missing">No cards in the audit channel</h2>
         <p>
-            <strong>Cause:</strong> the plugin posts every approve, deny and expiry to the private
-            <code>mattermost-audit-requests</code> channel it creates in the approval team. Without an
+            <strong>Cause:</strong> the plugin posts request events to the private
+            <code>mattermost-audit-requests</code> channel it creates in the approval team (which events depends on
+            <em>Audit channel detail</em>). Without an
             <em>Approval team</em>, or when the team can't be found, there is no audit channel and nothing is
             posted. In the second case the server log has <em>cannot ensure named approval channel</em>; when the
             setting is empty, nothing is logged. If the channel exists

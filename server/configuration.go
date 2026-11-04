@@ -148,7 +148,13 @@ type configuration struct {
 	// request lasts: a dropdown from 1 to 12 months.
 	BotTokenLifetimeMonths string
 
-	// --- 8. Exercise mode ---
+	// --- 8. Audit ---
+	// AuditChannelDetail picks which request events are posted to the
+	// audit channel: "decisions", "lifecycle" (the default) or "all". The
+	// request history and the server audit log always get every event.
+	AuditChannelDetail string
+
+	// --- 9. Exercise mode ---
 	// EnableExercise lets System Admins run the exercise subcommand.
 	// ExerciseScenarioJSON replaces the built-in fictional scenario when
 	// set; see loadExerciseScenario.
@@ -192,6 +198,27 @@ func (c *configuration) TokenLifetimeMonths() int {
 		return defaultBotTokenLifetime
 	}
 	return c.tokenLifetimeMonths
+}
+
+// Audit channel detail levels, from least to most. An event is posted to
+// the audit channel when its level is at or below the configured one.
+const (
+	auditLevelDecisions = iota
+	auditLevelLifecycle
+	auditLevelAll
+)
+
+// AuditChannelLevel returns the configured audit channel detail level.
+// Blank or unknown values get the default, every lifecycle event.
+func (c *configuration) AuditChannelLevel() int {
+	switch strings.TrimSpace(c.AuditChannelDetail) {
+	case "decisions":
+		return auditLevelDecisions
+	case "all":
+		return auditLevelAll
+	default:
+		return auditLevelLifecycle
+	}
 }
 
 // allowsChannelName reports whether name still fits the configured prefix

@@ -560,7 +560,9 @@ test.describe('approval', () => {
             expect(reply).toMatch(/^Could not create the channel: .+\. The request is still pending\. If this keeps failing, the channel name may already be taken — deny it and ask the requester to resubmit with a different name\.$/);
             await expectStillPending(hub, 'channel', card.id, requestId, requester.id);
             expect((await admin.getChannelByName(hub.teamId, record.name)).id).toBe(squatter.id);
-            expect(await postsMentioning(hub, await hub.channelId('mattermost-audit-requests'), displayName)).toEqual([]);
+            // The audit channel gets the failure, not an approval.
+            const audit = await postsMentioning(hub, await hub.channelId('mattermost-audit-requests'), displayName);
+            expect(audit.map((p) => (p.props?.attachments as {title?: string}[] | undefined)?.[0]?.title)).toEqual(['⚠️ Failed']);
 
             expect(await click(hub, ADMIN, card, 'deny')).toEqual({reply: ''});
             expect(await pendingIds(hub, 'channel', requester.id)).toEqual([]);

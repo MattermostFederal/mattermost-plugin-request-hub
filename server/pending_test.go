@@ -461,10 +461,18 @@ func TestMigratePendingRequests(t *testing.T) {
 		stubLogLines(api)
 		defer api.AssertExpectations(t)
 		p := newTestPlugin(api)
+		events := captureAudit(p)
 		store := fakeKV(api)
 		seed(store)
 
 		require.NoError(t, p.migratePendingRequests())
+		migrated := map[string]bool{}
+		for _, e := range *events {
+			require.Equal(t, eventMigrated, e.Event)
+			migrated[e.RequestID] = true
+		}
+		require.True(t, migrated[r1] && migrated[a1], "backfilled requests are recorded")
+		require.False(t, migrated[r2] || migrated[r3], "requests that needed no backfill are not")
 
 		var got channelRequest
 		require.NoError(t, json.Unmarshal(store[kvRequestPrefix+r1], &got))

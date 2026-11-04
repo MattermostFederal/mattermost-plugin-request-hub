@@ -66,6 +66,7 @@ Create and assign attributes in **System Console → User Management → Attribu
 | **Pending requests per user** | Default **5**, up to 1000; 0 means no limit. How many requests of each type one user can have waiting for review; each type is counted separately. A second pending request for the same thing is refused: the same channel name in a team, the same nominees in the same channel or team (Channel Admin, Team Admin, team members), the same team URL, the same guest email in a team, the same bot username, or a webhook of the same type and name in the same channel. |
 | **Request expiry (days)** | Default **30**, at most 3650; 0 means requests never expire. Pending requests of any type older than this can no longer be approved: clicking Approve or Deny marks the card expired and closes the requester's ticket. Bot and webhook requests count from submission, even after one approval step. Applies to requests already pending too. |
 | **Bot token lifetime** | **1 to 12 months**, default **12**. How long an access token issued with an approved bot request lasts. The token DM gives the expiry date, and the requester gets reminders before it (see [Token expiry reminders](#token-expiry-reminders)). Only affects tokens issued after the change. Not the same as Request expiry. Needs Mattermost 11.9 or later (see [Token expiry reminders](#token-expiry-reminders)). |
+| **Audit channel detail** | Default **Every lifecycle event**. What is posted to `mattermost-audit-requests`: **Decisions only** (approved, denied, expired), **Every lifecycle event** (also submissions, approval steps, failures, token reminders), or **Everything** (also refused approvals and every relayed message). It changes only the channel. The request history and the server audit log always get every event (see [Audit trail](#audit-trail)). |
 | **Enable exercise mode** | Default **off**. **Do not enable in production.** Lets System Admins run `/mattermost-request-hub exercise populate`, `teardown` and `status` to seed and remove marked exercise data in a team: persona accounts nobody can sign in as, channels, and pending requests of every type on real approval cards. Populate needs **Allow channel requests**, at least one prefix, and the setting for each other type the scenario seeds (the built-in scenario seeds all eight). Approving a seeded request does the real thing, marked EXERCISE: a channel, team, bot or webhook, a Team Admin or team member change for a persona, or a guest invite. Teardown deletes the webhooks and bots, archives the teams and channels, and undoes the personas' team changes. Personas and guest invites use `exercise.invalid` email addresses, so a server or team that restricts email domains, or a guest domain list, must allow that domain, and guest access must be on for a scenario with guest invites. A guest invite can't be withdrawn; it reaches nobody and expires on its own. |
 | **Exercise scenario (JSON)** | Optional. Blank uses the built-in fictional scenario. Paste a scenario to seed your own; it is stored only in this server's configuration. The format is on the plugin's built-in `slash.html#exercise-scenario` page. |
 
@@ -108,7 +109,7 @@ The plugin creates and manages five dedicated private channels in the configured
 | `mattermost-team-requests` | Team creation, Team Admin, team member add, guest invite |
 | `mattermost-bot-requests` | Bot account requests (including associated tokens and webhooks) |
 | `mattermost-webhook-requests` | Standalone incoming and outgoing webhook requests |
-| `mattermost-audit-requests` | Audit log |
+| `mattermost-audit-requests` | Audit cards (see [Audit trail](#audit-trail)) |
 
 Each channel gets a **Request Hub docs** bookmark that links to the built-in guide. The plugin bot joins the channel to add it. Channels that existed before the upgrade get the bookmark once, on the next activation that has **Site URL** set. If you remove the bookmark, the plugin doesn't add it back.
 
@@ -178,6 +179,61 @@ Bot and webhook cards use **two-step** approval. The card shows security and sys
 | **Outgoing webhook** | After both steps: creates the webhook and confirms via DM |
 
 **Deny** always: closes the ticket, notifies the requester by DM, records who denied and when.
+
+---
+
+## Audit trail
+
+Every event on every request is recorded, with who did it and when:
+
+- the submission, and a submission that was refused or failed and was withdrawn
+- each step of a two-step approval, and the final approval or denial
+- an Approve or Deny that was refused (no permission, own request, already handled, a failed re-check)
+- an approval that failed and left the request pending, or that lost the request
+- an approval that was only partly carried out (a team member who couldn't be added, a bot token that couldn't be made)
+- a bot token or incoming webhook URL that couldn't be delivered, so what was made was removed
+- expiry, which is recorded as the plugin's doing with the person whose click noticed it
+- every message in the request's ticket threads, with its text, including messages that weren't relayed
+- bot token expiry reminders, the end of reminders, and the deletion of the message that delivered the token
+- exercise mode seeding and teardown, and requests upgraded from older plugin versions
+
+Tokens and incoming webhook URLs are never recorded.
+
+Events go to three places:
+
+| Where | What it is | Who can see it |
+|-------|------------|----------------|
+| Request history | A record per request in the plugin's KV store, kept after the request is decided. Nothing deletes it. | System Admins, with `/mattermost-request-hub audit <request ID>` and `audit recent`, and the export below |
+| Server audit log | One `requesthub_<event>` record per event (for example `requesthub_submitted`, `requesthub_approved`), with the actor, request ID, kind, requester and details. Failed events have status `fail`. | Wherever your server's audit logging sends records. Audit logging must be turned on for the server. |
+| `mattermost-audit-requests` | Cards people can read, as chosen by **Audit channel detail** | Members of the audit channel |
+
+### Turning on the server audit log
+
+The plugin sends its records through the server's own audit logger, so they go wherever the server's audit records go. Nothing is written until audit logging is turned on:
+
+- **File:** in **System Console > Compliance > Audit Logging**, turn on **File Enabled** and set **File Name** (the console shows this page on Enterprise licenses). On other editions, set `ExperimentalAuditSettings.FileEnabled` and `ExperimentalAuditSettings.FileName` in `config.json` or with `mmctl config set`. The file has one JSON record per line.
+- **Syslog, TCP and other targets:** use **Advanced Logging** (`ExperimentalAuditSettings.AdvancedLoggingJSON`), which needs a license with advanced logging. Plugin records use the `audit-cli` level, so a target must include that level.
+
+Changes to these settings need a server restart. Every record from the plugin has `event_name` starting with `requesthub_` and a `plugin_id` parameter of `com.mattermostfederal.mattermost-plugin-request-hub`, so a SIEM can filter on either.
+
+### Exporting
+
+System Admins can download the whole request history from `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/audit/export`. `audit recent` links to it. The export is a `GET` with these optional parameters:
+
+| Parameter | Values |
+|-----------|--------|
+| `format` | `json` (default): one object per request, with its events. `csv`: one row per event. |
+| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook` |
+| `requester` | A requester's user ID |
+| `since`, `until` | Unix time in milliseconds |
+
+Each export is itself recorded in the server audit log as `requesthub_audit_exported`.
+
+If the history can't be saved for an event, the server log has `failed to save request audit history` with the whole event.
+
+A request's history keeps relayed messages in full until it reaches 2 MB. After that, each new message is kept to its first 2 KB in the history (marked `message_truncated`), so a very long ticket thread can't stop the history being saved. The server audit log always gets the full text.
+
+Requests that were already pending when auditing was added get their history from their next event on.
 
 ---
 

@@ -80,7 +80,10 @@ type botRequestInput struct {
 
 // submitBotRequest validates the input and stores a pending request for
 // two-step approval.
-func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (string, error) {
+func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindBot, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return "", errors.New(botRequestsDisabledMsg)
 	}
@@ -156,6 +159,7 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindBot, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -165,6 +169,7 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		p.API.LogError("failed to store bot request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)

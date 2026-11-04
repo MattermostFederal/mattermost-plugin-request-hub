@@ -26,7 +26,7 @@ func waitFor(t *testing.T, done <-chan struct{}, what string) {
 
 // --- request.go ---
 
-func TestLogAudit_LinksThreadAndLogsPostFailure(t *testing.T) {
+func TestPostAuditCard_LinksThreadAndLogsPostFailure(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).
@@ -42,9 +42,9 @@ func TestLogAudit_LinksThreadAndLogsPostFailure(t *testing.T) {
 			att[0].Text == "note\n\n[Open ticket thread](https://mm.example.com/appteam/pl/ap)"
 	})).Return(nil, testAppErr("down"))
 
-	p.logAudit(auditOutcome(99), " note ", "ap")
+	p.postAuditCard(auditOutcome(99), " note ", "ap")
 
-	api.AssertCalled(t, "LogWarn", "audit post failed", "channel_id", "auditch", "error", mock.Anything)
+	api.AssertCalled(t, "LogError", "audit post failed", "channel_id", "auditch", "error", mock.Anything)
 }
 
 func TestAuditCardStyle_UnknownKindIsNeutral(t *testing.T) {

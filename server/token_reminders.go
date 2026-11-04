@@ -38,6 +38,9 @@ type botTokenExpiry struct {
 	RequesterID    string `json:"requester_id"`
 	ExpiresAt      int64  `json:"expires_at"`
 	LastRemindedAt int64  `json:"last_reminded_at"`
+	// RequestID is the bot request the token was issued for, for auditing.
+	// Empty on tokens tracked before auditing.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func botTokenExpiryKey(tokenID string) string {
@@ -46,7 +49,7 @@ func botTokenExpiryKey(tokenID string) string {
 
 // trackBotTokenExpiry stores the details the reminders need. A failure is
 // logged and otherwise ignored: the token is already issued.
-func (p *Plugin) trackBotTokenExpiry(token *model.UserAccessToken, botUsername, requesterID string) {
+func (p *Plugin) trackBotTokenExpiry(token *model.UserAccessToken, botUsername, requesterID, requestID string) {
 	if token == nil || token.Id == "" || token.ExpiresAt <= 0 {
 		return
 	}
@@ -59,6 +62,7 @@ func (p *Plugin) trackBotTokenExpiry(token *model.UserAccessToken, botUsername, 
 		RequesterID:    requesterID,
 		ExpiresAt:      token.ExpiresAt,
 		LastRemindedAt: model.GetMillis(),
+		RequestID:      requestID,
 	}
 	if err := p.saveBotTokenExpiry(rec); err != nil {
 		p.API.LogWarn("failed to store bot token expiry; no reminders will be sent", "bot_user_id", token.UserId, "error", err.Error())
@@ -132,7 +136,7 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	var rec botTokenExpiry
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		p.API.LogWarn("dropping unreadable bot token expiry", "key", key, "error", err.Error())
-		p.deleteBotTokenExpiry(key)
+		p.endTokenTracking(key, rec, "its record could not be read")
 		return
 	}
 
@@ -140,14 +144,14 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	bot, appErr := p.API.GetBot(rec.BotUserID, true)
 	if appErr != nil {
 		if appErr.StatusCode == http.StatusNotFound {
-			p.deleteBotTokenExpiry(key)
+			p.endTokenTracking(key, rec, "the bot no longer exists")
 		} else {
 			p.API.LogWarn("failed to load bot for token reminder", "bot_user_id", rec.BotUserID, "error", appErr.Error())
 		}
 		return
 	}
 	if bot.DeleteAt > 0 {
-		p.deleteBotTokenExpiry(key)
+		p.endTokenTracking(key, rec, "the bot was deactivated")
 		return
 	}
 	if bot.Username != "" {
@@ -159,7 +163,8 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	if remaining <= 0 {
 		// One last notice, then stop tracking.
 		if p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
-			p.deleteBotTokenExpiry(key)
+			p.auditTokenReminder(rec, true)
+			p.endTokenTracking(key, rec, "the token expired")
 		}
 		return
 	}
@@ -180,10 +185,43 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	if !p.sendTokenReminder(rec, tokenExpiringMessage(rec, remaining)) {
 		return
 	}
+	p.auditTokenReminder(rec, false)
 	rec.LastRemindedAt = nowMillis
 	if err := p.saveBotTokenExpiry(rec); err != nil {
 		p.API.LogWarn("failed to record bot token reminder", "bot_user_id", rec.BotUserID, "error", err.Error())
 	}
+}
+
+// auditTokenReminder records a token expiry reminder that was sent.
+func (p *Plugin) auditTokenReminder(rec botTokenExpiry, expired bool) {
+	note := fmt.Sprintf("Reminded about the access token for bot @%s, which expires on %s", rec.BotUsername, formatDay(rec.ExpiresAt))
+	if expired {
+		note = fmt.Sprintf("Told that the access token for bot @%s has expired", rec.BotUsername)
+	}
+	p.recordEvent(auditEntry{
+		Event: eventTokenReminder, Kind: pendingKindBot, RequestID: rec.RequestID, RequesterID: rec.RequesterID,
+		Note:   note,
+		Detail: map[string]any{"bot_user_id": rec.BotUserID, "token_id": rec.TokenID, "expires_at": rec.ExpiresAt, "expired": expired},
+	})
+}
+
+// endTokenTracking stops the reminders for a token, recording why. rec is
+// empty when its record couldn't be read; key still names the token.
+func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) {
+	p.deleteBotTokenExpiry(key)
+	tokenID := rec.TokenID
+	if tokenID == "" {
+		tokenID = strings.TrimPrefix(key, botTokenExpiryKeyPrefix)
+	}
+	bot := "bot @" + rec.BotUsername
+	if rec.BotUsername == "" {
+		bot = "token " + tokenID
+	}
+	p.recordEvent(auditEntry{
+		Event: eventTokenTrackingEnded, Kind: pendingKindBot, RequestID: rec.RequestID, RequesterID: rec.RequesterID,
+		Note:   fmt.Sprintf("Stopped the expiry reminders for the access token of %s: %s", bot, reason),
+		Detail: map[string]any{"bot_user_id": rec.BotUserID, "token_id": tokenID, "reason": reason},
+	})
 }
 
 func (p *Plugin) deleteBotTokenExpiry(key string) {

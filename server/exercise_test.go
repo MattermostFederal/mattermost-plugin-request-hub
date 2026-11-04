@@ -729,12 +729,15 @@ func TestExerciseCommand_Gate(t *testing.T) {
 
 func TestExercise_PopulateApproveTeardownRepopulate(t *testing.T) {
 	f := newExerciseFake(t)
+	events := captureAudit(f.p)
 
 	reply := f.run("admin1", "/mattermost-request-hub exercise populate")
 	require.Equal(t, "Seeded the **Silver Harbor** exercise into this team: 6 personas, 1 channels, 3 channel requests and 1 Channel Admin requests. The approval cards are waiting for review. Run `/mattermost-request-hub exercise teardown` to remove it all.", reply)
 
 	m := f.manifest(t)
 	require.Equal(t, exerciseStateReady, m.State)
+	seeded := countEvents(*events, eventExerciseSeeded)
+	require.Equal(t, 4, seeded, "one event per seeded request")
 	require.Equal(t, "admin1", m.CreatedBy)
 	require.NotZero(t, m.UpdatedAt)
 	require.Len(t, m.Done, 5)
@@ -817,6 +820,12 @@ func TestExercise_PopulateApproveTeardownRepopulate(t *testing.T) {
 	reply = f.run("admin1", "/mattermost-request-hub exercise teardown")
 	require.Equal(t, "Removed the exercise data from this team: 3 pending requests closed, 2 channels archived and 6 personas deactivated.", reply)
 	require.Nil(t, f.manifest(t))
+	require.Equal(t, 3, countEvents(*events, eventExerciseRemoved), "one event per pending request closed")
+	for _, e := range *events {
+		if e.Event == eventExerciseSeeded || e.Event == eventExerciseRemoved {
+			require.True(t, e.Exercise)
+		}
+	}
 	require.Equal(t, 0, f.activeExerciseChannels())
 	for _, id := range m.ChannelIDs {
 		require.True(t, strings.HasSuffix(f.channels[id].Name, "-"+id), f.channels[id].Name)

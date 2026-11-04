@@ -156,7 +156,8 @@
             approved. Clicking either button on it, or running <code>approve</code> or <code>deny</code> on it,
             replies <em>This request has expired.</em>, marks the card
             <em>⌛ Expired: not reviewed within N days.</em>, closes the requester's ticket as expired and posts an
-            <em>Expired</em> card to the audit channel. The requester can submit it again.
+            <em>Expired</em> card to the audit channel. The expiry is recorded in the request's
+            <a href="troubleshooting.html#audit">audit history</a>. The requester can submit it again.
         </p>
         <p>
             Bot and webhook requests count from when they were submitted, even after one approval step is done.

@@ -424,7 +424,10 @@ func (p *Plugin) checkNominees(ids []string, rules nomineeRules) error {
 
 // submitRequest validates the input, stores a pending request and posts it to the approval channel.
 // It returns a message suitable for showing to the requester.
-func (p *Plugin) submitRequest(in requestInput) (string, error) {
+func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindChannel, in.RequesterID)
+	defer sa.done(&submitErr)
+
 	config := p.getConfiguration()
 
 	if err := validateRequestInput(in); err != nil {
@@ -491,6 +494,7 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err = p.reservePending(pendingKindChannel, req.RequesterID, entry, config); err != nil {
 		return "", err
 	}
@@ -502,6 +506,7 @@ func (p *Plugin) submitRequest(in requestInput) (string, error) {
 		p.API.LogError("failed to store channel request", "error", storeErr.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
@@ -585,15 +590,24 @@ func (p *Plugin) postWelcomeMessage(channel *model.Channel, req *channelRequest,
 type auditOutcome int
 
 const (
-	auditApproved auditOutcome = iota // green ✅
-	auditDenied                       // red ❌
-	auditExpired                      // gray: closed unreviewed after the expiry period
+	auditApproved     auditOutcome = iota // green ✅
+	auditDenied                           // red ❌
+	auditExpired                          // gray: closed unreviewed after the expiry period
+	auditSubmitted                        // amber: a new request
+	auditStepApproved                     // green: one step of two approved
+	auditPartial                          // amber: approved, but part of it failed
+	auditFailed                           // red: something went wrong
+	auditRefused                          // gray: an Approve or Deny that was refused
+	auditMessage                          // gray: a message relayed in a ticket thread
+	auditNote                             // gray: anything else
 )
 
-// logAudit posts a colored attachment card to the auto-created audit channel.
-// When threadPostID is set (usually the approval-card root), the card includes
-// an "Open ticket thread" markdown link. No-op when ApprovalTeam is unset.
-func (p *Plugin) logAudit(kind auditOutcome, body, threadPostID string) {
+// postAuditCard posts a colored attachment card to the auto-created audit
+// channel. When threadPostID is set (usually the approval-card root), the
+// card includes an "Open ticket thread" markdown link. No-op when
+// ApprovalTeam is unset. Use recordEvent, which also keeps the request
+// history and the server audit log.
+func (p *Plugin) postAuditCard(kind auditOutcome, body, threadPostID string) {
 	ch := p.ensureAuditChannel()
 	if ch == nil {
 		return
@@ -618,7 +632,7 @@ func (p *Plugin) logAudit(kind auditOutcome, body, threadPostID string) {
 		Text:  text,
 	}})
 	if _, appErr := p.API.CreatePost(post); appErr != nil {
-		p.API.LogWarn("audit post failed", "channel_id", ch.Id, "error", appErr.Error())
+		p.API.LogError("audit post failed", "channel_id", ch.Id, "error", appErr.Error())
 	}
 }
 
@@ -630,6 +644,18 @@ func auditCardStyle(kind auditOutcome) (color, title string) {
 		return colorDenied, "❌ Denied"
 	case auditExpired:
 		return colorExpired, "⌛ Expired"
+	case auditSubmitted:
+		return colorPending, "📨 Submitted"
+	case auditStepApproved:
+		return colorApproved, "☑️ Step approved"
+	case auditPartial:
+		return colorPending, "⚠️ Approved with problems"
+	case auditFailed:
+		return colorDenied, "⚠️ Failed"
+	case auditRefused:
+		return colorExpired, "🚫 Refused"
+	case auditMessage:
+		return colorExpired, "💬 Message"
 	default:
 		return colorPending, "• Audit"
 	}

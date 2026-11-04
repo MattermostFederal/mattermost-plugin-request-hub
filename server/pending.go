@@ -507,6 +507,12 @@ func (p *Plugin) migratePendingRequest(key string, now int64) error {
 		if !exists {
 			p.releasePending(b.kind, b.requesterID, b.entry.ID)
 		}
+		if b.updated != nil {
+			p.recordEvent(auditEntry{
+				Event: eventMigrated, Kind: b.kind, RequestID: b.entry.ID, RequesterID: b.requesterID,
+				Note: "Upgraded a request stored by an older version of the plugin",
+			})
+		}
 		return nil
 	}
 	return errors.New("stored request kept changing")

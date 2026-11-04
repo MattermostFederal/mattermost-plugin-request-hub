@@ -44,7 +44,10 @@ type adminRequest struct {
 
 // submitAdminRequest validates the input, stores a pending request and posts
 // it to the approval channel. Requests from System Admins queue too.
-func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []string) (string, error) {
+func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []string) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindAdmin, requesterID)
+	defer sa.done(&submitErr)
+
 	if strings.TrimSpace(channelID) == "" {
 		return "", errors.New("a channel is required")
 	}
@@ -103,6 +106,7 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindAdmin, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -113,6 +117,7 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 		p.API.LogError("failed to store Channel Admin request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, err := json.Marshal(req)
 	if err != nil {
 		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)

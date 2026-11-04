@@ -59,7 +59,7 @@ func getCommand() *model.Command {
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Request admin-gated permissions (channels, teams, admin roles) or open docs",
-		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
+		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|audit|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
 		AutocompleteData: getAutocompleteData(),
 		DisplayName:      "Mattermost Request Hub",
 	}
@@ -77,6 +77,9 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(list)
 	root.AddCommand(model.NewAutocompleteData(subcommandApprove, requestIDArgHint, "Approve a request by the ID on its approval card"))
 	root.AddCommand(model.NewAutocompleteData(subcommandDeny, requestIDArgHint, "Deny a request by the ID on its approval card"))
+	audit := model.NewAutocompleteData(subcommandAudit, auditArgsHint, "Show a request's audit history, or the latest requests (System Admins)")
+	audit.AddCommand(model.NewAutocompleteData(auditRecent, "[count]", "List the most recently updated requests and the export links"))
+	root.AddCommand(audit)
 	exercise := model.NewAutocompleteData(subcommandExercise, "populate|teardown|status", "Seed, remove or report exercise data (System Admins, exercise mode on)")
 	exercise.AddCommand(model.NewAutocompleteData(exercisePopulate, "", "Seed marked exercise data into this team"))
 	exercise.AddCommand(model.NewAutocompleteData(exerciseTeardown, "", "Remove this team's exercise data"))
@@ -149,6 +152,8 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 		return p.executeDecision(args, params, false), nil
 	case subcommandExercise:
 		return p.executeExercise(args, params), nil
+	case subcommandAudit:
+		return p.executeAudit(args, params), nil
 	case "team-admin":
 		if len(params) > 0 {
 			return p.executeTeamAdminNominateCommand(args, params), nil
@@ -370,6 +375,8 @@ var helpRows = []helpRow{
 	{"", subcommandList + " " + listApprovals, "List the pending requests you can approve and their IDs"},
 	{"", subcommandApprove + " " + requestIDArgHint, "Approve a request, as its Approve button would"},
 	{"", subcommandDeny + " " + requestIDArgHint, "Deny a request, as its Deny button would"},
+	{"", subcommandAudit + " " + requestIDArgHint, "Show everything that happened to a request (System Admins)"},
+	{"", subcommandAudit + " " + auditRecent + " [count]", "List the most recently updated requests, with links to export the whole audit history (System Admins)"},
 	{"", subcommandExercise + " <populate, teardown or status>", "Seed (`populate`), remove (`teardown`) or report (`status`) marked exercise data in this team (System Admins, when exercise mode is on)"},
 	{requestTypeTeamAdmin, "team-admin", "Request Team Admin role in this team (opens the form)"},
 	{requestTypeTeamAdmin, "team-admin " + teamAdminArgsHint, "Request Team Admin for those members of this team"},
@@ -1015,8 +1022,17 @@ func (p *Plugin) executeList(args *model.CommandArgs, params []commandArg) *mode
 	return ephemeralResponse(strings.TrimRight(b.String(), "\n"))
 }
 
-// deciderFor returns the decide function for requests of a pending kind.
+// deciderFor returns the decide function for requests of a pending kind,
+// wrapped so every decision it answers is audited.
 func (p *Plugin) deciderFor(kind string) decider {
+	if d := p.kindDecider(kind); d != nil {
+		return p.auditedDecider(kind, d)
+	}
+	return nil
+}
+
+// kindDecider is the decide function for kind, nil for an unknown kind.
+func (p *Plugin) kindDecider(kind string) decider {
 	switch kind {
 	case pendingKindChannel:
 		return p.decideChannelRequest

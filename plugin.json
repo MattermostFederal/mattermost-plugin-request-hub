@@ -238,6 +238,27 @@
                 ]
             },
             {
+                "key": "AuditChannelDetail",
+                "display_name": "Audit channel detail",
+                "type": "dropdown",
+                "default": "lifecycle",
+                "help_text": "How much the plugin posts to the Mattermost: Audit Requests channel. This only changes the channel: every event on every request is always kept in the request history (see /mattermost-request-hub audit and the audit export) and sent to the server audit log, whatever is chosen here.",
+                "options": [
+                    {
+                        "display_name": "Decisions only (approved, denied, expired)",
+                        "value": "decisions"
+                    },
+                    {
+                        "display_name": "Every lifecycle event (submissions, approval steps, failures)",
+                        "value": "lifecycle"
+                    },
+                    {
+                        "display_name": "Everything, including refusals and every relayed message",
+                        "value": "all"
+                    }
+                ]
+            },
+            {
                 "key": "EnableExercise",
                 "display_name": "Enable exercise mode",
                 "type": "bool",

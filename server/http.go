@@ -59,6 +59,7 @@ const (
 	routeSubmitOutgoingWebhookWebapp = "/api/v1/submit_outgoing_webhook_request"
 	routeSidebarCategories           = "/api/v1/sidebar_categories" // ?team_id=... — list caller's sidebar categories
 	routeConfig                      = "/api/v1/config"
+	routeAuditExport                 = "/api/v1/audit/export" // every request history as CSV or JSON, System Admins only
 
 	// fieldPrefix is the dialog element name for the domain-prefix
 	// dropdown. Kept alongside the other field* constants in request.go.
@@ -107,6 +108,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	switch r.URL.Path {
+	case routeAuditExport:
+		p.handleAuditExport(w, r)
 	case routeDialog:
 		p.handleDialogSubmit(w, r)
 	case routeCreate:
@@ -768,13 +771,13 @@ func (p *Plugin) handleDecisionClick(w http.ResponseWriter, r *http.Request, app
 
 // handleAction handles Approve/Deny clicks on a channel request card.
 func (p *Plugin) handleAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideChannelRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindChannel))
 }
 
 // handleAdminAction handles Approve/Deny clicks on a Channel Admin request
 // card.
 func (p *Plugin) handleAdminAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideAdminRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindAdmin))
 }
 
 // handleTwoStepClick handles an Approve or Deny click on a bot or webhook
@@ -933,7 +936,7 @@ func (p *Plugin) handleTeamCreationDialogSubmit(w http.ResponseWriter, r *http.R
 
 // handleTeamAdminAction handles Approve/Deny on a Team Admin request card.
 func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamAdminRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamAdmin))
 }
 
 func (p *Plugin) handleTeamMemberDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -976,7 +979,7 @@ func (p *Plugin) handleTeamMemberDialogSubmit(w http.ResponseWriter, r *http.Req
 
 // handleTeamMemberAction handles Approve/Deny on a team member request card.
 func (p *Plugin) handleTeamMemberAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamMemberRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamMember))
 }
 
 func (p *Plugin) handleTeamGuestDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1020,12 +1023,12 @@ func (p *Plugin) handleTeamGuestDialogSubmit(w http.ResponseWriter, r *http.Requ
 
 // handleTeamGuestAction handles Approve/Deny on a guest invite request card.
 func (p *Plugin) handleTeamGuestAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamGuestRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamGuest))
 }
 
 // handleTeamAction handles Approve/Deny on a team creation request card.
 func (p *Plugin) handleTeamAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeam))
 }
 
 func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1063,7 +1066,7 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 
 // handleBotAction handles Approve/Deny on a bot account request card.
 func (p *Plugin) handleBotAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleTwoStepClick(w, r, approve, p.decideBotRequest)
+	p.handleTwoStepClick(w, r, approve, p.deciderFor(pendingKindBot))
 }
 
 func (p *Plugin) handleIncomingWebhookDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1138,7 +1141,7 @@ func (p *Plugin) handleOutgoingWebhookDialogSubmit(w http.ResponseWriter, r *htt
 
 // handleWebhookAction handles Approve/Deny on a webhook request card.
 func (p *Plugin) handleWebhookAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleTwoStepClick(w, r, approve, p.decideWebhookRequest)
+	p.handleTwoStepClick(w, r, approve, p.deciderFor(pendingKindWebhook))
 }
 
 // handleListSidebarCategories returns the caller's sidebar categories for a

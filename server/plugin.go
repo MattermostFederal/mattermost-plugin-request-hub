@@ -43,6 +43,11 @@ type Plugin struct {
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
 
+	// auditSink, when set, receives every audit event instead of the request
+	// history, the server audit log and the audit channel. A test seam: nil
+	// in production.
+	auditSink func(auditEntry, auditEventSpec)
+
 	// Test seams for webhook create/delete side effects (nil in production).
 	createWebhookFn func(req *webhookRequest, adminUserID string) (dmMsg, hookID string, err error)
 	deleteWebhookFn func(webhookType, hookID string) error

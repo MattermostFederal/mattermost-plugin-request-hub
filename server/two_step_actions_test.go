@@ -371,6 +371,7 @@ func TestHandleBotAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
+	events := captureAudit(p)
 	raw := mustMarshal(t, pendingBotRequest(securityStepDone()))
 	stubSystemAdmin(api)
 	stubRequester(api)
@@ -391,6 +392,8 @@ func TestHandleBotAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) {
 	require.Contains(t, resp.Update.Message, "a previous approval attempt failed")
 	api.AssertCalled(t, "KVSet", kvBotRequestPrefix+"r1", raw)
 	api.AssertNotCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
+	require.Equal(t, []string{eventApproveFailed}, eventNames(*events))
+	require.Contains(t, (*events)[0].Detail["error"], "name taken")
 }
 
 // finalBot registers admin1's final Approve up to creating the bot, for a
@@ -546,8 +549,10 @@ func TestHandleBotAction_UndeliverableIncomingWebhookIsRemoved(t *testing.T) {
 			stubPendingLists(api)
 			stubLogs(api)
 			p := newTestPlugin(api)
+			events := captureAudit(p)
 			stubSiteURL(api, ts.URL)
 			var deleted []string
+
 			p.deleteWebhookFn = func(webhookType, hookID string) error {
 				deleted = append(deleted, webhookType+":"+hookID)
 				return tc.deleteErr
@@ -572,6 +577,9 @@ func TestHandleBotAction_UndeliverableIncomingWebhookIsRemoved(t *testing.T) {
 			all := strings.Join(notes, "\n")
 			require.Contains(t, all, tc.want)
 			require.NotContains(t, all, "Incoming webhook URL:")
+			require.Equal(t, []string{eventApprovedPartial}, eventNames(*events))
+			require.Contains(t, strings.Join((*events)[0].Detail["problems"].([]string), "; "), tc.want)
+			require.NotContains(t, (*events)[0].Note, ts.URL, "the webhook URL is never recorded")
 			if tc.hookID == "" {
 				require.Empty(t, deleted)
 			} else {
@@ -666,6 +674,7 @@ func TestHandleWebhookAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) 
 	stubBotExtras(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
+	events := captureAudit(p)
 	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) { return "", "", errors.New("hooks are off") }
 	raw := finalWebhook(t, api, pendingWebhookRequest(securityStepDone()))
 	stubRequester(api)
@@ -677,6 +686,8 @@ func TestHandleWebhookAction_CreateFailureRestoresAndRepaintsCard(t *testing.T) 
 
 	api.On("KVGet", kvApprovalCardsPrefix+"r1").Return(nil, nil).Maybe()
 	resp := runAsAdmin(t, p, webhookActionHandler, true)
+
+	require.Equal(t, []string{eventApproveFailed}, eventNames(*events))
 
 	require.Contains(t, resp.EphemeralText, "Couldn't create the webhook: hooks are off.")
 	require.NotNil(t, resp.Update)
@@ -696,6 +707,7 @@ func TestHandleWebhookAction_UndeliverableURLRemovalFailureAsksAdmin(t *testing.
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
+	events := captureAudit(p)
 	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) { return "msg", "hook1", nil }
 	var deleted string
 	p.deleteWebhookFn = func(_ string, hookID string) error {
@@ -716,4 +728,6 @@ func TestHandleWebhookAction_UndeliverableURLRemovalFailureAsksAdmin(t *testing.
 	require.Contains(t, resp.Update.Message, "could not be removed automatically")
 	require.Equal(t, "hook1", deleted)
 	api.AssertCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
+	require.Equal(t, []string{eventUndelivered}, eventNames(*events))
+	require.Equal(t, false, (*events)[0].Detail["removed"])
 }

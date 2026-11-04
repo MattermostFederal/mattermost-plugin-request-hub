@@ -42,7 +42,10 @@ type teamAdminRequest struct {
 // submitTeamAdminRequest validates the input, stores a pending request and
 // posts it to the team-requests approval channel. Requests from System Admins
 // queue too.
-func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs []string) (string, error) {
+func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs []string) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindTeamAdmin, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeTeamAdmin) {
 		return "", errors.New(teamAdminRequestsDisabledMsg)
 	}
@@ -90,6 +93,7 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindTeamAdmin, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -99,6 +103,7 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 		p.API.LogError("failed to store team admin request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamAdminRequestPrefix + req.ID)
@@ -149,8 +154,8 @@ func (p *Plugin) sendTeamAdminTicketCreatedDM(req *teamAdminRequest, requester *
 // grants the team_admin scheme role. After promotion it reseeds the per-team
 // channel-requests channel: UserHasJoinedTeam only runs on join, not when an
 // existing member is promoted, so newly minted Team Admins would otherwise
-// never see that channel.
-func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) {
+// never see that channel. It returns the nominees who couldn't be promoted.
+func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) (failed []string) {
 	for _, userID := range req.NomineeIDs {
 		if userID == "" {
 			continue
@@ -160,9 +165,11 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) {
 		}
 		if _, appErr := p.API.UpdateTeamMemberRoles(req.TeamID, userID, teamAdminRoles); appErr != nil {
 			p.API.LogWarn("failed to promote nominee to team admin", "team_id", req.TeamID, "user_id", userID, "error", appErr.Error())
+			failed = append(failed, userID)
 		}
 	}
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)
+	return failed
 }
 
 // postTeamAdminApprovalRequest posts to the team requests approval channel,

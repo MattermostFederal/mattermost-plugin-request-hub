@@ -43,6 +43,9 @@ type threadAnchor struct {
 	// ScopeID is the channel ID for channel-admin tickets so Team Admins of
 	// that channel's team can relay. Unused for other kinds.
 	ScopeID string `json:"s,omitempty"`
+	// RequestID is the request the thread belongs to, so relayed messages
+	// are audited against it. Empty on anchors written before auditing.
+	RequestID string `json:"r,omitempty"`
 }
 
 // storeTicketLookups writes the two reverse-lookup KV entries that let
@@ -147,12 +150,13 @@ func (p *Plugin) forwardDMReplyToTicketThread(post *model.Post, rawAnchor []byte
 		return
 	}
 
-	_, _ = p.API.CreatePost(&model.Post{
+	_, relayErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
 		ChannelId: anchor.ApprovalChannelID,
 		RootId:    anchor.ApprovalPostID,
 		Message:   fmt.Sprintf("**Reply from @%s:**\n%s", poster.Username, quotedText(post.Message)),
 	})
+	p.auditRelay(anchor, post, poster, "requester_to_approvers", relayErr, "")
 }
 
 // quotedText renders a requester's message as typed, as a blockquote, so it
@@ -176,15 +180,52 @@ func (p *Plugin) forwardThreadReplyToRequesterDM(post *model.Post, rawAnchor []b
 		return
 	}
 	if !p.canRelayApprovalThreadReply(poster, anchor) {
+		p.auditRelay(anchor, post, poster, "approvers_to_requester", nil, "the poster isn't an approver of this request, so it stayed in the approval thread")
 		return
 	}
 
-	_, _ = p.API.CreatePost(&model.Post{
+	_, relayErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
 		ChannelId: anchor.DMChannelID,
 		RootId:    anchor.DMRootPostID,
 		Message:   fmt.Sprintf("**Message from @%s:** %s", poster.Username, post.Message),
 	})
+	p.auditRelay(anchor, post, poster, "approvers_to_requester", relayErr, "")
+}
+
+// auditRelay records a ticket thread message with its full text: relayed
+// in direction, or dropped because relayErr is set or for dropped's reason.
+func (p *Plugin) auditRelay(anchor threadAnchor, post *model.Post, poster *model.User, direction string, relayErr *model.AppError, dropped string) {
+	kind := anchor.Kind
+	if kind == requestTypeChannelAdmin {
+		kind = pendingKindAdmin
+	}
+	if relayErr != nil {
+		dropped = "it could not be relayed: " + relayErr.Error()
+	}
+	e := auditEntry{
+		Event:        eventMessageRelayed,
+		Kind:         kind,
+		RequestID:    anchor.RequestID,
+		ActorID:      poster.Id,
+		ActorName:    poster.Username,
+		ThreadPostID: anchor.ApprovalPostID,
+		Detail: map[string]any{
+			"direction": direction,
+			"post_id":   post.Id,
+			"thread_id": post.RootId,
+			"message":   post.Message,
+		},
+		// The text is kept once, in Detail; the card quotes it.
+		Note: fmt.Sprintf("@%s wrote in a %s ticket thread", poster.Username, kindLabel(kind)),
+	}
+	if dropped != "" {
+		e.Event = eventMessageDropped
+		e.Detail["reason"] = dropped
+		e.Note = fmt.Sprintf("A message from @%s in a %s ticket thread was not relayed (%s)", poster.Username, kindLabel(kind), dropped)
+	}
+	e.CardText = e.Note + ":\n" + quotedText(post.Message)
+	p.recordEvent(e)
 }
 
 // canRelayApprovalThreadReply mirrors Approve-button authz for the ticket kind

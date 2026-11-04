@@ -203,11 +203,12 @@ func TestHandleTeamMemberAction_ApproveReportsEachOutcome(t *testing.T) {
 		nominees []string
 		failing  map[string]bool
 		want     string
+		event    string
 	}{
-		{name: "all added", nominees: []string{"n1", "n2"}, want: "Added @n1, @n2 to **Ops**."},
-		{name: "some fail", nominees: []string{"n1", "n2"}, failing: map[string]bool{"n2": true}, want: "Added @n1 to **Ops**. Failed for @n2."},
-		{name: "all fail", nominees: []string{"n1"}, failing: map[string]bool{"n1": true}, want: "but could not add @n1 to **Ops**."},
-		{name: "nobody to add", want: "No users were added to **Ops**."},
+		{name: "all added", nominees: []string{"n1", "n2"}, want: "Added @n1, @n2 to **Ops**.", event: eventApproved},
+		{name: "some fail", nominees: []string{"n1", "n2"}, failing: map[string]bool{"n2": true}, want: "Added @n1 to **Ops**. Failed for @n2.", event: eventApprovedPartial},
+		{name: "all fail", nominees: []string{"n1"}, failing: map[string]bool{"n1": true}, want: "but could not add @n1 to **Ops**.", event: eventApprovedPartial},
+		{name: "nobody to add", want: "No users were added to **Ops**.", event: eventApproved},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,6 +217,7 @@ func TestHandleTeamMemberAction_ApproveReportsEachOutcome(t *testing.T) {
 			stubLogs(api)
 			p := newTestPlugin(api)
 
+			events := captureAudit(p)
 			raw := mustMarshal(t, &teamMemberRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", NomineeIDs: tc.nominees, ApprovalPostID: "post1"})
 			stubSystemAdmin(api)
 			stubRequester(api)
@@ -238,6 +240,7 @@ func TestHandleTeamMemberAction_ApproveReportsEachOutcome(t *testing.T) {
 			require.NotNil(t, resp.Update)
 			require.Contains(t, resp.Update.Message, "Approved by @admin for @reqer")
 			require.Contains(t, resp.Update.Message, tc.want)
+			require.Equal(t, []string{tc.event}, eventNames(*events))
 			api.AssertCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
 		})
 	}
@@ -301,6 +304,7 @@ func TestHandleTeamGuestAction_InviteFailureRestoresRequest(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
+	events := captureAudit(p)
 	stubSiteURL(api, ts.URL)
 
 	raw := mustMarshal(t, &teamGuestRequest{ID: "r1", RequesterID: "u_req", TeamID: "team1", Email: "g@example.com", ApprovalPostID: "post1"})
@@ -319,6 +323,7 @@ func TestHandleTeamGuestAction_InviteFailureRestoresRequest(t *testing.T) {
 	require.Nil(t, resp.Update)
 	api.AssertCalled(t, "KVSet", kvTeamGuestRequestPrefix+"r1", raw)
 	api.AssertNotCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
+	require.Equal(t, []string{eventApproveFailed}, eventNames(*events))
 }
 
 func TestHandleTeamGuestAction_DenySendsNoInvite(t *testing.T) {
@@ -373,6 +378,7 @@ func TestHandleTeamAction_CreateFailureKeepsRequestPending(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
+	events := captureAudit(p)
 
 	raw := mustMarshal(t, &teamCreationRequest{ID: "r1", RequesterID: "u_req", Name: "ops", DisplayName: "Ops", ApprovalPostID: "post1"})
 	stubSystemAdmin(api)
@@ -389,6 +395,7 @@ func TestHandleTeamAction_CreateFailureKeepsRequestPending(t *testing.T) {
 	require.Nil(t, resp.Update)
 	api.AssertCalled(t, "KVSet", kvTeamRequestPrefix+"r1", mock.Anything)
 	api.AssertNotCalled(t, "KVDelete", kvApprovalCardsPrefix+"r1")
+	require.Equal(t, []string{eventApproveFailed}, eventNames(*events))
 }
 
 func TestHandleTeamAction_DenyCreatesNoTeam(t *testing.T) {

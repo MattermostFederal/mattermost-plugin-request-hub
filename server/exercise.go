@@ -1423,6 +1423,11 @@ func (p *Plugin) seedRequest(s exerciseSeed, made func(change func(*exerciseMani
 			Kind: pendingKindRequestType(s.kind), ScopeID: s.scopeID,
 		},
 	})
+	p.recordEvent(auditEntry{
+		Event: eventExerciseSeeded, Kind: s.kind, RequestID: id, RequesterID: requesterID, Exercise: true,
+		Snapshot: s.record, ThreadPostID: approvalPostID,
+		Note: fmt.Sprintf("Exercise mode seeded a %s request", kindLabel(s.kind)),
+	})
 	keys := exerciseRequestKeys(id, approvalPostID, dmRootPostID)
 	return made(func(m *exerciseManifest) {
 		m.Done[s.opKey] = id
@@ -1830,6 +1835,10 @@ func (p *Plugin) removeExerciseRequest(kind, requestID string) (bool, error) {
 		return false, nil
 	}
 	p.releasePending(kind, rec.RequesterID, requestID)
+	p.recordEvent(auditEntry{
+		Event: eventExerciseRemoved, Kind: kind, RequestID: requestID, RequesterID: rec.RequesterID, Exercise: true,
+		Note: fmt.Sprintf("Exercise teardown removed a pending %s request", kindLabel(kind)),
+	})
 	p.closeRemovedExerciseRequest(newDecisionCards(requestID, "", rec.ApprovalPostID), rec.RequesterID, rec.DMRootPostID, rec.DMChannelID)
 	for _, key := range exerciseRequestKeys(requestID, rec.ApprovalPostID, rec.DMRootPostID) {
 		if appErr := p.API.KVDelete(key); appErr != nil {

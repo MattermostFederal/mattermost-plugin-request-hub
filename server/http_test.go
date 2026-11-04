@@ -1138,7 +1138,7 @@ var (
 	}
 	lookupRoutes = []string{
 		routePrefixes, routeTeams, routeChannels, routeUserAutocomplete,
-		routeSidebarCategories, routeConfig,
+		routeSidebarCategories, routeConfig, routeAuditExport,
 	}
 	actionRoutes = []string{
 		routeApprove, routeDeny, routeApproveAdmin, routeDenyAdmin,
@@ -1688,7 +1688,7 @@ func TestHandleAction_DenyWithUnknownRequesterAuditsByID(t *testing.T) {
 	require.Contains(t, auditCard.Text, "from user u_req")
 	api.AssertNotCalled(t, "CreateChannel", mock.Anything)
 	api.AssertCalled(t, "LogWarn", "failed to open DM for card notification", "user_id", "u_req", "error", mock.Anything)
-	api.AssertCalled(t, "LogWarn", "audit post failed", "channel_id", "audit", "error", mock.Anything)
+	api.AssertCalled(t, "LogError", "audit post failed", "channel_id", "audit", "error", mock.Anything)
 }
 
 func TestHandleAdminAction_ErrorPaths(t *testing.T) {
