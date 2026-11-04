@@ -5,12 +5,14 @@ import type {Store} from 'redux';
 import type {PluginRegistry} from 'types/mattermost-webapp';
 
 import {TeamPicker} from './ApprovalChannelPicker';
+import {AuditHistoryModal} from './AuditHistoryModal';
 import {installChannelCreationOverride} from './channelCreationOverride';
 import {fetchEnabledRequestTypes} from './client';
 import {HeaderIcon} from './HeaderIcon';
 import {installIntegrationsPageOverride} from './integrationsPageOverride';
 import {installMembersPanelButton} from './membersPanelButton';
 import {PrefixEditor} from './PrefixEditor';
+import {RequestAuditExportModal} from './RequestAuditExportModal';
 import {RequestBotModal} from './RequestBotModal';
 import {RequestChannelAdminModal} from './RequestChannelAdminModal';
 import {RequestChannelModal} from './RequestChannelModal';
@@ -56,6 +58,8 @@ export default class Plugin {
         registry.registerRootComponent(RequestBotModal);
         registry.registerRootComponent(RequestIncomingWebhookModal);
         registry.registerRootComponent(RequestOutgoingWebhookModal);
+        registry.registerRootComponent(AuditHistoryModal);
+        registry.registerRootComponent(RequestAuditExportModal);
 
         // Each feature is installed independently and defensively: a throw in
         // one (e.g. a DOM hack that trips over unexpected markup) must not abort

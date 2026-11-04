@@ -129,8 +129,8 @@ func (p *Plugin) recordFirstApproval(c decisionCards, key string, raw []byte, up
 		who = "@" + c.subject.actor.Username
 	}
 	c.subject.snapshot = updated
-	p.decisionEvent(c, eventStepApproved, fmt.Sprintf("%s gave the %s approval for a %s request; it now needs the other approval",
-		who, step, kindLabel(c.subject.kind)), map[string]any{"step": step.String()})
+	p.decisionEvent(c, eventStepApproved, fmt.Sprintf("%s gave the %s approval for %s request; it now needs the other approval",
+		who, step, aKind(c.subject.kind)), map[string]any{"step": step.String()})
 	p.notifyTicketProgress(progress)
 	reply := ""
 	if c.clickedPostID == "" {

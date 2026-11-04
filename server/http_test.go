@@ -1136,20 +1136,23 @@ var (
 		routeSubmitBotWebapp, routeSubmitIncomingWebhookWebapp,
 		routeSubmitOutgoingWebhookWebapp,
 	}
-	lookupRoutes = []string{
+	// untoggledSubmitRoutes take requests of a type with no admin toggle.
+	untoggledSubmitRoutes = []string{routeSubmitAuditExportWebapp}
+	lookupRoutes          = []string{
 		routePrefixes, routeTeams, routeChannels, routeUserAutocomplete,
-		routeSidebarCategories, routeConfig, routeAuditExport,
+		routeSidebarCategories, routeConfig, routeAuditExport, routeAuditRequests, routeAuditRequest, routeAuditAccess,
 	}
 	actionRoutes = []string{
 		routeApprove, routeDeny, routeApproveAdmin, routeDenyAdmin,
 		routeApproveTeam, routeDenyTeam, routeApproveTeamAdmin, routeDenyTeamAdmin,
 		routeApproveTeamMember, routeDenyTeamMember, routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot, routeApproveWebhook, routeDenyWebhook,
+		routeApproveAuditExport, routeDenyAuditExport,
 	}
 )
 
 func allRoutes() []string {
-	return append(append(append([]string{}, submitRoutes...), lookupRoutes...), actionRoutes...)
+	return append(append(append(append([]string{}, submitRoutes...), untoggledSubmitRoutes...), lookupRoutes...), actionRoutes...)
 }
 
 // TestServeHTTP_RouteListsMatchDispatch keeps the route lists above in step

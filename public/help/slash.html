@@ -58,7 +58,7 @@
                 <tr><td><a href="#list-approvals"><code>/mattermost-request-hub list approvals</code></a></td><td>For approvers: lists the pending requests you can approve, with their IDs.</td></tr>
                 <tr><td><a href="#approve"><code>/mattermost-request-hub approve &lt;request ID&gt;</code></a></td><td>For approvers: approves a request of any type, as its Approve button would.</td></tr>
                 <tr><td><a href="#deny"><code>/mattermost-request-hub deny &lt;request ID&gt;</code></a></td><td>For approvers: denies a request of any type, as its Deny button would.</td></tr>
-                <tr><td><a href="#audit"><code>/mattermost-request-hub audit &lt;request ID&gt;|recent</code></a></td><td>For System Admins: shows everything that happened to a request, or lists the latest requests with links to export the whole audit history.</td></tr>
+                <tr><td><a href="#audit"><code>/mattermost-request-hub audit &lt;request ID&gt;|recent|export</code></a></td><td>For System Admins: shows everything that happened to a request, lists the latest requests, or links to download the whole audit history. Security approvers can ask for a copy with <code>export</code>.</td></tr>
                 <tr><td><a href="#exercise"><code>/mattermost-request-hub exercise populate|teardown|status</code></a></td><td>For System Admins, when exercise mode is on: seeds, removes or reports marked exercise data in this team.</td></tr>
                 <tr><td><a href="#team"><code>/mattermost-request-hub team</code></a></td><td>Opens the Request a Team form, or with arguments requests a new team without it.</td></tr>
                 <tr><td><a href="#team-admin"><code>/mattermost-request-hub team-admin</code></a></td><td>Opens the Request Team Admin form, or with <code>@user</code> names asks for those team members to be made Team Admins of the current team.</td></tr>
@@ -245,9 +245,12 @@
 
         <h2 id="audit"><code>/mattermost-request-hub audit</code></h2>
 <pre><code>/mattermost-request-hub audit &lt;request ID&gt;
-/mattermost-request-hub audit recent [count]</code></pre>
+/mattermost-request-hub audit recent [count]
+/mattermost-request-hub audit export [csv|json]</code></pre>
         <p>
-            Only System Admins can run it. The plugin keeps a history of every request: when it was submitted,
+            System Admins can run all of it. A security approver who isn't a System Admin can run
+            <code>audit export</code>, which asks the System Admins for a copy instead (see
+            <a href="troubleshooting.html#audit">Audit trail</a>). The plugin keeps a history of every request: when it was submitted,
             each approval step, the decision, failures and retries, expiry, every message relayed in its ticket
             threads, and token reminders. The history is kept after the request is decided, and nothing deletes it.
         </p>
@@ -256,6 +259,7 @@
             <tbody>
                 <tr><td><code>&lt;request ID&gt;</code></td><td>Shows the request's status and its events, oldest first, with who did each one. The ID is on the approval card and in <code>list</code>. A reply shows at most the last 100 events; the export has them all.</td></tr>
                 <tr><td><code>recent [count]</code></td><td>Lists the most recently updated requests (20 unless you give a count, at most 200), then links to download the whole history as CSV or JSON.</td></tr>
+                <tr><td><code>export [csv|json]</code></td><td>Links to download the whole audit history, every event with all its details and the full text of ticket thread messages. For a security approver who isn't a System Admin, it sends a request for a copy instead (CSV unless you say <code>json</code>); the file is posted in their request thread once a System Admin approves.</td></tr>
             </tbody>
         </table>
         <p>See <a href="troubleshooting.html#audit">Audit trail</a> for what is recorded and where.</p>

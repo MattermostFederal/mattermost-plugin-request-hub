@@ -203,7 +203,7 @@ Events go to three places:
 
 | Where | What it is | Who can see it |
 |-------|------------|----------------|
-| Request history | A record per request in the plugin's KV store, kept after the request is decided. Nothing deletes it. | System Admins, with `/mattermost-request-hub audit <request ID>` and `audit recent`, and the export below |
+| Request history | A record per request in the plugin's KV store, kept after the request is decided. Nothing deletes it. | System Admins, in **Audit history** in the Request Hub, with `/mattermost-request-hub audit`, and the export below. Security approvers can ask for a copy (see [Audit export requests](#audit-export-requests)). |
 | Server audit log | One `requesthub_<event>` record per event (for example `requesthub_submitted`, `requesthub_approved`), with the actor, request ID, kind, requester and details. Failed events have status `fail`. | Wherever your server's audit logging sends records. Audit logging must be turned on for the server. |
 | `mattermost-audit-requests` | Cards people can read, as chosen by **Audit channel detail** | Members of the audit channel |
 
@@ -216,14 +216,23 @@ The plugin sends its records through the server's own audit logger, so they go w
 
 Changes to these settings need a server restart. Every record from the plugin has `event_name` starting with `requesthub_` and a `plugin_id` parameter of `com.mattermostfederal.mattermost-plugin-request-hub`, so a SIEM can filter on either.
 
+### Audit history in the Request Hub
+
+System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. Download buttons give the whole history, every request of one type, or one request, as CSV or JSON.
+
+### Audit export requests
+
+Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead, and `/mattermost-request-hub audit export [csv|json]` sends the same request. They choose CSV or JSON and can narrow it to one request type, one requester or a date range. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
+
 ### Exporting
 
 System Admins can download the whole request history from `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/audit/export`. `audit recent` links to it. The export is a `GET` with these optional parameters:
 
 | Parameter | Values |
 |-----------|--------|
-| `format` | `json` (default): one object per request, with its events. `csv`: one row per event. |
-| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook` |
+| `format` | `json` (default): one object per request, with its events. `csv`: one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. |
+| `request` | One request ID |
+| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` |
 | `requester` | A requester's user ID |
 | `since`, `until` | Unix time in milliseconds |
 
@@ -379,6 +388,7 @@ The plugin records which team **Approval team** named the first time it was used
 | Bot account (+ token + webhooks) | More actions, Integrations page | `mattermost-bot-requests` | Two-step: security, then system |
 | Incoming webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
 | Outgoing webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
+| Audit export | Request Hub, `audit export` (security approvers who aren't System Admins) | `mattermost-audit-requests` | System Admins |
 
 Every request is queued for approval, including requests from System Admins.
 

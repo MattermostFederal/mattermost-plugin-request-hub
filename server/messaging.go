@@ -217,12 +217,12 @@ func (p *Plugin) auditRelay(anchor threadAnchor, post *model.Post, poster *model
 			"message":   post.Message,
 		},
 		// The text is kept once, in Detail; the card quotes it.
-		Note: fmt.Sprintf("@%s wrote in a %s ticket thread", poster.Username, kindLabel(kind)),
+		Note: fmt.Sprintf("@%s wrote in %s ticket thread", poster.Username, aKind(kind)),
 	}
 	if dropped != "" {
 		e.Event = eventMessageDropped
 		e.Detail["reason"] = dropped
-		e.Note = fmt.Sprintf("A message from @%s in a %s ticket thread was not relayed (%s)", poster.Username, kindLabel(kind), dropped)
+		e.Note = fmt.Sprintf("A message from @%s in %s ticket thread was not relayed (%s)", poster.Username, aKind(kind), dropped)
 	}
 	e.CardText = e.Note + ":\n" + quotedText(post.Message)
 	p.recordEvent(e)

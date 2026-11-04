@@ -7,6 +7,8 @@ import type {Reducer} from 'redux';
 import reducer, {
     openAdminRequestModal,
     openBotRequestModal,
+    openAuditExportRequestModal,
+    openAuditHistoryModal,
     openHubModal,
     openIncomingWebhookModal,
     openOutgoingWebhookModal,
@@ -60,6 +62,8 @@ const reopeners = {
     'team guest': openTeamGuestRequestModal,
     bot: openBotRequestModal,
     hub: openHubModal,
+    'audit history': openAuditHistoryModal,
+    'audit export request': openAuditExportRequestModal,
     incoming: openIncomingWebhookModal,
     outgoing: openOutgoingWebhookModal,
 };

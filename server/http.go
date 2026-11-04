@@ -59,7 +59,13 @@ const (
 	routeSubmitOutgoingWebhookWebapp = "/api/v1/submit_outgoing_webhook_request"
 	routeSidebarCategories           = "/api/v1/sidebar_categories" // ?team_id=... — list caller's sidebar categories
 	routeConfig                      = "/api/v1/config"
-	routeAuditExport                 = "/api/v1/audit/export" // every request history as CSV or JSON, System Admins only
+	routeAuditExport                 = "/api/v1/audit/export"   // every request history as CSV or JSON, System Admins only
+	routeAuditRequests               = "/api/v1/audit/requests" // the audit history list for the webapp, System Admins only
+	routeAuditRequest                = "/api/v1/audit/request"  // one request's history for the webapp, ?id=..., System Admins only
+	routeAuditAccess                 = "/api/v1/audit/access"   // whether the caller may view the audit history or request a copy
+	routeSubmitAuditExportWebapp     = "/api/v1/submit_audit_export_request"
+	routeApproveAuditExport          = "/api/v1/approve_audit_export"
+	routeDenyAuditExport             = "/api/v1/deny_audit_export"
 
 	// fieldPrefix is the dialog element name for the domain-prefix
 	// dropdown. Kept alongside the other field* constants in request.go.
@@ -110,6 +116,18 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	switch r.URL.Path {
 	case routeAuditExport:
 		p.handleAuditExport(w, r)
+	case routeAuditRequests:
+		p.handleAuditRequests(w, r)
+	case routeAuditRequest:
+		p.handleAuditRequest(w, r)
+	case routeAuditAccess:
+		p.handleAuditAccess(w, r)
+	case routeSubmitAuditExportWebapp:
+		p.handleSubmitAuditExportWebapp(w, r)
+	case routeApproveAuditExport:
+		p.handleDecisionClick(w, r, true, p.deciderFor(pendingKindAuditExport))
+	case routeDenyAuditExport:
+		p.handleDecisionClick(w, r, false, p.deciderFor(pendingKindAuditExport))
 	case routeDialog:
 		p.handleDialogSubmit(w, r)
 	case routeCreate:
@@ -235,7 +253,8 @@ func isPostActionPath(path string) bool {
 		routeApproveTeamMember, routeDenyTeamMember,
 		routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot,
-		routeApproveWebhook, routeDenyWebhook:
+		routeApproveWebhook, routeDenyWebhook,
+		routeApproveAuditExport, routeDenyAuditExport:
 		return true
 	default:
 		return false

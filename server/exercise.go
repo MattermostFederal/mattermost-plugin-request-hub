@@ -1426,7 +1426,7 @@ func (p *Plugin) seedRequest(s exerciseSeed, made func(change func(*exerciseMani
 	p.recordEvent(auditEntry{
 		Event: eventExerciseSeeded, Kind: s.kind, RequestID: id, RequesterID: requesterID, Exercise: true,
 		Snapshot: s.record, ThreadPostID: approvalPostID,
-		Note: fmt.Sprintf("Exercise mode seeded a %s request", kindLabel(s.kind)),
+		Note: fmt.Sprintf("Exercise mode seeded %s request", aKind(s.kind)),
 	})
 	keys := exerciseRequestKeys(id, approvalPostID, dmRootPostID)
 	return made(func(m *exerciseManifest) {

@@ -409,7 +409,7 @@ func (p *Plugin) claimRecord(kvKey string, raw []byte, cards decisionCards, what
 func (p *Plugin) lostRequest(cards decisionCards, kind, requesterID, actingUsername, reply string) decisionResult {
 	p.releasePending(kind, requesterID, cards.requestID)
 	lost := fmt.Sprintf("⚠️ Approval by @%s failed and the request could not be kept. Ask the requester to submit it again.", actingUsername)
-	p.decisionEvent(cards, eventLost, fmt.Sprintf("@%s approved a %s request, but it failed and the request could not be kept: %s", actingUsername, kindLabel(kind), reply),
+	p.decisionEvent(cards, eventLost, fmt.Sprintf("@%s approved %s request, but it failed and the request could not be kept: %s", actingUsername, aKind(kind), reply),
 		map[string]any{"error": reply})
 	p.resolveApprovalCards(cards.requestID, lost, cards.cardPostID)
 	p.deleteApprovalCards(cards.requestID)

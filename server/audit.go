@@ -442,17 +442,26 @@ func (p *Plugin) auditedDecider(kind string, d decider) decider {
 			Detail:       map[string]any{"action": action, "reason": reason, "via": decisionVia(clickedPostID)},
 			ThreadPostID: clickedPostID,
 		}
-		e.Note = fmt.Sprintf("User %s could not %s a %s request: %s", actingUserID, action, kindLabel(kind), reason)
+		e.Note = fmt.Sprintf("User %s could not %s %s request: %s", actingUserID, action, aKind(kind), reason)
 		// Only the "all" level posts refusals; name the user on that card.
 		// The history keeps the ID, whatever the setting.
 		if p.getConfiguration().AuditChannelLevel() >= auditLevelAll {
 			if user, appErr := p.API.GetUser(actingUserID); appErr == nil && user != nil {
-				e.CardText = fmt.Sprintf("@%s could not %s a %s request: %s", user.Username, action, kindLabel(kind), reason)
+				e.CardText = fmt.Sprintf("@%s could not %s %s request: %s", user.Username, action, aKind(kind), reason)
 			}
 		}
 		p.recordEvent(e)
 		return res
 	}
+}
+
+// aKind is kindLabel with its article: "a bot account", "an audit export".
+func aKind(kind string) string {
+	label := kindLabel(kind)
+	if label != "" && strings.ContainsRune("aeiouAEIOU", rune(label[0])) {
+		return "an " + label
+	}
+	return "a " + label
 }
 
 // kindLabel names a pending kind in audit lines.
@@ -474,6 +483,8 @@ func kindLabel(kind string) string {
 		return "bot account"
 	case pendingKindWebhook:
 		return "webhook"
+	case pendingKindAuditExport:
+		return "audit export"
 	default:
 		return kind
 	}
@@ -535,21 +546,21 @@ func (s *submitAudit) finish(err error) {
 		e.Snapshot = s.req
 		e.Exercise, approvalPostID = requestMarkers(s.req)
 	}
-	label := kindLabel(s.kind)
+	label := aKind(s.kind)
 	who := userRef(s.actorID, s.actorName)
 	switch {
 	case err == nil:
 		e.Event = eventSubmitted
-		e.Note = fmt.Sprintf("%s submitted a %s request", who, label)
+		e.Note = fmt.Sprintf("%s submitted %s request", who, label)
 		e.ThreadPostID = approvalPostID
 	case s.stored:
 		e.Event = eventSubmitFailed
-		e.Note = fmt.Sprintf("A %s request from %s could not be sent to the approvers and was withdrawn: %s", label, who, escapeMarkdown(err.Error()))
+		e.Note = fmt.Sprintf("%s request from %s could not be sent to the approvers and was withdrawn: %s", capitalize(label), who, escapeMarkdown(err.Error()))
 		e.At = 0 // when it was withdrawn
 		e.Detail = map[string]any{"error": err.Error()}
 	default:
 		e.Event = eventSubmitRefused
-		e.Note = fmt.Sprintf("A %s request from %s was refused: %s", label, who, escapeMarkdown(err.Error()))
+		e.Note = fmt.Sprintf("%s request from %s was refused: %s", capitalize(label), who, escapeMarkdown(err.Error()))
 		e.Detail = map[string]any{"reason": err.Error()}
 		// Nothing was stored, so there is no request to keep a copy of.
 		e.Snapshot = nil

@@ -53,6 +53,8 @@ test.describe('plugin entry point', () => {
             'RequestBotModal',
             'RequestIncomingWebhookModal',
             'RequestOutgoingWebhookModal',
+            'AuditHistoryModal',
+            'RequestAuditExportModal',
         ]);
         expect(r.called.filter((c) => c === 'registerChannelHeaderButtonAction')).toHaveLength(1);
         expect(r.menus.map((m) => m.text)).toEqual([

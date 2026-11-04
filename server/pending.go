@@ -23,6 +23,8 @@ const (
 	pendingKindTeamGuest  = requestTypeTeamGuest
 	pendingKindBot        = requestTypeBot
 	pendingKindWebhook    = requestTypeWebhook
+	// pendingKindAuditExport is a request for a copy of the audit history.
+	pendingKindAuditExport = requestTypeAuditExport
 
 	// pendingUpdateAttempts bounds the compare-and-set retries when the
 	// same user's list is being updated at the same time.
@@ -114,6 +116,13 @@ var pendingKinds = map[string]pendingKindInfo{
 		duplicate: func(key string) error {
 			webhookType, _, _ := strings.Cut(key, "/")
 			return errors.Errorf("you already have a pending %s webhook request with this name in this channel", webhookType)
+		},
+	},
+	pendingKindAuditExport: {
+		kvPrefix:  kvAuditExportRequestPrefix,
+		newRecord: func() storedRequest { return &auditExportRequest{} },
+		duplicate: func(string) error {
+			return errors.New("you already have a pending request for this audit export")
 		},
 	},
 }

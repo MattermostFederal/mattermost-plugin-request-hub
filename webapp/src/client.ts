@@ -389,3 +389,126 @@ export async function submitAdminRequest(payload: AdminRequestPayload): Promise<
 
     return body;
 }
+
+// AuditAccess says what the user may do with the audit history: System
+// Admins view and download it; security approvers ask for a copy.
+export type AuditAccess = {
+    can_view: boolean;
+    can_request: boolean;
+};
+
+// fetchAuditAccess fails closed: on any error neither entry point shows.
+export async function fetchAuditAccess(): Promise<AuditAccess> {
+    try {
+        const response = await fetch(`/plugins/${manifest.id}/api/v1/audit/access`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!response.ok) {
+            return {can_view: false, can_request: false};
+        }
+        const body = await response.json();
+        return {can_view: Boolean(body?.can_view), can_request: Boolean(body?.can_request)};
+    } catch {
+        return {can_view: false, can_request: false};
+    }
+}
+
+export type AuditRequestSummary = {
+    request_id: string;
+    kind: string;
+    kind_label: string;
+    title: string;
+    status: string;
+    requester_id: string;
+    requester_username?: string;
+    created_at: number;
+    updated_at: number;
+    event_count: number;
+    last_event: string;
+    exercise?: boolean;
+};
+
+export type AuditEvent = {
+    at: number;
+    event: string;
+    actor_id?: string;
+    actor_name?: string;
+    outcome: string;
+    note?: string;
+    detail?: Record<string, unknown>;
+};
+
+export type AuditHistory = {
+    request_id: string;
+    kind: string;
+    requester_id?: string;
+    created_at: number;
+    updated_at: number;
+    status: string;
+    exercise?: boolean;
+    request?: Record<string, unknown>;
+    events: AuditEvent[];
+};
+
+export type AuditListQuery = {
+    q?: string;
+    kind?: string;
+    status?: string;
+    page?: number;
+    perPage?: number;
+};
+
+function auditQuery(params: Record<string, string | number | undefined>): string {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== '') {
+            search.set(key, String(value));
+        }
+    }
+    const text = search.toString();
+    return text ? `?${text}` : '';
+}
+
+async function getAuditJSON<T>(path: string): Promise<T> {
+    const response = await fetch(`/plugins/${manifest.id}${path}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error((await response.text()).trim() || `Request failed (${response.status})`);
+    }
+    return response.json() as Promise<T>;
+}
+
+// fetchAuditRequests returns a page of the audit history list, newest
+// activity first. System Admins only; throws on any failure.
+export function fetchAuditRequests(query: AuditListQuery): Promise<{total: number; requests: AuditRequestSummary[]}> {
+    return getAuditJSON(`/api/v1/audit/requests${auditQuery({q: query.q, kind: query.kind, status: query.status, page: query.page, per_page: query.perPage})}`);
+}
+
+// fetchAuditHistory returns one request's whole history. System Admins only.
+export function fetchAuditHistory(requestId: string): Promise<{summary: AuditRequestSummary; requester_username: string; history: AuditHistory}> {
+    return getAuditJSON(`/api/v1/audit/request${auditQuery({id: requestId})}`);
+}
+
+// auditExportURL is the download link for the export, as CSV or JSON,
+// narrowed to one request or one kind when given.
+export function auditExportURL(format: 'csv' | 'json', filter: {request?: string; kind?: string} = {}): string {
+    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({format, request: filter.request, kind: filter.kind})}`;
+}
+
+export type AuditExportRequestPayload = {
+    format: 'csv' | 'json';
+    kind?: string;
+    requester?: string;
+    since?: number;
+    until?: number;
+    reason?: string;
+};
+
+export async function submitAuditExportRequest(payload: AuditExportRequestPayload): Promise<ChannelRequestResult> {
+    return postJSON('/api/v1/submit_audit_export_request', payload);
+}

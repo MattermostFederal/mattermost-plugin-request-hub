@@ -77,7 +77,7 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Incoming and outgoing webhook requests | `webhook-requests` |✅ |
 | Pending limit, duplicates, double submit, expiry, pruning | `limits-expiry` |✅ |
 | Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` |✅ |
-| Audit trail: history for every event, refusals, messages, audit channel detail, slash timeline, export | `audit` | ✅ |
+| Audit trail: history for every event, refusals, messages, audit channel detail, slash timeline, export, Audit history window, security approver export requests | `audit` | ✅ |
 | Settings toggles and the admin console | `settings` | ⬜ |
 | Webapp modals and menus | `webapp-modals` | ⬜ |
 | Exercise mode | `exercise` | ⬜ |

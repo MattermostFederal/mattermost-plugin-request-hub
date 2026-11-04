@@ -35,6 +35,10 @@ const (
 	requestTypeTeamGuest    = "team_guest"
 	requestTypeWebhook      = "webhook"
 	requestTypeBot          = "bot"
+	// requestTypeAuditExport is a security approver's request for a copy
+	// of the audit history. It has no toggle: who may ask is set by the
+	// security approver pool.
+	requestTypeAuditExport = "audit_export"
 )
 
 // channelPrefix is one entry in the admin-configured list of allowed
@@ -284,6 +288,8 @@ func (c *configuration) RequestEnabled(requestType string) bool {
 		return c.AllowWebhookRequests
 	case requestTypeBot:
 		return c.AllowBotTokenRequests
+	case requestTypeAuditExport:
+		return true
 	default:
 		return false
 	}

@@ -21,6 +21,10 @@ export const OPEN_OUTGOING_WEBHOOK_MODAL = `${manifest.id}_open_outgoing_webhook
 export const CLOSE_OUTGOING_WEBHOOK_MODAL = `${manifest.id}_close_outgoing_webhook_modal`;
 export const OPEN_HUB_MODAL = `${manifest.id}_open_hub_modal`;
 export const CLOSE_HUB_MODAL = `${manifest.id}_close_hub_modal`;
+export const OPEN_AUDIT_HISTORY_MODAL = `${manifest.id}_open_audit_history_modal`;
+export const CLOSE_AUDIT_HISTORY_MODAL = `${manifest.id}_close_audit_history_modal`;
+export const OPEN_AUDIT_EXPORT_REQUEST_MODAL = `${manifest.id}_open_audit_export_request_modal`;
+export const CLOSE_AUDIT_EXPORT_REQUEST_MODAL = `${manifest.id}_close_audit_export_request_modal`;
 
 export const openRequestModal = (): Action => ({type: OPEN_REQUEST_MODAL});
 export const closeRequestModal = (): Action => ({type: CLOSE_REQUEST_MODAL});
@@ -48,6 +52,10 @@ export const openOutgoingWebhookModal = (): Action => ({type: OPEN_OUTGOING_WEBH
 export const closeOutgoingWebhookModal = (): Action => ({type: CLOSE_OUTGOING_WEBHOOK_MODAL});
 export const openHubModal = (): Action => ({type: OPEN_HUB_MODAL});
 export const closeHubModal = (): Action => ({type: CLOSE_HUB_MODAL});
+export const openAuditHistoryModal = (): Action => ({type: OPEN_AUDIT_HISTORY_MODAL});
+export const closeAuditHistoryModal = (): Action => ({type: CLOSE_AUDIT_HISTORY_MODAL});
+export const openAuditExportRequestModal = (): Action => ({type: OPEN_AUDIT_EXPORT_REQUEST_MODAL});
+export const closeAuditExportRequestModal = (): Action => ({type: CLOSE_AUDIT_EXPORT_REQUEST_MODAL});
 
 export type PluginState = {
     modalOpen: boolean;
@@ -64,6 +72,11 @@ export type PluginState = {
     incomingWebhookModalOpen: boolean;
     outgoingWebhookModalOpen: boolean;
     hubModalOpen: boolean;
+
+    // The audit history window (System Admins) and the form security
+    // approvers use to ask for a copy of it.
+    auditHistoryModalOpen: boolean;
+    auditExportRequestModalOpen: boolean;
 };
 
 // GlobalState is a minimal shape of the parts of the Redux store this plugin reads. Plugin state is
@@ -149,6 +162,16 @@ export const isHubModalOpen = (state: GlobalState): boolean => {
     return Boolean(pluginState?.hubModalOpen);
 };
 
+export const isAuditHistoryModalOpen = (state: GlobalState): boolean => {
+    const pluginState = state[`plugins-${manifest.id}`] as PluginState | undefined;
+    return Boolean(pluginState?.auditHistoryModalOpen);
+};
+
+export const isAuditExportRequestModalOpen = (state: GlobalState): boolean => {
+    const pluginState = state[`plugins-${manifest.id}`] as PluginState | undefined;
+    return Boolean(pluginState?.auditExportRequestModalOpen);
+};
+
 // isCurrentUserTeamAdmin returns true when the logged-in user is already a
 // Team Admin (or System Admin) in the given team. Used to hide the
 // "Request Team Admin" menu item for users who already have that role.
@@ -222,6 +245,8 @@ const initialState: PluginState = {
     incomingWebhookModalOpen: false,
     outgoingWebhookModalOpen: false,
     hubModalOpen: false,
+    auditHistoryModalOpen: false,
+    auditExportRequestModalOpen: false,
 };
 
 export default function reducer(state: PluginState = initialState, action: Action): PluginState {
@@ -266,6 +291,14 @@ export default function reducer(state: PluginState = initialState, action: Actio
         return {...state, hubModalOpen: true};
     case CLOSE_HUB_MODAL:
         return {...state, hubModalOpen: false};
+    case OPEN_AUDIT_HISTORY_MODAL:
+        return {...state, auditHistoryModalOpen: true};
+    case CLOSE_AUDIT_HISTORY_MODAL:
+        return {...state, auditHistoryModalOpen: false};
+    case OPEN_AUDIT_EXPORT_REQUEST_MODAL:
+        return {...state, auditExportRequestModalOpen: true};
+    case CLOSE_AUDIT_EXPORT_REQUEST_MODAL:
+        return {...state, auditExportRequestModalOpen: false};
     default:
         return state;
     }

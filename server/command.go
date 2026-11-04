@@ -79,6 +79,7 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(model.NewAutocompleteData(subcommandDeny, requestIDArgHint, "Deny a request by the ID on its approval card"))
 	audit := model.NewAutocompleteData(subcommandAudit, auditArgsHint, "Show a request's audit history, or the latest requests (System Admins)")
 	audit.AddCommand(model.NewAutocompleteData(auditRecent, "[count]", "List the most recently updated requests and the export links"))
+	audit.AddCommand(model.NewAutocompleteData(auditExportSub, "[csv|json]", "Get links to download the whole audit history"))
 	root.AddCommand(audit)
 	exercise := model.NewAutocompleteData(subcommandExercise, "populate|teardown|status", "Seed, remove or report exercise data (System Admins, exercise mode on)")
 	exercise.AddCommand(model.NewAutocompleteData(exercisePopulate, "", "Seed marked exercise data into this team"))
@@ -377,6 +378,7 @@ var helpRows = []helpRow{
 	{"", subcommandDeny + " " + requestIDArgHint, "Deny a request, as its Deny button would"},
 	{"", subcommandAudit + " " + requestIDArgHint, "Show everything that happened to a request (System Admins)"},
 	{"", subcommandAudit + " " + auditRecent + " [count]", "List the most recently updated requests, with links to export the whole audit history (System Admins)"},
+	{"", subcommandAudit + " " + auditExportSub + " [csv|json]", "Get links to download the whole audit history, every event in full (System Admins)"},
 	{"", subcommandExercise + " <populate, teardown or status>", "Seed (`populate`), remove (`teardown`) or report (`status`) marked exercise data in this team (System Admins, when exercise mode is on)"},
 	{requestTypeTeamAdmin, "team-admin", "Request Team Admin role in this team (opens the form)"},
 	{requestTypeTeamAdmin, "team-admin " + teamAdminArgsHint, "Request Team Admin for those members of this team"},
@@ -1050,6 +1052,8 @@ func (p *Plugin) kindDecider(kind string) decider {
 		return p.decideBotRequest
 	case pendingKindWebhook:
 		return p.decideWebhookRequest
+	case pendingKindAuditExport:
+		return p.decideAuditExportRequest
 	default:
 		return nil
 	}
