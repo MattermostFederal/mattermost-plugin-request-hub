@@ -19,6 +19,8 @@ export type BotRequestBody = {
     outgoing_webhook_channel_id?: string;
     outgoing_webhook_display_name?: string;
     outgoing_webhook_callback_url?: string;
+    compliance_accepted?: boolean;
+    compliance_text_hash?: string;
 };
 
 export type SubmitReply = {message?: string; error?: string};
@@ -31,12 +33,18 @@ export type StoredBotRequest = {
     username: string;
     owner_user_id?: string;
     request_token?: boolean;
+    compliance?: {accepted_at: number; text_sha256: string; text: string};
     security_approver_id?: string;
     system_approver_id?: string;
 };
 
+// submitBot accepts the compliance statement, which is required by default,
+// unless body says otherwise.
 export const submitBot = (hub: RequestHub, username: string, body: BotRequestBody) =>
-    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {display_name: 'E2E Bot', ...body});
+    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {display_name: 'E2E Bot', compliance_accepted: true, ...body});
+
+// The slash flag that accepts the compliance statement.
+export const ACCEPT = '--accept-compliance';
 
 // A valid bot username that is unique on the server (3-22 characters).
 export const botName = () => uid('b').slice(0, 22);

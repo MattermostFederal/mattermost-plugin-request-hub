@@ -284,12 +284,14 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         const user = await hub.createUser();
         await expectReplies(hub, user, [
             ['bot onlyname', usage('a bot username and a display name are required', 'bot')],
-            ['bot ab Some Bot', 'Bot username must be 3-22 characters.'],
-            ['bot bad!name Some Bot', 'Bot username must be lowercase letters, numbers, and . - _ (3-22 characters).'],
+            ['bot ab Some Bot --accept-compliance', 'Bot username must be 3-22 characters.'],
+            ['bot bad!name Some Bot --accept-compliance', 'Bot username must be lowercase letters, numbers, and . - _ (3-22 characters).'],
             ['bot goodbot Some Bot --owner @nosuchuser', 'unknown user: `nosuchuser`'],
             ['bot goodbot Some Bot --owner @carol @bob', usage('`--owner` takes exactly one value', 'bot')],
             ['bot goodbot Some Bot --description', usage('`--description` needs some text', 'bot')],
             ['bot goodbot Some Bot --token', usage('unknown option `--token`', 'bot')],
+            ['bot goodbot Some Bot --accept-compliance yes', usage('`--accept-compliance` takes no value', 'bot')],
+            ['bot goodbot Some Bot', /^Bot requests need you to accept this statement:\n\n> By submitting this request I confirm .+\n\nTo accept it, run the command again with `--accept-compliance`\.$/s],
         ]);
         await expectNoRequest(hub, user);
     });
@@ -560,7 +562,7 @@ test.describe('approve and deny by ID', () => {
         const requester = await hub.createUser();
         const botName = uid('bot'); // bot usernames are 3-22 characters
         await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
-            expect(await hub.slash(requester.username, `bot ${botName} Slash Bot --description made by slash`)).toBe(
+            expect(await hub.slash(requester.username, `bot ${botName} Slash Bot --description made by slash --accept-compliance`)).toBe(
                 "Your bot account request has been submitted for approval. It needs a security approval and a system approval. You'll be notified as each step completes.");
             const card = await hub.findCardIn(REQUEST_CHANNELS.bot, botName);
             const id = cardRequestId(card);

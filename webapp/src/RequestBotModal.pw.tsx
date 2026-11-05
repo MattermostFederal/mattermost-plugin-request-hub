@@ -10,7 +10,20 @@ const TITLE = 'Request a Bot Account';
 
 const open = {botRequestModalOpen: true};
 
+const STATEMENT = 'I will use this bot responsibly.';
+const STATEMENT_HASH = 'abc123';
+
+// stubBotForm answers the form's settings request; compliance is off
+// unless asked for.
+async function stubBotForm(page: import('@playwright/test').Page, compliance: {enabled: boolean; text?: string; sha256?: string} = {enabled: false}) {
+    await page.route(`${API}/bot_form`, (route) => route.fulfill({contentType: 'application/json', body: JSON.stringify({compliance})}));
+}
+
 test.describe('RequestBotModal', () => {
+    test.beforeEach(async ({page}) => {
+        await stubBotForm(page);
+    });
+
     test('renders nothing while closed', async ({mount, page}) => {
         await mount(<StoreHarness><RequestBotModal/></StoreHarness>);
         await expect(page.getByText(TITLE)).toBeHidden();
@@ -189,5 +202,74 @@ test.describe('RequestBotModal', () => {
         await expect(page.getByLabel('Bot username')).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(page.getByText(TITLE)).toBeHidden();
+    });
+
+    test.describe('compliance statement', () => {
+        const fillBot = async (page: import('@playwright/test').Page) => {
+            await page.getByLabel('Bot username').fill('helper-bot');
+            await page.getByLabel('Display name').fill('Helper Bot');
+        };
+
+        test('is shown, must be accepted, and its hash is sent', async ({mount, page}) => {
+            await stubBotForm(page, {enabled: true, text: STATEMENT, sha256: STATEMENT_HASH});
+            let sent: Record<string, unknown> = {};
+            await page.route(`${API}/submit_bot_request`, async (route) => {
+                sent = route.request().postDataJSON();
+                await route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'Sent.'})});
+            });
+            await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+            await expect(page.getByTestId('bot-compliance-text')).toHaveText(STATEMENT);
+            await fillBot(page);
+
+            await page.getByRole('button', {name: 'Submit request'}).click();
+            await expect(page.getByRole('alert')).toHaveText('Accept the bot compliance statement to submit this request.');
+            expect(sent).toEqual({});
+
+            await page.getByLabel('I accept the compliance statement above').check();
+            await page.getByRole('button', {name: 'Submit request'}).click();
+            await expect(page.getByText('Sent.')).toBeVisible();
+            expect(sent).toMatchObject({compliance_accepted: true, compliance_text_hash: STATEMENT_HASH});
+        });
+
+        test('is not shown or sent when not required', async ({mount, page}) => {
+            let sent: Record<string, unknown> = {};
+            await page.route(`${API}/submit_bot_request`, async (route) => {
+                sent = route.request().postDataJSON();
+                await route.fulfill({contentType: 'application/json', body: '{}'});
+            });
+            await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+            await fillBot(page);
+            await page.getByRole('button', {name: 'Submit request'}).click();
+            await expect.poll(() => sent.username).toBe('helper-bot');
+            await expect(page.getByTestId('bot-compliance-text')).toHaveCount(0);
+            expect(sent).not.toHaveProperty('compliance_accepted');
+        });
+
+        test('a form that could not load its settings is not submitted', async ({mount, page}) => {
+            await page.route(`${API}/bot_form`, (route) => route.fulfill({status: 500, body: ''}));
+            let calls = 0;
+            await page.route(`${API}/submit_bot_request`, async (route) => {
+                calls++;
+                await route.fulfill({contentType: 'application/json', body: '{}'});
+            });
+            await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+            await fillBot(page);
+            await expect(async () => {
+                await page.getByRole('button', {name: 'Submit request'}).click();
+                await expect(page.getByRole('alert')).toHaveText('Could not load the compliance statement. Close the form and try again.', {timeout: 500});
+            }).toPass();
+            expect(calls).toBe(0);
+        });
+
+        test('a reopened form must be accepted again', async ({mount, page}) => {
+            await stubBotForm(page, {enabled: true, text: STATEMENT, sha256: STATEMENT_HASH});
+            await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+            await page.getByLabel('I accept the compliance statement above').check();
+            await page.getByRole('button', {name: 'Cancel'}).click();
+            await expect(page.getByText(TITLE)).toBeHidden();
+
+            await page.getByRole('button', {name: 'harness: open bot'}).click();
+            await expect(page.getByLabel('I accept the compliance statement above')).not.toBeChecked();
+        });
     });
 });

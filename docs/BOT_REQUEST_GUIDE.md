@@ -60,6 +60,16 @@ Same **Request a Bot Account** form from every entry point.
 | **Display name** | Friendly name shown in messages. Example: `Deploy Notifier`. |
 | **Description** | Optional. What the bot does and which systems it connects to. |
 
+#### Compliance statement
+
+Unless a System Admin has turned it off, the form shows a compliance statement
+and you must tick **I accept the compliance statement above** before you can
+submit. By default the statement says you won't misuse the bot and that you are
+responsible for everything done with it, its tokens and its webhooks; your
+organization may have replaced it with its own wording. The request keeps the
+exact text you accepted and when, and both are in its audit history. If the
+statement changes while the form is open, submitting asks you to read it again.
+
 #### Optional: Access token
 
 **Request an access token** is checked by default. External systems use this
@@ -98,7 +108,8 @@ external URL (for example, to trigger a pipeline on a keyword).
 ### Submitting
 
 Click **Submit request**. One approval ticket covers the bot, token, and any
-webhooks you checked. You'll get a DM when both approvers have acted.
+webhooks you checked. The approval card shows that you accepted the compliance
+statement. You'll get a DM when both approvers have acted.
 
 ---
 

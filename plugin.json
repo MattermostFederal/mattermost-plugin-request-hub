@@ -71,6 +71,20 @@
                 "help_text": "When enabled, users can request a bot account (optional token and webhooks). Bot requests require two-step approval (security + system)."
             },
             {
+                "key": "BotComplianceEnabled",
+                "display_name": "Require bot compliance acceptance",
+                "type": "bool",
+                "default": true,
+                "help_text": "When enabled, a bot requester must tick a box accepting the compliance statement below before the request is submitted. The acceptance, its time and the exact text are kept with the request and in its audit history. Agents (MCP) can't submit bot requests while this is on."
+            },
+            {
+                "key": "BotComplianceStatement",
+                "display_name": "Bot compliance statement",
+                "type": "longtext",
+                "default": "",
+                "help_text": "The statement bot requesters accept. Leave blank for the built-in statement: the requester won't misuse the bot and is responsible for everything done with it, its tokens and its webhooks. Changing it doesn't change what earlier requesters accepted."
+            },
+            {
                 "key": "AllowWebhookRequests",
                 "display_name": "Allow webhook requests",
                 "type": "bool",

@@ -17,6 +17,7 @@ const (
 	fieldBotDisplayName = "bot_display_name"
 	fieldBotDescription = "bot_description"
 	fieldBotOwner       = "bot_owner"
+	fieldBotCompliance  = "bot_compliance"
 
 	// Bounds on a requested bot username.
 	minBotUsernameLen = 3
@@ -33,6 +34,9 @@ type botRequest struct {
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+	// Compliance is the requester's acceptance of the compliance
+	// statement; nil when none was required.
+	Compliance *botCompliance `json:"compliance,omitempty"`
 
 	// Optional extras — requested alongside the bot account in the same ticket.
 	// All three are created at approve-time using the approver's session token.
@@ -76,6 +80,11 @@ type botRequestInput struct {
 	OutgoingWebhookChannelID   string
 	OutgoingWebhookDisplayName string
 	OutgoingWebhookCallbackURL string
+	// ComplianceAccepted is the requester's tick on the compliance
+	// statement; ComplianceTextHash, when set, the hash of the statement
+	// they were shown.
+	ComplianceAccepted bool
+	ComplianceTextHash string
 }
 
 // submitBotRequest validates the input and stores a pending request for
@@ -119,6 +128,10 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 			return "", err
 		}
 	}
+	compliance, complianceErr := checkBotCompliance(p.getConfiguration(), input.ComplianceAccepted, input.ComplianceTextHash)
+	if complianceErr != nil {
+		return "", complianceErr
+	}
 
 	requester, appErr := p.API.GetUser(requesterID)
 	if appErr != nil {
@@ -149,6 +162,7 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 		DisplayName:                strings.TrimSpace(input.DisplayName),
 		Description:                strings.TrimSpace(input.Description),
 		OwnerUserID:                strings.TrimSpace(input.OwnerUserID),
+		Compliance:                 compliance,
 		RequestToken:               input.RequestToken,
 		IncomingWebhookChannelID:   incomingChID,
 		IncomingWebhookDisplayName: strings.TrimSpace(input.IncomingWebhookDisplayName),
@@ -160,6 +174,9 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 
 	entry := newPendingEntry(req)
 	sa.built(req, requester)
+	if compliance != nil {
+		sa.addDetail(complianceAuditDetail(compliance), complianceNote(compliance))
+	}
 	if err := p.reservePending(pendingKindBot, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -273,6 +290,9 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 	}
 	if req.OwnerUserID != "" {
 		details = append(details, fmt.Sprintf("**Owner:** %s", p.mentionList([]string{req.OwnerUserID})))
+	}
+	if req.Compliance != nil {
+		details = append(details, fmt.Sprintf("**Compliance:** accepted (sha256 %s)", shortHash(req.Compliance.TextSHA256)))
 	}
 	if req.RequestToken {
 		details = append(details, "**Token:** requested (generated at approve-time, sent in DM)")
@@ -424,6 +444,22 @@ func (p *Plugin) loadBotRequest(id string) (*botRequest, []byte, error) {
 // openBotRequestDialog opens the interactive dialog for submitting a bot
 // account request.
 func (p *Plugin) openBotRequestDialog(triggerID string) error {
+	dialog := p.botRequestDialog()
+	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
+		TriggerId: triggerID,
+		URL:       fmt.Sprintf("/plugins/%s%s", manifest.Id, routeBotDialog),
+		Dialog:    dialog,
+	}); appErr != nil {
+		return appErr
+	}
+	return nil
+}
+
+// botRequestDialog is the bot request form. While the compliance statement
+// is required it is shown in the introduction with a box to accept it, and
+// its hash rides in the dialog state so a statement changed meanwhile is
+// caught on submit.
+func (p *Plugin) botRequestDialog() model.Dialog {
 	dialog := model.Dialog{
 		CallbackId:       botDialogCallbackID,
 		Title:            "Request a Bot Account",
@@ -463,12 +499,16 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 			},
 		},
 	}
-	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
-		TriggerId: triggerID,
-		URL:       fmt.Sprintf("/plugins/%s%s", manifest.Id, routeBotDialog),
-		Dialog:    dialog,
-	}); appErr != nil {
-		return appErr
+	if c := p.getConfiguration(); c.BotComplianceRequired() {
+		text := c.BotComplianceText()
+		dialog.IntroductionText += "\n\n**Compliance statement**\n\n> " + strings.ReplaceAll(text, "\n", "\n> ")
+		dialog.Elements = append(dialog.Elements, model.DialogElement{
+			DisplayName: "Compliance",
+			Name:        fieldBotCompliance,
+			Type:        "bool",
+			Placeholder: "I accept the compliance statement above",
+		})
+		dialog.State = complianceHash(text)
 	}
-	return nil
+	return dialog
 }

@@ -276,11 +276,14 @@ func TestMCPTools_HonorRequestTypeSettings(t *testing.T) {
 		{"request_bot", map[string]any{
 			"username": "svcbot", "display_name": "Service Bot", "owner": "owner",
 		}, func(c *configuration) { c.AllowBotTokenRequests = false }, botRequestsDisabledMsg},
+		{"request_bot", map[string]any{
+			"username": "svcbot", "display_name": "Service Bot", "owner": "owner",
+		}, func(c *configuration) { c.BotComplianceEnabled = true }, botComplianceMCPMsg},
 		{"request_webhook", map[string]any{
 			"webhook_type": "incoming", "channel_id": "ch1", "display_name": "Alerts",
 		}, func(c *configuration) { c.AllowWebhookRequests = false }, webhookRequestsDisabledMsg},
 	} {
-		t.Run(tc.tool, func(t *testing.T) {
+		t.Run(tc.tool+" "+tc.want, func(t *testing.T) {
 			stubMCP(t)
 			api := &plugintest.API{}
 			p := newMCPTestPlugin(t, api, &configuration{prefixes: []channelPrefix{{Prefix: "team-"}}})

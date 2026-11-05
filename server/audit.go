@@ -505,6 +505,9 @@ type submitAudit struct {
 	storedAt int64
 	// actorName is the submitter's username once it is loaded.
 	actorName string
+	// detail and noteSuffix are added to the submitted event.
+	detail     map[string]any
+	noteSuffix string
 }
 
 func (p *Plugin) startSubmitAudit(kind, actorID string) *submitAudit {
@@ -517,6 +520,16 @@ func (s *submitAudit) built(req storedRequest, requester *model.User) {
 	if requester != nil {
 		s.actorName = requester.Username
 	}
+}
+
+// addDetail adds particulars to the submitted event, and a short phrase to
+// its note.
+func (s *submitAudit) addDetail(detail map[string]any, note string) {
+	if s.detail == nil {
+		s.detail = map[string]any{}
+	}
+	maps.Copy(s.detail, detail)
+	s.noteSuffix = note
 }
 
 // markStored notes that the request was saved.
@@ -552,6 +565,10 @@ func (s *submitAudit) finish(err error) {
 	case err == nil:
 		e.Event = eventSubmitted
 		e.Note = fmt.Sprintf("%s submitted %s request", who, label)
+		if s.noteSuffix != "" {
+			e.Note += " and " + s.noteSuffix
+		}
+		e.Detail = s.detail
 		e.ThreadPostID = approvalPostID
 	case s.stored:
 		e.Event = eventSubmitFailed

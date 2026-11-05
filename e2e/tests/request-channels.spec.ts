@@ -41,6 +41,7 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
             display_name: 'E2E Bot',
             description: 'e2e',
             request_token: true,
+            compliance_accepted: true,
         });
         expect(res.error, JSON.stringify(res)).toBeUndefined();
 

@@ -187,7 +187,7 @@ func (p *Plugin) registerMCPTools(server *pluginmcp.Server) {
 
 	addTool(p, server, &mcp.Tool{
 		Name:        "request_bot",
-		Description: "Request a new bot account on the user's behalf. The request is posted for admin approval.",
+		Description: "Request a new bot account on the user's behalf. The request is posted for admin approval. Refused while the server requires bot requesters to accept a compliance statement: the user must then use the Request a Bot Account form or the bot slash command.",
 	}, p.requestBotTool)
 
 	addTool(p, server, &mcp.Tool{
@@ -350,6 +350,10 @@ func (p *Plugin) requestBotTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return nil, MCPMessageOutput{}, errors.New(botRequestsDisabledMsg)
+	}
+	// An agent can't accept the compliance statement for the user.
+	if p.getConfiguration().BotComplianceRequired() {
+		return nil, MCPMessageOutput{}, errors.New(botComplianceMCPMsg)
 	}
 
 	// A blank owner leaves the owner to submitBotRequest's default, as the

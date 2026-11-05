@@ -280,7 +280,43 @@ export type BotRequestPayload = {
     outgoing_webhook_channel_id?: string;
     outgoing_webhook_display_name?: string;
     outgoing_webhook_callback_url?: string;
+    compliance_accepted?: boolean;
+    compliance_text_hash?: string;
 };
+
+export type BotForm = {
+    compliance: {
+        enabled: boolean;
+        text?: string;
+        sha256?: string;
+    };
+};
+
+// fetchBotForm returns the bot form's settings, or null when they can't be
+// loaded. Unlike fetchEnabledRequestTypes it does not fail open: the form
+// must not be submitted without the statement the server requires.
+export async function fetchBotForm(): Promise<BotForm | null> {
+    try {
+        const response = await fetch(`/plugins/${manifest.id}/api/v1/bot_form`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!response.ok) {
+            return null;
+        }
+        const body = await response.json();
+        return {
+            compliance: {
+                enabled: Boolean(body?.compliance?.enabled),
+                text: typeof body?.compliance?.text === 'string' ? body.compliance.text : undefined,
+                sha256: typeof body?.compliance?.sha256 === 'string' ? body.compliance.sha256 : undefined,
+            },
+        };
+    } catch {
+        return null;
+    }
+}
 
 export type IncomingWebhookPayload = {
     channel_id: string;

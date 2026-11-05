@@ -1140,7 +1140,7 @@ var (
 	untoggledSubmitRoutes = []string{routeSubmitAuditExportWebapp}
 	lookupRoutes          = []string{
 		routePrefixes, routeTeams, routeChannels, routeUserAutocomplete,
-		routeSidebarCategories, routeConfig, routeAuditExport, routeAuditRequests, routeAuditRequest, routeAuditAccess,
+		routeSidebarCategories, routeConfig, routeBotForm, routeAuditExport, routeAuditRequests, routeAuditRequest, routeAuditAccess,
 	}
 	actionRoutes = []string{
 		routeApprove, routeDeny, routeApproveAdmin, routeDenyAdmin,

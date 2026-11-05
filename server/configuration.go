@@ -115,7 +115,12 @@ type configuration struct {
 	AllowTeamMemberRequests   bool
 	AllowTeamGuestRequests    bool
 	AllowBotTokenRequests     bool // covers full bot-account requests
-	AllowWebhookRequests      bool
+	// BotComplianceEnabled makes bot requesters accept a compliance
+	// statement; BotComplianceStatement replaces the built-in one when set
+	// (see BotComplianceText).
+	BotComplianceEnabled   bool
+	BotComplianceStatement string
+	AllowWebhookRequests   bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how security + system pools are resolved:

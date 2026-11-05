@@ -38,7 +38,7 @@ const (
 	teamArgsHint            = "<Team name> [--name <url name>] [--description <text>] [--invite-only] [--team-admin]"
 	teamMemberArgsHint      = "@user [@user ...] [--reason <text>]"
 	teamGuestArgsHint       = "<email> --channels ~channel [~channel ...] [--reason <text>]"
-	botArgsHint             = "<username> <Display name> [--description <text>] [--owner @user]"
+	botArgsHint             = "<username> <Display name> [--description <text>] [--owner @user] [--accept-compliance]"
 	incomingWebhookArgsHint = "~channel <Display name> [--description <text>]"
 	outgoingWebhookArgsHint = "~channel <Display name> --callback <url> [--description <text>]"
 	subcommandPrefixes      = "prefixes"
@@ -841,12 +841,16 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 	}
 
 	usage := func(err error) *model.CommandResponse { return usageReply(err, "bot", botArgsHint) }
-	positional, flags, err := readArgs(params, "--description", "--owner")
+	positional, flags, err := readArgs(params, "--description", "--owner", "--accept-compliance")
 	if err != nil {
 		return usage(err)
 	}
 	if len(positional) < 2 {
 		return usage(errors.New("a bot username and a display name are required"))
+	}
+	accepted, err := flagBool(flags, "--accept-compliance")
+	if err != nil {
+		return usage(err)
 	}
 	description, err := flagText(flags, "--description", "some text")
 	if err != nil {
@@ -870,11 +874,19 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		ownerID = ownerIDs[0]
 	}
 
+	// Without the flag, show the statement to accept rather than refuse it
+	// unread.
+	if c := p.getConfiguration(); c.BotComplianceRequired() && !accepted {
+		return ephemeralResponse(slashComplianceText(c))
+	}
+
 	return submitReply(p.submitBotRequest(args.UserId, botRequestInput{
 		Username:    positional[0],
 		DisplayName: strings.Join(positional[1:], " "),
 		Description: description,
 		OwnerUserID: ownerID,
+
+		ComplianceAccepted: accepted,
 	}))
 }
 

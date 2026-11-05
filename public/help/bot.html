@@ -78,6 +78,14 @@
         <img src="images/bot-request/mattermost-bot-modal.png" alt="Request a Bot Account form">
         <img src="images/bot-request/mattermost-bot-approval-card.png" alt="Bot approval card">
         <img src="images/bot-request/mattermost-bot-token-dm.png" alt="Bot token DM">
+        <p>
+            Unless a System Admin has turned it off (<em>Require bot compliance acceptance</em>), the form shows a
+            compliance statement and you must tick <em>I accept the compliance statement above</em> to submit. The
+            request keeps the exact text you accepted and when, the approval card shows it was accepted, and the
+            audit history records it. If the statement changes while the form is open, submitting asks you to read
+            it again. With the slash command, add <code>--accept-compliance</code>; without it, the reply shows the
+            statement. Agents can't submit bot requests while the statement is required.
+        </p>
         <p>Tokens in the approval DM auto-delete after <strong>72 hours</strong>. Save them securely.</p>
         <p>A token expires after <em>Bot token lifetime</em>, one year by default, and the DM gives the date. From a month before, you get a weekly reminder, then a daily one in the last week. Ask for a new token before then.</p>
         <p>Token expiry needs Mattermost 11.9 or later. On older servers a token never expires, and the DM gives no date.</p>

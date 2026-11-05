@@ -2,6 +2,7 @@ import {expect, test} from '@playwright/test';
 import manifest from 'manifest';
 
 import {
+    fetchBotForm,
     fetchEnabledRequestTypes,
     fetchPrefixes,
     fetchSidebarCategories,
@@ -174,6 +175,28 @@ test.describe('fetchSidebarCategories', () => {
     test('throws on a non-OK status', async () => {
         mockFetch(403, {});
         await expect(fetchSidebarCategories('team1')).rejects.toThrow('Failed to load sidebar categories (403)');
+    });
+});
+
+test.describe('fetchBotForm', () => {
+    test('maps the compliance statement', async () => {
+        mockFetch(200, {compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}});
+        expect(await fetchBotForm()).toEqual({compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}});
+        expect(calls[0].url).toBe(`/plugins/${manifest.id}/api/v1/bot_form`);
+    });
+
+    test('a statement that is off has no text', async () => {
+        mockFetch(200, {compliance: {enabled: false}});
+        expect(await fetchBotForm()).toEqual({compliance: {enabled: false, text: undefined, sha256: undefined}});
+    });
+
+    test('returns null on a non-OK status or a network failure', async () => {
+        mockFetch(500, {});
+        expect(await fetchBotForm()).toBeNull();
+        globalThis.fetch = (async () => {
+            throw new Error('offline');
+        }) as typeof fetch;
+        expect(await fetchBotForm()).toBeNull();
     });
 });
 

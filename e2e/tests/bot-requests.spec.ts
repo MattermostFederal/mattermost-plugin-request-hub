@@ -1,25 +1,9 @@
+import {createHash} from 'node:crypto';
+
 import type {Post} from '@mattermost/types/posts';
 import type {IncomingWebhook} from '@mattermost/types/integrations';
 
-import {
-    actionIds,
-    attachmentOf,
-    botCardsMentioning,
-    botName,
-    botRecordsOf,
-    createAttribute,
-    createGroup,
-    dmsMentioning,
-    fieldValue,
-    joinBotChannel,
-    listenForEphemerals,
-    pendingBotIds,
-    setAttribute,
-    storedBotRequest,
-    submitBot,
-    userNamed,
-    type BotRequestBody,
-} from '../helpers/bots';
+import {ACCEPT, actionIds, attachmentOf, botCardsMentioning, botName, botRecordsOf, createAttribute, createGroup, dmsMentioning, fieldValue, joinBotChannel, listenForEphemerals, pendingBotIds, setAttribute, storedBotRequest, submitBot, userNamed, type BotRequestBody} from '../helpers/bots';
 import {expect, test} from '../helpers/fixtures';
 import {ADMIN, HUB_BOT, PASSWORD, PLUGIN_ID, REQUEST_CHANNELS, cardRequestId, uid, type RequestHub, type TestUser} from '../helpers/requesthub';
 
@@ -160,7 +144,7 @@ test.describe('submit', () => {
         const requester = await hub.createUser();
         const owner = await hub.createUser();
         const username = botName();
-        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --description from slash --owner @${owner.username}`);
+        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --description from slash --owner @${owner.username} ${ACCEPT}`);
         expect(reply).toBe(SUBMITTED);
 
         const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
@@ -186,7 +170,7 @@ test.describe('submit', () => {
         const username = botName();
         const s = await submitOK(hub, requester, {username});
         expect(await submitBot(hub, requester.username, {username})).toEqual({error: `you already have a pending request for bot @${username}`});
-        expect(await hub.slash(requester.username, `bot ${username} Again`)).toBe(`you already have a pending request for bot @${username}`);
+        expect(await hub.slash(requester.username, `bot ${username} Again ${ACCEPT}`)).toBe(`you already have a pending request for bot @${username}`);
         expect(await botRecordsOf(hub, requester.id)).toEqual([`bot_request_${s.requestId}`]);
         expect(await pendingBotIds(hub, requester.id)).toEqual([s.requestId]);
         expect(await botCardsMentioning(hub, `@${username}"`)).toHaveLength(1);
@@ -244,7 +228,7 @@ test.describe('submit', () => {
         const cases: Array<[string, (u: string) => string, string]> = [
             ['no display name', (u) => `bot ${u}`, 'Could not read the request: a bot username and a display name are required.\nUsage: `/mattermost-request-hub bot <username> <Display name>'],
             ['unknown owner', (u) => `bot ${u} Name --owner @nosuchuser${u}`, 'unknown user: `nosuchuser'],
-            ['short username', () => 'bot ab Short Bot', 'Bot username must be 3-22 characters.'],
+            ['short username', () => `bot ab Short Bot ${ACCEPT}`, 'Bot username must be 3-22 characters.'],
         ];
         for (const [title, args, reply] of cases) {
             test(title, async ({hub}) => {
@@ -354,6 +338,73 @@ test.describe('submit', () => {
             await expectNothingSubmitted(hub, requester, body.username ?? '');
         });
     }
+});
+
+test.describe('compliance statement', () => {
+    const DEFAULT_START = 'By submitting this request I confirm that I will not use this bot';
+    const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+    type History = {events: Array<{event: string; note?: string; detail?: Record<string, unknown>}>};
+
+    test('the form gets the statement, and an accepted request keeps it, the card shows it and the history records it', async ({hub}) => {
+        const requester = await hub.createUser();
+        const form = await hub.pluginFetch<{compliance: {enabled: boolean; text: string; sha256: string}}>(requester.username, '/api/v1/bot_form');
+        expect(form.compliance.enabled).toBe(true);
+        expect(form.compliance.text.startsWith(DEFAULT_START)).toBe(true);
+        expect(form.compliance.sha256).toBe(sha256(form.compliance.text));
+
+        const username = botName();
+        const s = await submitOK(hub, requester, {username, compliance_text_hash: form.compliance.sha256});
+        const stored = await storedBotRequest(hub, s.requestId);
+        expect(stored?.compliance).toMatchObject({text: form.compliance.text, text_sha256: form.compliance.sha256});
+        expect(attachmentOf(s.card)?.text).toContain(`**Compliance:** accepted (sha256 ${form.compliance.sha256.slice(0, 8)})`);
+
+        const history = await hub.kv<History>(`history_${s.requestId}`);
+        const submitted = history?.events.find((e) => e.event === 'submitted');
+        expect(submitted?.detail).toMatchObject({compliance_accepted: true, compliance_text_sha256: form.compliance.sha256, compliance_accepted_at: stored?.compliance?.accepted_at});
+        expect(submitted?.note).toContain(`accepted the bot compliance statement (sha256 ${form.compliance.sha256.slice(0, 8)})`);
+    });
+
+    test('a request that does not accept it is refused', async ({hub}) => {
+        const requester = await hub.createUser();
+        const username = botName();
+        expect(await submitBot(hub, requester.username, {username, compliance_accepted: false})).toEqual({error: 'Accept the bot compliance statement to submit this request.'});
+        await expectNothingSubmitted(hub, requester, username);
+    });
+
+    test('a statement changed after the form opened is refused', async ({hub}) => {
+        const requester = await hub.createUser();
+        const username = botName();
+        expect(await submitBot(hub, requester.username, {username, compliance_text_hash: sha256('an older statement')})).toEqual({
+            error: 'The bot compliance statement changed after you opened the form. Read it again and resubmit.',
+        });
+        await expectNothingSubmitted(hub, requester, username);
+    });
+
+    test('a custom statement is the one accepted, and slash shows it until it is accepted', async ({hub}) => {
+        const requester = await hub.createUser();
+        const statement = `Custom statement ${uid('s')}.`;
+        await hub.withPluginConfig({botcompliancestatement: statement}, async () => {
+            const username = botName();
+            expect(await hub.slash(requester.username, `bot ${username} Custom Bot`)).toBe(
+                `Bot requests need you to accept this statement:\n\n> ${statement}\n\nTo accept it, run the command again with \`--accept-compliance\`.`);
+            await expectNothingSubmitted(hub, requester, username);
+
+            expect(await hub.slash(requester.username, `bot ${username} Custom Bot ${ACCEPT}`)).toBe(SUBMITTED);
+            const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
+            expect((await storedBotRequest(hub, cardRequestId(card)))?.compliance).toMatchObject({text: statement, text_sha256: sha256(statement)});
+        });
+    });
+
+    test('when it is off nothing is asked or stored', async ({hub}) => {
+        const requester = await hub.createUser();
+        await hub.withPluginConfig({botcomplianceenabled: false}, async () => {
+            expect(await hub.pluginFetch(requester.username, '/api/v1/bot_form')).toEqual({compliance: {enabled: false}});
+            const username = botName();
+            const s = await submitOK(hub, requester, {username, compliance_accepted: false});
+            expect((await storedBotRequest(hub, s.requestId))?.compliance).toBeUndefined();
+            expect(attachmentOf(s.card)?.text).not.toContain('Compliance');
+        });
+    });
 });
 
 test.describe('system_admin mode', () => {
@@ -607,7 +658,7 @@ test.describe('attribute mode', () => {
             await pools.security(security);
             await pools.system(system);
             await joinBotChannel(hub, security, system);
-            const reply = await hub.slash(requester.username, `bot ${username} Attr Bot`);
+            const reply = await hub.slash(requester.username, `bot ${username} Attr Bot ${ACCEPT}`);
             expect(reply).toBe(SUBMITTED);
             const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
             const s = {card, requestId: cardRequestId(card)};

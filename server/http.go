@@ -59,6 +59,7 @@ const (
 	routeSubmitOutgoingWebhookWebapp = "/api/v1/submit_outgoing_webhook_request"
 	routeSidebarCategories           = "/api/v1/sidebar_categories" // ?team_id=... — list caller's sidebar categories
 	routeConfig                      = "/api/v1/config"
+	routeBotForm                     = "/api/v1/bot_form"       // the bot form's compliance statement
 	routeAuditExport                 = "/api/v1/audit/export"   // every request history as CSV or JSON, System Admins only
 	routeAuditRequests               = "/api/v1/audit/requests" // the audit history list for the webapp, System Admins only
 	routeAuditRequest                = "/api/v1/audit/request"  // one request's history for the webapp, ?id=..., System Admins only
@@ -206,6 +207,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleSubmitOutgoingWebhookWebapp(w, r)
 	case routeConfig:
 		p.handleConfig(w, r)
+	case routeBotForm:
+		p.handleBotForm(w, r)
 	case routeSidebarCategories:
 		p.handleListSidebarCategories(w, r)
 	default:
@@ -1074,6 +1077,9 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 		DisplayName: submissionString(submission.Submission, fieldBotDisplayName),
 		Description: submissionString(submission.Submission, fieldBotDescription),
 		OwnerUserID: submissionString(submission.Submission, fieldBotOwner),
+
+		ComplianceAccepted: submissionBool(submission.Submission, fieldBotCompliance),
+		ComplianceTextHash: submission.State,
 	})
 	if err != nil {
 		writeJSON(w, model.SubmitDialogResponse{Error: err.Error()})
@@ -1601,6 +1607,18 @@ func requesterUsername(user *model.User, userID string) string {
 	return "user " + userID
 }
 
+// submissionBool reads a dialog checkbox, which arrives as a bool (or, from
+// older clients, the string "true").
+func submissionBool(submission map[string]any, key string) bool {
+	switch v := submission[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
+}
+
 func submissionString(submission map[string]any, key string) string {
 	if value, ok := submission[key].(string); ok {
 		return value
@@ -1818,6 +1836,8 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 		OutgoingWebhookChannelID   string `json:"outgoing_webhook_channel_id"`
 		OutgoingWebhookDisplayName string `json:"outgoing_webhook_display_name"`
 		OutgoingWebhookCallbackURL string `json:"outgoing_webhook_callback_url"`
+		ComplianceAccepted         bool   `json:"compliance_accepted"`
+		ComplianceTextHash         string `json:"compliance_text_hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -1825,6 +1845,8 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg, err := p.submitBotRequest(userID, botRequestInput{
+		ComplianceAccepted:         payload.ComplianceAccepted,
+		ComplianceTextHash:         payload.ComplianceTextHash,
 		Username:                   payload.Username,
 		DisplayName:                payload.DisplayName,
 		Description:                payload.Description,

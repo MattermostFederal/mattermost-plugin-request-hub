@@ -1,7 +1,8 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
-import {submitBotRequest} from './client';
+import {fetchBotForm, submitBotRequest} from './client';
+import type {BotForm} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeBotRequestModal,
@@ -47,6 +48,19 @@ const readOnlyFieldStyle: React.CSSProperties = {
     opacity: 0.7,
 };
 const subFieldStyle: React.CSSProperties = {marginTop: 12};
+const statementStyle: React.CSSProperties = {
+    maxHeight: 160,
+    overflowY: 'auto',
+    whiteSpace: 'pre-wrap',
+    padding: '8px 12px',
+    marginBottom: 8,
+    border: '1px solid var(--center-channel-color-16, rgba(61,60,64,0.16))',
+    borderRadius: 4,
+};
+
+// botFormLoading marks the form settings as still loading; null means they
+// couldn't be loaded.
+const botFormLoading = 'loading';
 
 export const RequestBotModal = () => {
     const dispatch = useDispatch();
@@ -68,9 +82,30 @@ export const RequestBotModal = () => {
     const [outgoingWebhookName, setOutgoingWebhookName] = useState('');
     const [outgoingCallbackURL, setOutgoingCallbackURL] = useState('');
 
+    const [botForm, setBotForm] = useState<BotForm | null | typeof botFormLoading>(botFormLoading);
+    const [complianceAccepted, setComplianceAccepted] = useState(false);
+
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+
+    // The statement is fetched each time the form opens, so it is the one
+    // the server checks the acceptance against.
+    useEffect(() => {
+        if (!isOpen) {
+            return undefined;
+        }
+        let live = true;
+        setBotForm(botFormLoading);
+        fetchBotForm().then((form) => {
+            if (live) {
+                setBotForm(form);
+            }
+        });
+        return () => {
+            live = false;
+        };
+    }, [isOpen]);
 
     const reset = () => {
         setUsername('');
@@ -82,6 +117,7 @@ export const RequestBotModal = () => {
         setRequestOutgoingWebhook(false);
         setOutgoingWebhookName('');
         setOutgoingCallbackURL('');
+        setComplianceAccepted(false);
         setError('');
         setSuccess('');
         setSubmitting(false);
@@ -127,6 +163,18 @@ export const RequestBotModal = () => {
             setError('A display name is required.');
             return;
         }
+        if (botForm === botFormLoading) {
+            setError('The form is still loading. Try again in a moment.');
+            return;
+        }
+        if (botForm === null) {
+            setError('Could not load the compliance statement. Close the form and try again.');
+            return;
+        }
+        if (botForm.compliance.enabled && !complianceAccepted) {
+            setError('Accept the bot compliance statement to submit this request.');
+            return;
+        }
         if (requestOutgoingWebhook) {
             if (!outgoingCallbackURL.trim()) {
                 setError('A callback URL is required for the outgoing webhook.');
@@ -151,6 +199,7 @@ export const RequestBotModal = () => {
                 outgoing_webhook_channel_id: requestOutgoingWebhook ? channelId : undefined,
                 outgoing_webhook_display_name: requestOutgoingWebhook ? outgoingWebhookName.trim() : undefined,
                 outgoing_webhook_callback_url: requestOutgoingWebhook ? outgoingCallbackURL.trim() : undefined,
+                ...(botForm.compliance.enabled ? {compliance_accepted: true, compliance_text_hash: botForm.compliance.sha256} : {}),
             });
             if (result.error) {
                 setError(result.error);
@@ -342,6 +391,26 @@ export const RequestBotModal = () => {
                                 </div>
                             )}
                         </div>
+
+                        {botForm !== botFormLoading && botForm?.compliance.enabled ? (
+                            <div style={sectionStyle}>
+                                <strong id='bot-compliance-title'>{'Compliance statement'}</strong>
+                                <div
+                                    style={statementStyle}
+                                    aria-labelledby='bot-compliance-title'
+                                    data-testid='bot-compliance-text'
+                                >{botForm.compliance.text}</div>
+                                <label style={{fontWeight: 'normal'}}>
+                                    <input
+                                        type='checkbox'
+                                        checked={complianceAccepted}
+                                        onChange={(e) => setComplianceAccepted(e.target.checked)}
+                                        style={{marginRight: 8}}
+                                    />
+                                    {'I accept the compliance statement above'}
+                                </label>
+                            </div>
+                        ) : null}
 
                         {error ? <div
                             className='alert alert-danger'
