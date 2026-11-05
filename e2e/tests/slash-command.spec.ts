@@ -562,7 +562,7 @@ test.describe('approve and deny by ID', () => {
         const requester = await hub.createUser();
         const botName = uid('bot'); // bot usernames are 3-22 characters
         await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
-            expect(await hub.slash(requester.username, `bot ${botName} Slash Bot --description made by slash --purpose E2E test bot --privilege post --ingestion None --env mattermost-dev --accept-compliance`)).toBe(
+            expect(await hub.slash(requester.username, `bot ${botName} Slash Bot --purpose E2E test bot --integration https://ci.example/hooks/e2e --architecture https://docs.example/arch --env ci_cd --accept-compliance`)).toBe(
                 "Your bot account request has been submitted for approval. It needs a security approval and a system approval. You'll be notified as each step completes.");
             const card = await hub.findCardIn(REQUEST_CHANNELS.bot, botName);
             const id = cardRequestId(card);

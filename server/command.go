@@ -38,7 +38,7 @@ const (
 	teamArgsHint            = "<Team name> [--name <url name>] [--description <text>] [--invite-only] [--team-admin]"
 	teamMemberArgsHint      = "@user [@user ...] [--reason <text>]"
 	teamGuestArgsHint       = "<email> --channels ~channel [~channel ...] [--reason <text>]"
-	botArgsHint             = "<username> <Display name> --purpose <text> --privilege read|post|elevated --ingestion <text> --env <environment> [--description <text>] [--owner @user] [--accept-compliance]"
+	botArgsHint             = "<username> <Display name> --purpose <text> --integration <https-url> --env ci_cd|on_prem_server|cloud_or_k8s|workstation|external_saas|other [--architecture <https-url>] [--hosting-other <text>] [--owner @user] [--accept-compliance]"
 	incomingWebhookArgsHint = "~channel <Display name> [--description <text>]"
 	outgoingWebhookArgsHint = "~channel <Display name> --callback <url> [--description <text>]"
 	subcommandPrefixes      = "prefixes"
@@ -848,8 +848,8 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 	}
 
 	usage := func(err error) *model.CommandResponse { return usageReply(err, "bot", botArgsHint) }
-	positional, flags, err := readArgs(params, "--description", "--owner", "--accept-compliance",
-		"--purpose", "--privilege", "--ingestion", "--env")
+	positional, flags, err := readArgs(params, "--owner", "--accept-compliance",
+		"--purpose", "--integration", "--architecture", "--env", "--hosting-other")
 	if err != nil {
 		return usage(err)
 	}
@@ -857,10 +857,6 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		return usage(errors.New("a bot username and a display name are required"))
 	}
 	accepted, err := flagBool(flags, "--accept-compliance")
-	if err != nil {
-		return usage(err)
-	}
-	description, err := flagText(flags, "--description", "some text")
 	if err != nil {
 		return usage(err)
 	}
@@ -872,15 +868,19 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 	if err != nil {
 		return usage(err)
 	}
-	privilege, err := flagOne(flags, "--privilege")
+	integration, err := flagText(flags, "--integration", "an https URL")
 	if err != nil {
 		return usage(err)
 	}
-	ingestion, err := flagText(flags, "--ingestion", "some text")
+	architecture, err := flagText(flags, "--architecture", "an https URL")
 	if err != nil {
 		return usage(err)
 	}
 	env, err := flagOne(flags, "--env")
+	if err != nil {
+		return usage(err)
+	}
+	hostingOther, err := flagText(flags, "--hosting-other", "some text")
 	if err != nil {
 		return usage(err)
 	}
@@ -907,15 +907,15 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 	return submitReply(p.submitBotRequest(args.UserId, botRequestInput{
 		Username:    positional[0],
 		DisplayName: strings.Join(positional[1:], " "),
-		Description: description,
 		OwnerUserID: ownerID,
 
-		Purpose:        purpose,
-		PrivilegeLevel: privilege,
-		DataIngestion:  ingestion,
-		HostingEnv:     env,
-		HomeTeamID:     args.TeamId,
-		HomeChannelID:  args.ChannelId,
+		Purpose:            purpose,
+		ArchitectureURL:    architecture,
+		IntegrationURL:     integration,
+		HostingEnv:         env,
+		HostingOtherDetail: hostingOther,
+		HomeTeamID:         args.TeamId,
+		HomeChannelID:      args.ChannelId,
 
 		ComplianceAccepted: accepted,
 	}))

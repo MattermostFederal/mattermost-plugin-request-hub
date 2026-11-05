@@ -126,27 +126,21 @@ type configuration struct {
 	AllowWebhookRequests   bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
-	// TwoStepApproverMode selects how security + system pools are resolved:
+	// TwoStepApproverMode selects how the security reviewer is identified:
 	//   "attribute"    — User Attributes / ABAC (CPA); default
-	//   "usergroup"    — Mattermost custom / synced user groups by name
-	//   "system_admin" — System Admins only (backup when ABAC/groups unavailable)
+	//   "usergroup"    — Mattermost user groups (custom or LDAP/synced) by name
+	//   "system_admin" — System Admins only (setup backup; one admin can do both steps)
+	// The system step is always System Admins — there is no system pool setting.
 	TwoStepApproverMode string
 
-	// SecurityApproverAttribute / SystemApproverAttribute: CPA field names used
-	// when TwoStepApproverMode is "attribute". Rename to match your ABAC schema.
+	// SecurityApproverAttribute: CPA field name when mode is "attribute".
+	// Required in that mode; blank falls back to defaultSecurityApproverAttribute.
 	SecurityApproverAttribute string
-	SystemApproverAttribute   string
 
-	// SecurityApproverGroup / SystemApproverGroup: Mattermost group names
-	// (handles) used when TwoStepApproverMode is "usergroup". Defaults in
-	// plugin.json are "security-approvers" / "system-approvers"; admins can
-	// rename them in System Console. Empty → fall back to System Admins.
+	// SecurityApproverGroup: Mattermost group name when mode is "usergroup".
+	// Required in that mode; blank falls back to defaultSecurityApproverGroup.
+	// Custom and LDAP/plugin-synced groups are both accepted.
 	SecurityApproverGroup string
-	SystemApproverGroup   string
-	// AllowCustomApproverGroups lets a custom (not LDAP or plugin-synced)
-	// group be an approver pool. Off by default: a custom group's managers
-	// choose its members.
-	AllowCustomApproverGroups bool
 
 	// --- 6. Agents ---
 	// EnableMCP offers the request tools to the Mattermost Agents plugin.
@@ -191,12 +185,14 @@ type configuration struct {
 // The defaults match plugin.json. The maximums keep the settings in a
 // sensible range.
 const (
-	defaultMaxPendingRequests = 5
-	defaultRequestExpiryDays  = 30
-	defaultBotTokenLifetime   = 12
-	maxPendingRequestsLimit   = 1000
-	maxRequestExpiryDays      = 3650
-	maxBotTokenLifetime       = 12
+	defaultMaxPendingRequests          = 5
+	defaultRequestExpiryDays           = 30
+	defaultBotTokenLifetime            = 12
+	defaultSecurityApproverGroup       = "security-approvers"
+	defaultSecurityApproverAttribute   = "security_approver"
+	maxPendingRequestsLimit            = 1000
+	maxRequestExpiryDays               = 3650
+	maxBotTokenLifetime                = 12
 )
 
 // MaxPending returns how many requests of each kind one user may have
@@ -377,6 +373,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
 	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
 	configuration.tokenLifetimeMonths = parseTokenLifetimeMonths(configuration.BotTokenLifetimeMonths, p.API.LogWarn)
+	applySecurityPoolDefaults(configuration)
 
 	// Detect PerTeamApprovalChannels being enabled for the first time so we can
 	// backfill channels for teams that existed before the setting was toggled on.
@@ -409,7 +406,10 @@ func (p *Plugin) OnConfigurationChange() error {
 	// group names, or attribute names) so newly configured security approvers
 	// are added without a plugin restart.
 	if hadPrevConfig && twoStepPoolFingerprint(configuration) != prevTwoStep {
-		go p.syncTwoStepApproverChannels()
+		go func() {
+			defer func() { _ = recover() }()
+			p.syncTwoStepApproverChannels()
+		}()
 	}
 
 	if err := p.syncMCPServer(); err != nil {
@@ -417,6 +417,24 @@ func (p *Plugin) OnConfigurationChange() error {
 	}
 
 	return nil
+}
+
+// applySecurityPoolDefaults fills blank security pool names for the active
+// mode so attribute/usergroup always have a required pool handle.
+func applySecurityPoolDefaults(c *configuration) {
+	if c == nil {
+		return
+	}
+	switch c.twoStepMode() {
+	case twoStepModeUserGroup:
+		if strings.TrimSpace(c.SecurityApproverGroup) == "" {
+			c.SecurityApproverGroup = defaultSecurityApproverGroup
+		}
+	case twoStepModeAttribute:
+		if strings.TrimSpace(c.SecurityApproverAttribute) == "" {
+			c.SecurityApproverAttribute = defaultSecurityApproverAttribute
+		}
+	}
 }
 
 // twoStepPoolFingerprint captures the settings that control who must be in the
@@ -428,10 +446,7 @@ func twoStepPoolFingerprint(c *configuration) string {
 	return strings.Join([]string{
 		c.twoStepMode(),
 		strings.TrimSpace(c.SecurityApproverGroup),
-		strings.TrimSpace(c.SystemApproverGroup),
 		strings.TrimSpace(c.SecurityApproverAttribute),
-		strings.TrimSpace(c.SystemApproverAttribute),
-		strconv.FormatBool(c.AllowCustomApproverGroups),
 	}, "|")
 }
 

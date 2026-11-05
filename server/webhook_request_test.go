@@ -98,7 +98,7 @@ func TestSubmitWebhookRequest_SystemAdminQueuesNotBypasses(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowWebhookRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowWebhookRequests: true})
 
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team-id", Name: "alerts", Type: model.ChannelTypeOpen}, nil)
 	api.On("GetUser", "u_admin").Return(&model.User{Id: "u_admin", Username: "admin", Roles: "system_user system_admin"}, nil)
@@ -126,7 +126,7 @@ func TestSubmitWebhookRequest_RegularUserQueuesInWebhookChannel(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowWebhookRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowWebhookRequests: true})
 
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team-id", Name: "alerts", Type: model.ChannelTypeOpen}, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
@@ -157,7 +157,7 @@ func TestSubmitWebhookRequest_OutgoingQueuesWithCallbackURL(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowWebhookRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowWebhookRequests: true})
 
 	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", TeamId: "team-id", Name: "ops", Type: model.ChannelTypeOpen}, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)

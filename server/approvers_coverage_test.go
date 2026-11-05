@@ -44,16 +44,16 @@ func TestApproverStep_String(t *testing.T) {
 func TestApproverPoolNames_UnknownStepIsEmpty(t *testing.T) {
 	cfg := &configuration{
 		SecurityApproverAttribute: "sec",
-		SystemApproverAttribute:   "sys",
 		SecurityApproverGroup:     "@sec-group",
-		SystemApproverGroup:       " sys-group ",
 	}
 	require.Equal(t, "sec", cfg.approverAttributeName(stepSecurity))
-	require.Equal(t, "sys", cfg.approverAttributeName(stepSystem))
+	require.Empty(t, cfg.approverAttributeName(stepSystem))
 	require.Empty(t, cfg.approverAttributeName(unknownStep))
 	require.Equal(t, "sec-group", cfg.approverGroupName(stepSecurity))
-	require.Equal(t, "sys-group", cfg.approverGroupName(stepSystem))
+	require.Empty(t, cfg.approverGroupName(stepSystem))
 	require.Empty(t, cfg.approverGroupName(unknownStep))
+	require.Equal(t, defaultSecurityApproverAttribute, (&configuration{}).approverAttributeName(stepSecurity))
+	require.Equal(t, defaultSecurityApproverGroup, (&configuration{}).approverGroupName(stepSecurity))
 }
 
 func TestSecurityPoolConfigured_ByMode(t *testing.T) {
@@ -63,10 +63,8 @@ func TestSecurityPoolConfigured_ByMode(t *testing.T) {
 		want bool
 	}{
 		{"system admin mode never has a pool", configuration{TwoStepApproverMode: twoStepModeSystemAdmin, SecurityApproverAttribute: "sec", SecurityApproverGroup: "g"}, false},
-		{"usergroup mode with a group", configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "g"}, true},
-		{"usergroup mode ignores the attribute", configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverAttribute: "sec"}, false},
-		{"attribute mode with an attribute", configuration{SecurityApproverAttribute: "sec"}, true},
-		{"attribute mode without an attribute", configuration{}, false},
+		{"usergroup mode always requires security", configuration{TwoStepApproverMode: twoStepModeUserGroup}, true},
+		{"attribute mode always requires security", configuration{}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,53 +82,33 @@ func TestCanApproveStep_NilUserIsRefused(t *testing.T) {
 	require.Empty(t, api.Calls)
 }
 
-func TestCanApproveStepViaGroup_NoGroupFallsBackToSystemAdmin(t *testing.T) {
+func TestCanApproveStepViaGroup_BlankConfigUsesDefaultAndBlocksSystemAdmin(t *testing.T) {
 	api := &plugintest.API{}
+	stubLogs(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeUserGroup})
+	api.On("GetGroupByName", defaultSecurityApproverGroup).Return(nil, testAppErr("not found"))
+	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
+	api.On("GetGroupsBySource", mock.Anything).Return([]*model.Group{}, nil).Maybe()
 
 	ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSecurity)
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.False(t, ok)
 
 	ok, err = p.canApproveStep(&model.User{Id: "u"}, stepSecurity)
 	require.NoError(t, err)
 	require.False(t, ok)
-	api.AssertNotCalled(t, "GetGroupByName", mock.Anything)
 }
 
-func TestPoolLookupSoftFallback_SystemStepUsesSystemAdminRole(t *testing.T) {
+func TestCanApproveStepViaAttribute_SystemStepIsNeverViaAttribute(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
 
-	admin := &model.User{Id: "a", Roles: model.SystemAdminRoleId}
-	require.True(t, p.poolLookupSoftFallback(admin, stepSystem))
-	require.False(t, p.poolLookupSoftFallback(&model.User{Id: "u"}, stepSystem))
-	// A configured security pool is never covered by the fallback.
-	require.False(t, p.poolLookupSoftFallback(admin, stepSecurity))
-
-	p.setConfiguration(&configuration{})
-	require.True(t, p.poolLookupSoftFallback(admin, stepSecurity))
-}
-
-func TestCanApproveStepViaAttribute_LookupFailureSoftFallsBackForSystemStep(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogLevels(api)
-	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{SystemApproverAttribute: "sys"})
-	api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, testAppErr("unavailable"))
-
-	// canApproveStep lets System Admins through the system step before any
-	// lookup, so the fallback is reached through the attribute check itself.
 	ok, err := p.canApproveStepViaAttribute(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSystem)
 	require.NoError(t, err)
-	require.True(t, ok)
-
-	ok, err = p.canApproveStepViaAttribute(&model.User{Id: "u"}, stepSystem)
-	require.NoError(t, err)
 	require.False(t, ok)
-	api.AssertCalled(t, "LogWarn", "approver attribute check failed", "attr", "sys", "step", "system", "error", mock.Anything)
+	api.AssertNotCalled(t, "GetPropertyGroup", mock.Anything)
 }
 
 func TestApproverAttributePoolReady_BlankNameIsNotReady(t *testing.T) {
@@ -430,8 +408,8 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 		api := &plugintest.API{}
 		stubLogLevels(api)
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeUserGroup, SystemApproverGroup: "sys-group"})
-		api.On("GetGroupByName", "sys-group").Return(nil, testAppErr("missing"))
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeUserGroup})
+		api.On("GetGroupByName", defaultSecurityApproverGroup).Return(nil, testAppErr("missing"))
 		api.On("GetGroups", 0, 100, mock.Anything, mock.Anything).Return(nil, nil)
 		api.On("GetGroupsBySource", model.GroupSourceLdap).Return(nil, testAppErr("ldap down"))
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
@@ -442,8 +420,8 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 	t.Run("attribute holder is kept", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SystemApproverAttribute: "sys"})
-		mockApproverAttr(api, "sys", "u1", []*model.PropertyValue{{Value: json.RawMessage(`"yes"`)}})
+		p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+		mockApproverAttr(api, "sec", "u1", []*model.PropertyValue{{Value: json.RawMessage(`"yes"`)}})
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
 		require.True(t, retain)
 		require.True(t, confident)
@@ -452,8 +430,8 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 	t.Run("attribute non-holder is dropped", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SystemApproverAttribute: "sys"})
-		mockApproverAttr(api, "sys", "u1", nil)
+		p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+		mockApproverAttr(api, "sec", "u1", nil)
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
 		require.False(t, retain)
 		require.True(t, confident)
@@ -620,24 +598,21 @@ func TestLinkTwoStepGroupsToChannel_SyncableFailuresAreLogged(t *testing.T) {
 	p.setConfiguration(&configuration{
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "sec-group",
-		SystemApproverGroup:   "sys-group",
 	})
 	stubSyncedGroup(api, "sec-group", "g-sec")
-	stubSyncedGroup(api, "sys-group", "g-sys")
 	ch := &model.Channel{Id: "ch", TeamId: "tid"}
 
-	api.On("UpsertGroupSyncable", mock.MatchedBy(func(gs *model.GroupSyncable) bool { return gs.GroupId == "g-sec" })).
-		Return(nil, testAppErr("not allowed"))
 	api.On("UpsertGroupSyncable", mock.MatchedBy(func(gs *model.GroupSyncable) bool {
-		return gs.GroupId == "g-sys"
+		return gs.GroupId == "g-sec" && gs.Type == model.GroupSyncableTypeTeam
 	})).Return(&model.GroupSyncable{}, nil)
-	api.On("CreateDefaultSyncableMemberships", mock.Anything).Return(testAppErr("sync failed"))
+	api.On("UpsertGroupSyncable", mock.MatchedBy(func(gs *model.GroupSyncable) bool {
+		return gs.GroupId == "g-sec" && gs.Type == model.GroupSyncableTypeChannel
+	})).Return(nil, testAppErr("not allowed"))
 
 	p.linkTwoStepGroupsToChannel(ch)
 
-	// The security group's channel link failed, so only the system group syncs.
-	api.AssertNumberOfCalls(t, "CreateDefaultSyncableMemberships", 1)
-	api.AssertNumberOfCalls(t, "UpsertGroupSyncable", 4)
+	api.AssertNotCalled(t, "CreateDefaultSyncableMemberships", mock.Anything)
+	api.AssertNumberOfCalls(t, "UpsertGroupSyncable", 2)
 }
 
 // approvalChannels resolves the bot and webhook approval channels in team
@@ -712,7 +687,7 @@ func TestListTwoStepApproverUserIDs_DedupesAndSkipsBlank(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		// Both pools read the same attribute, so every holder appears twice.
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "shared", SystemApproverAttribute: "shared"})
+		p.setConfiguration(&configuration{SecurityApproverAttribute: "shared"})
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 		api.On("GetPropertyFieldByName", "grp", "", "shared").Return(adminField("fld", "grp"), nil)
 		api.On("SearchPropertyValues", "grp", mock.Anything).Return([]*model.PropertyValue{
@@ -724,7 +699,7 @@ func TestListTwoStepApproverUserIDs_DedupesAndSkipsBlank(t *testing.T) {
 	t.Run("usergroup mode", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "grp-a", SystemApproverGroup: "grp-a"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "grp-a"})
 		stubSyncedGroup(api, "grp-a", "g-a")
 		api.On("GetGroupMemberUsers", "g-a", 0, 100).Return([]*model.User{{Id: ""}, {Id: "u1"}}, nil)
 		require.Equal(t, []string{"u1"}, p.listTwoStepApproverUserIDs())

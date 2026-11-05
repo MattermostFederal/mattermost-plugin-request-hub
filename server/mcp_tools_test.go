@@ -396,7 +396,7 @@ func mcpRequestCases() map[string]mcpRequestCase {
 		"request_bot": {
 			tool: "request_bot",
 			args: withBotDecl(map[string]any{
-				"username": "svcbot", "display_name": "Service Bot", "description": "Posts build results", "owner": "@owner",
+				"username": "svcbot", "display_name": "Service Bot", "owner": "@owner",
 			}),
 			stub: func(api *plugintest.API) {
 				stubBotHome(api)
@@ -405,7 +405,7 @@ func mcpRequestCases() map[string]mcpRequestCase {
 			},
 			kvPrefix: kvBotRequestPrefix,
 			want: map[string]any{
-				"username": "svcbot", "display_name": "Service Bot", "description": "Posts build results", "owner_user_id": testOwnerID,
+				"username": "svcbot", "display_name": "Service Bot", "description": "Posts CI results", "owner_user_id": testOwnerID,
 			},
 		},
 		"request_bot no owner": {
@@ -414,8 +414,8 @@ func mcpRequestCases() map[string]mcpRequestCase {
 			stub:     stubBotHome,
 			kvPrefix: kvBotRequestPrefix,
 			want: map[string]any{
-				"username": "svcbot", "owner_user_id": nil, "purpose": "Posts CI results", "privilege_level": "post",
-				"data_ingestion": "Jenkins webhook payloads", "hosting_env": "mattermost-dev", "home_team_id": "team1", "home_channel_id": testHomeChannelID,
+				"username": "svcbot", "owner_user_id": nil, "purpose": "Posts CI results",
+				"hosting_env": "ci_cd", "home_team_id": "team1", "home_channel_id": testHomeChannelID,
 			},
 		},
 		"request_webhook incoming": {
@@ -623,8 +623,8 @@ func TestMCPRequestTools_NonMemberIsRefused(t *testing.T) {
 // withBotDecl adds a valid declaration and home to request_bot arguments.
 func withBotDecl(args map[string]any) map[string]any {
 	out := map[string]any{
-		"purpose": "Posts CI results", "privilege_level": "post", "data_ingestion": "Jenkins webhook payloads",
-		"hosting_env": "mattermost-dev", "team_id": "team1", "channel_id": testHomeChannelID,
+		"purpose": "Posts CI results", "integration_endpoint": testBotIntegURL, "architecture_url": testBotArchURL,
+		"hosting_env": "ci_cd", "team_id": "team1", "channel_id": testHomeChannelID,
 	}
 	maps.Copy(out, args)
 	return out

@@ -49,7 +49,7 @@ func TestCanRelayApprovalThreadReply(t *testing.T) {
 	t.Run("plain user cannot relay bot tickets without attributes", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
 		user := &model.User{Id: "u", Roles: "system_user"}
 		require.False(t, p.canRelayApprovalThreadReply(user, threadAnchor{Kind: requestTypeBot}))
 	})

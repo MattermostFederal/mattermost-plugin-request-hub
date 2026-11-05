@@ -40,7 +40,7 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true})
 
 	api.On("GetUser", "u_admin").Return(&model.User{Id: "u_admin", Username: "admin", Roles: "system_user system_admin"}, nil)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
@@ -68,7 +68,7 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true})
 
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
@@ -90,7 +90,7 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "dm-1"}, nil)
 
 	stubBotHome(api)
-	msg, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot", Description: "watches things"}))
+	msg, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot"}))
 
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")

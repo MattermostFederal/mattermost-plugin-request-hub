@@ -68,7 +68,13 @@ test.describe('plugin entry point', () => {
             'Request Outgoing Webhook',
             'Request a Bot',
         ]);
-        expect(r.adminSettings).toEqual(['ApprovalTeam', 'ChannelNamePrefixes']);
+        expect(r.adminSettings).toEqual([
+            'TwoStepApproverMode',
+            'SecurityApproverAttribute',
+            'SecurityApproverGroup',
+            'ApprovalTeam',
+            'ChannelNamePrefixes',
+        ]);
         expect(r.errors).toEqual([]);
     });
 

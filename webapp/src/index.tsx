@@ -23,6 +23,11 @@ import {RequestTeamAdminModal} from './RequestTeamAdminModal';
 import {RequestTeamGuestModal} from './RequestTeamGuestModal';
 import {RequestTeamMemberModal} from './RequestTeamMemberModal';
 import {RequestTeamModal} from './RequestTeamModal';
+import {
+    SecurityApproverAttributeSetting,
+    SecurityApproverGroupSetting,
+    TwoStepApproverModeSetting,
+} from './TwoStepApproverSettings';
 import reducer, {
     getCurrentTeamId,
     getChannelType,
@@ -261,6 +266,21 @@ export default class Plugin {
         // with structured pickers. Each maps to a settings_schema key
         // in plugin.json (whose type is "custom").
         if (registry.registerAdminConsoleCustomSetting) {
+            registry.registerAdminConsoleCustomSetting(
+                'TwoStepApproverMode',
+                TwoStepApproverModeSetting,
+                {showTitle: true},
+            );
+            registry.registerAdminConsoleCustomSetting(
+                'SecurityApproverAttribute',
+                SecurityApproverAttributeSetting,
+                {showTitle: true},
+            );
+            registry.registerAdminConsoleCustomSetting(
+                'SecurityApproverGroup',
+                SecurityApproverGroupSetting,
+                {showTitle: true},
+            );
             registry.registerAdminConsoleCustomSetting(
                 'ApprovalTeam',
                 TeamPicker,

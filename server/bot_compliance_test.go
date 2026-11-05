@@ -73,7 +73,7 @@ func TestSubmitBotRequest_StoresAndAuditsTheAcceptance(t *testing.T) {
 	api := &plugintest.API{}
 	stored := stubBotSubmit(t, api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
 	events := captureAudit(p)
 
 	_, err := p.submitBotRequest("u_req", declared(botRequestInput{
@@ -105,7 +105,7 @@ func TestSubmitBotRequest_RefusesWithoutAcceptance(t *testing.T) {
 	stubNamesFree(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
 	events := captureAudit(p)
 
 	_, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "svcbot", DisplayName: "Service Bot"}))
@@ -157,7 +157,7 @@ func TestBotSlashCommand_ShowsTheStatementWithoutTheFlag(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{AllowBotTokenRequests: true, BotComplianceEnabled: true, BotComplianceStatement: "Be good."})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, AllowBotTokenRequests: true, BotComplianceEnabled: true, BotComplianceStatement: "Be good."})
 
 	resp, appErr := p.ExecuteCommand(nil, commandArgs("bot svcbot Service Bot"))
 
@@ -176,15 +176,13 @@ func TestHandleBotForm(t *testing.T) {
 	p.setConfiguration(&configuration{})
 	w := serve(p, http.MethodGet, routeBotForm, "u1", "")
 	require.Equal(t, http.StatusOK, w.Code)
-	require.JSONEq(t, `{"compliance":{"enabled":false},"hosting_envs":["mattermost-dev","mattermost-prod"],`+
-		`"privilege_levels":[{"value":"read","label":"Read only"},{"value":"post","label":"Read and post"},{"value":"elevated","label":"Elevated (admin-level APIs)"}]}`, w.Body.String())
+	require.JSONEq(t, `{"compliance":{"enabled":false}}`, w.Body.String())
 
-	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Be good.", BotHostingEnvironments: "lab\n\n prod \nlab"})
+	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Be good."})
 	w = serve(p, http.MethodGet, routeBotForm, "u1", "")
 	var form botFormDTO
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &form))
 	require.Equal(t, botComplianceDTO{Enabled: true, Text: "Be good.", SHA256: complianceHash("Be good.")}, form.Compliance)
-	require.Equal(t, []string{"lab", "prod"}, form.HostingEnvs)
 
 	w = serve(p, http.MethodGet, routeBotForm, "", "")
 	require.Equal(t, http.StatusUnauthorized, w.Code)

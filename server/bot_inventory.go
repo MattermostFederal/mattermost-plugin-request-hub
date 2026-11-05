@@ -125,13 +125,17 @@ func (p *Plugin) buildBotInventory(f auditExportFilter, asOf int64) ([]inventory
 			(f.Since > 0 && e.CreatedAt < f.Since) || (f.Until > 0 && e.CreatedAt > f.Until) {
 			continue
 		}
+		ownerID := strings.TrimSpace(e.OwnerUserID)
+		if ownerID == "" {
+			ownerID = e.RequesterID
+		}
 		row := inventoryRow{
 			BotID: e.BotUserID, BotUsername: e.Username, BotDisplayName: e.DisplayName,
 			HomeTeamID: e.HomeTeamID, HomeTeamName: look.teamName(e.HomeTeamID),
 			HomeChannelID: e.HomeChannelID, HomeChannelName: look.channelName(e.HomeChannelID),
 			Purpose: e.Purpose, PrivilegeLevel: e.PrivilegeLevel, DataIngestion: e.DataIngestion, HostingEnv: e.HostingEnv,
 			RequesterID: e.RequesterID, RequesterUsername: look.username(e.RequesterID),
-			OwnerID: e.OwnerUserID, OwnerUsername: look.username(e.OwnerUserID),
+			OwnerID: ownerID, OwnerUsername: look.username(ownerID),
 			RequestID: e.RequestID, RequestedAt: e.RequestedAt, ApprovedAt: e.CreatedAt,
 			ApprovedByID: e.ApprovedBy, ApprovedByUsername: look.username(e.ApprovedBy),
 			RHManaged: true, AsOf: asOf,
@@ -147,6 +151,11 @@ func (p *Plugin) buildBotInventory(f auditExportFilter, asOf int64) ([]inventory
 			row.BotStatus, row.BotActive = botStatusActive, bot.DeleteAt == 0
 			if !row.BotActive {
 				row.BotStatus = botStatusDeactivated
+			}
+			// Prefer the live Mattermost bot owner when present (as-of export).
+			if id := strings.TrimSpace(bot.OwnerId); id != "" {
+				row.OwnerID = id
+				row.OwnerUsername = look.username(id)
 			}
 		case isNotFound(appErr):
 			row.BotStatus = botStatusDeleted

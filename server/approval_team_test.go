@@ -26,7 +26,7 @@ func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 		}
 	}
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam"})
+	p.setConfiguration(&configuration{ApprovalTeam: "appteam", TwoStepApproverMode: twoStepModeSystemAdmin})
 	return p, api
 }
 
@@ -227,6 +227,11 @@ func TestForgetApprovalTeam_FailureIsLogged(t *testing.T) {
 // stubLoadConfiguration makes LoadPluginConfiguration fill in cfg and skips
 // the one-time prefix migration.
 func stubLoadConfiguration(api *plugintest.API, cfg configuration) {
+	// Tests that omit TwoStepApproverMode would otherwise flip to attribute
+	// mode and background-reseed CPA lookups against an unstubbed mock.
+	if strings.TrimSpace(cfg.TwoStepApproverMode) == "" {
+		cfg.TwoStepApproverMode = twoStepModeSystemAdmin
+	}
 	api.On("LoadPluginConfiguration", mock.Anything).Run(func(args mock.Arguments) {
 		*args.Get(0).(*configuration) = cfg
 	}).Return(nil)
@@ -236,7 +241,8 @@ func stubLoadConfiguration(api *plugintest.API, cfg configuration) {
 func TestOnConfigurationChange_NewApprovalTeamForgetsRecord(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	defer api.AssertExpectations(t)
-	stubLoadConfiguration(api, configuration{ApprovalTeam: "otherteam"})
+	// Keep system_admin so the two-step fingerprint does not reseed in the background.
+	stubLoadConfiguration(api, configuration{ApprovalTeam: "otherteam", TwoStepApproverMode: twoStepModeSystemAdmin})
 	api.On("KVDelete", kvApprovalTeamKey).Return(nil).Once()
 
 	require.NoError(t, p.OnConfigurationChange())
@@ -245,7 +251,7 @@ func TestOnConfigurationChange_NewApprovalTeamForgetsRecord(t *testing.T) {
 
 func TestOnConfigurationChange_SameApprovalTeamKeepsRecord(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
-	stubLoadConfiguration(api, configuration{ApprovalTeam: " appteam "})
+	stubLoadConfiguration(api, configuration{ApprovalTeam: " appteam ", TwoStepApproverMode: twoStepModeSystemAdmin})
 
 	require.NoError(t, p.OnConfigurationChange())
 	api.AssertNotCalled(t, "KVDelete", kvApprovalTeamKey)

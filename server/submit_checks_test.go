@@ -657,7 +657,6 @@ func TestSubmitBotRequest_Refusals(t *testing.T) {
 			api.On("GetUserByUsername", "svcbot").Return(nil, testAppErr("db down"))
 		}, wantErr: "could not check whether that name is free"}, ok},
 		{submitCase{name: "display name too long", wantErr: "Display name must be"}, with(func(in *botRequestInput) { in.DisplayName = long })},
-		{submitCase{name: "description too long", wantErr: "Description must be"}, with(func(in *botRequestInput) { in.Description = strings.Repeat("d", maxDescriptionLen+1) })},
 		{submitCase{name: "incoming hook name too long", wantErr: "Incoming webhook name must be"}, with(func(in *botRequestInput) { in.IncomingWebhookDisplayName = long })},
 		{submitCase{name: "outgoing hook name too long", wantErr: "Outgoing webhook name must be"}, with(func(in *botRequestInput) { in.OutgoingWebhookDisplayName = long })},
 		{submitCase{name: "hook name too many bytes", wantErr: "Incoming webhook name must be 64 bytes or fewer"}, with(func(in *botRequestInput) {
@@ -682,14 +681,15 @@ func TestSubmitBotRequest_Refusals(t *testing.T) {
 			stubRequester(api)
 			api.On("GetChannel", "ch-in").Return(&model.Channel{Id: "ch-in", Type: model.ChannelTypeOpen, DeleteAt: 1}, nil)
 		}, wantErr: "incoming webhook channel: webhooks can't target an archived channel"}, with(func(in *botRequestInput) { in.IncomingWebhookChannelID = "ch-in" })},
-		{submitCase{name: "no purpose", wantErr: "Describe the bot's purpose."}, with(func(in *botRequestInput) { in.Purpose = "  " })},
-		{submitCase{name: "purpose too long", wantErr: "Purpose must be"}, with(func(in *botRequestInput) { in.Purpose = strings.Repeat("p", maxDescriptionLen+1) })},
-		{submitCase{name: "no privilege level", wantErr: "Pick a privilege level: read, post, elevated."}, with(func(in *botRequestInput) { in.PrivilegeLevel = "" })},
-		{submitCase{name: "unknown privilege level", wantErr: "Pick a privilege level"}, with(func(in *botRequestInput) { in.PrivilegeLevel = "root" })},
-		{submitCase{name: "no data ingestion", wantErr: "Describe the data the bot takes in."}, with(func(in *botRequestInput) { in.DataIngestion = "" })},
-		{submitCase{name: "data ingestion too long", wantErr: "Data ingestion must be"}, with(func(in *botRequestInput) { in.DataIngestion = strings.Repeat("d", maxDescriptionLen+1) })},
-		{submitCase{name: "unknown hosting environment", wantErr: "Pick a hosting environment: mattermost-dev, mattermost-prod."}, with(func(in *botRequestInput) { in.HostingEnv = "staging" })},
-		{submitCase{name: "environment not in the configured list", cfg: &configuration{AllowBotTokenRequests: true, BotHostingEnvironments: "lab"}, wantErr: "Pick a hosting environment: lab."}, ok},
+		{submitCase{name: "no purpose", wantErr: "purpose is required"}, with(func(in *botRequestInput) { in.Purpose = "  " })},
+		{submitCase{name: "purpose too long", wantErr: "Purpose must be"}, with(func(in *botRequestInput) { in.Purpose = strings.Repeat("p", maxBotPurposeLen+1) })},
+		{submitCase{name: "no integration endpoint", wantErr: "integration endpoint is required"}, with(func(in *botRequestInput) { in.IntegrationURL = "" })},
+		{submitCase{name: "http integration endpoint", wantErr: "https://"}, with(func(in *botRequestInput) { in.IntegrationURL = "http://ci.example/hook" })},
+		{submitCase{name: "unknown hosting environment", wantErr: "script or service runs"}, with(func(in *botRequestInput) { in.HostingEnv = "staging" })},
+		{submitCase{name: "other hosting needs detail", wantErr: "Specify where the script"}, with(func(in *botRequestInput) {
+			in.HostingEnv = hostingOther
+			in.HostingOtherDetail = ""
+		})},
 		{submitCase{name: "no home", setup: stubRequester, wantErr: botHomeMissingMsg}, with(func(in *botRequestInput) { in.HomeChannelID = "" })},
 		{submitCase{name: "requester not on the home team", setup: func(api *plugintest.API) {
 			stubRequester(api)

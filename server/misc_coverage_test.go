@@ -225,7 +225,7 @@ func TestGetConfiguration_UnsetReturnsEmpty(t *testing.T) {
 
 func TestTwoStepPoolFingerprint_NilAndTrimmed(t *testing.T) {
 	require.Empty(t, twoStepPoolFingerprint(nil))
-	require.Equal(t, twoStepModeUserGroup+"|sec||||false",
+	require.Equal(t, twoStepModeUserGroup+"|sec|",
 		twoStepPoolFingerprint(&configuration{TwoStepApproverMode: "groups", SecurityApproverGroup: " sec "}))
 }
 
@@ -355,7 +355,15 @@ func TestOnConfigurationChange_TwoStepPoolChangeReseedsChannels(t *testing.T) {
 	// Keep the log stubs: the background reseed still logs after the wait.
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	stubLoadConfiguration(api, configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
+	// newTestPlugin defaults to system_admin; switching to usergroup changes the fingerprint.
+	stubLoadConfiguration(api, configuration{
+		TwoStepApproverMode:   twoStepModeUserGroup,
+		SecurityApproverGroup: "security-approvers",
+	})
+	api.On("GetTeamByName", mock.Anything).Return(nil, testAppErr("no approval team")).Maybe()
+	api.On("GetGroupByName", mock.Anything).Return(nil, testAppErr("missing")).Maybe()
+	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
+	api.On("GetGroupsBySource", mock.Anything).Return([]*model.Group{}, nil).Maybe()
 
 	require.NoError(t, p.OnConfigurationChange())
 

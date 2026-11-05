@@ -273,13 +273,13 @@ export async function submitTeamGuestRequest(payload: TeamGuestRequestPayload): 
 export type BotRequestPayload = {
     username: string;
     display_name: string;
-    description?: string;
-    purpose?: string;
-    privilege_level?: string;
-    data_ingestion?: string;
-    hosting_env?: string;
-    home_team_id?: string;
-    home_channel_id?: string;
+    purpose: string;
+    architecture_url?: string;
+    integration_endpoint: string;
+    hosting_env: 'ci_cd' | 'on_prem_server' | 'cloud_or_k8s' | 'workstation' | 'external_saas' | 'other';
+    hosting_other_detail?: string;
+    home_team_id: string;
+    home_channel_id: string;
     request_token?: boolean;
     incoming_webhook_channel_id?: string;
     incoming_webhook_display_name?: string;
@@ -290,7 +290,18 @@ export type BotRequestPayload = {
     compliance_text_hash?: string;
 };
 
-export type BotFormOption = {value: string; label: string};
+export type BotHomeTeam = {
+    id: string;
+    name: string;
+    display_name: string;
+};
+
+export type BotHomeChannel = {
+    id: string;
+    name: string;
+    display_name: string;
+    type: string;
+};
 
 export type BotForm = {
     compliance: {
@@ -298,13 +309,38 @@ export type BotForm = {
         text?: string;
         sha256?: string;
     };
-    hosting_envs: string[];
-    privilege_levels: BotFormOption[];
 };
 
-// fetchBotForm returns the bot form's settings, or null when they can't be
-// loaded. Unlike fetchEnabledRequestTypes it does not fail open: the form
-// must not be submitted without the statement the server requires.
+// fetchBotHomeTeams lists teams the current user belongs to for the bot home picker.
+export async function fetchBotHomeTeams(): Promise<BotHomeTeam[]> {
+    const response = await fetch(`/plugins/${manifest.id}/api/v1/teams`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to load teams (${response.status})`);
+    }
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
+}
+
+// fetchBotHomeChannels lists public/private channels in a team for the bot home picker.
+export async function fetchBotHomeChannels(teamId: string): Promise<BotHomeChannel[]> {
+    const response = await fetch(
+        `/plugins/${manifest.id}/api/v1/channels?team_id=${encodeURIComponent(teamId)}`,
+        {method: 'GET', credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'}},
+    );
+    if (!response.ok) {
+        throw new Error(`Failed to load channels (${response.status})`);
+    }
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
+}
+
+// fetchBotForm returns the Terms and Conditions settings, or null when they
+// can't be loaded. The form must not be submitted without the statement the
+// server requires when compliance is on.
 export async function fetchBotForm(): Promise<BotForm | null> {
     try {
         const response = await fetch(`/plugins/${manifest.id}/api/v1/bot_form`, {
@@ -322,10 +358,6 @@ export async function fetchBotForm(): Promise<BotForm | null> {
                 text: typeof body?.compliance?.text === 'string' ? body.compliance.text : undefined,
                 sha256: typeof body?.compliance?.sha256 === 'string' ? body.compliance.sha256 : undefined,
             },
-            hosting_envs: Array.isArray(body?.hosting_envs) ? body.hosting_envs.filter((env: unknown): env is string => typeof env === 'string') : [],
-            privilege_levels: Array.isArray(body?.privilege_levels) ? body.privilege_levels.filter(
-                (level: unknown): level is BotFormOption => typeof (level as BotFormOption)?.value === 'string' && typeof (level as BotFormOption)?.label === 'string',
-            ) : [],
         };
     } catch {
         return null;

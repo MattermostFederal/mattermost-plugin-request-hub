@@ -51,7 +51,6 @@ func TestSyncTwoStepApproverChannels_SeedsSecurityGroupMembers(t *testing.T) {
 		ApprovalTeam:          "appteam",
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	secName := "security-approvers"
@@ -87,7 +86,7 @@ func TestSyncTwoStepApproverChannels_SeedsSecurityGroupMembers(t *testing.T) {
 	api.AssertCalled(t, "AddChannelMember", "bot-ch", "dual")
 }
 
-func TestListApproverGroupMemberIDs_IgnoresCustomGroups(t *testing.T) {
+func TestListApproverGroupMemberIDs_UsesCustomGroups(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -95,19 +94,15 @@ func TestListApproverGroupMemberIDs_IgnoresCustomGroups(t *testing.T) {
 	secName := "security-approvers"
 	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
 	api.On("GetGroupByName", "security-approvers").Return(custom, nil)
-	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{custom}, nil)
-	api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{}, nil)
+	api.On("GetGroupMemberUsers", "g-custom", 0, 100).Return([]*model.User{{Id: "u1"}}, nil)
 
-	require.Empty(t, p.listApproverGroupMemberIDs("@security-approvers"))
-	api.AssertNotCalled(t, "GetGroupMemberUsers", mock.Anything, mock.Anything, mock.Anything)
-	api.AssertNotCalled(t, "GetUsers", mock.Anything)
+	require.Equal(t, []string{"u1"}, p.listApproverGroupMemberIDs("@security-approvers"))
 }
 
-func TestResolveApproverGroup_UsesCustomGroupsWhenAllowed(t *testing.T) {
+func TestResolveApproverGroup_UsesCustomGroups(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{AllowCustomApproverGroups: true})
 
 	secName := "security-approvers"
 	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
@@ -118,10 +113,10 @@ func TestResolveApproverGroup_UsesCustomGroupsWhenAllowed(t *testing.T) {
 	require.Equal(t, "g-custom", group.Id)
 }
 
-func TestTwoStepPoolFingerprint_ChangesWithCustomGroupSetting(t *testing.T) {
-	off := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s"}
-	on := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s", AllowCustomApproverGroups: true}
-	require.NotEqual(t, twoStepPoolFingerprint(off), twoStepPoolFingerprint(on))
+func TestTwoStepPoolFingerprint_ChangesWithSecurityGroup(t *testing.T) {
+	a := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "a"}
+	b := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "b"}
+	require.NotEqual(t, twoStepPoolFingerprint(a), twoStepPoolFingerprint(b))
 }
 
 func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
@@ -133,7 +128,6 @@ func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
 		ApprovalTeam:          "appteam",
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	secName := "security-approvers"

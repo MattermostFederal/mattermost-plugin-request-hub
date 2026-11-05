@@ -51,62 +51,57 @@ func (c *configuration) twoStepMode() string {
 	}
 }
 
-// approverAttributeName returns the configured User Attribute name for the given
-// step, trimmed. Empty means the admin hasn't configured that pool.
+// approverAttributeName returns the security CPA attribute name (attribute
+// mode). The system step has no attribute — only System Admins. Blank config
+// uses the shipped default so the pool is always required.
 func (c *configuration) approverAttributeName(step approverStep) string {
-	switch step {
-	case stepSecurity:
-		return strings.TrimSpace(c.SecurityApproverAttribute)
-	case stepSystem:
-		return strings.TrimSpace(c.SystemApproverAttribute)
-	default:
+	if step != stepSecurity {
 		return ""
 	}
+	name := strings.TrimSpace(c.SecurityApproverAttribute)
+	if name == "" {
+		return defaultSecurityApproverAttribute
+	}
+	return name
 }
 
-// approverGroupName returns the configured Mattermost group name/handle for the
-// given step (usergroup mode). Empty means fall back to System Admins for that step.
-// Leading "@" is stripped so admins can paste either form from the UI.
+// approverGroupName returns the security Mattermost group name (usergroup
+// mode). Leading "@" is stripped. Blank config uses the shipped default so
+// the pool is always required. The system step has no group.
 func (c *configuration) approverGroupName(step approverStep) string {
-	var raw string
-	switch step {
-	case stepSecurity:
-		raw = c.SecurityApproverGroup
-	case stepSystem:
-		raw = c.SystemApproverGroup
-	default:
+	if step != stepSecurity {
 		return ""
 	}
-	return strings.TrimPrefix(strings.TrimSpace(raw), "@")
+	name := normalizeApproverGroupName(c.SecurityApproverGroup)
+	if name == "" {
+		return defaultSecurityApproverGroup
+	}
+	return name
 }
 
 // canApproveStep reports whether the user may approve the given step of a
 // two-step bot/webhook request. Behavior depends on TwoStepApproverMode:
 //
-//   - attribute: CPA / User Attribute holders (names are configurable).
-//   - usergroup: members of the configured Mattermost groups.
-//   - system_admin: System Admins only (intentional backup when ABAC/groups
-//     are not available).
+//   - attribute: security = holders of the configured CPA attribute.
+//   - usergroup: security = members of the configured Mattermost group
+//     (custom or LDAP/plugin-synced).
+//   - system_admin: security = System Admins (setup backup).
 //
-// Desired production flow (attribute / usergroup with a security pool name set):
-//  1. Security step first — a security-pool member must review (System Admins do
-//     NOT auto-qualify for security once a pool is configured). Dual-role users
-//     (security + system) fill security on their first click.
-//  2. System step second — a different System Admin OR system-pool member
-//     approves (another dual-role security member may take this step).
+// The system step is always System Admins — never a second group/attribute.
+//
+// Production flow (attribute / usergroup):
+//  1. Security step first — a security-pool member must review (System Admins
+//     do NOT auto-qualify). Dual-role users fill security on their first click.
+//  2. System step second — a different System Admin approves.
 //  3. Those two clicks must come from two distinct users.
 //
-// Soft fallback: if the security pool name is blank, System Admins may cover
-// the security *step* so tickets are not stuck during setup — but attribute /
-// usergroup mode still needs a second distinct click for the system step.
 // Only system_admin mode lets one System Admin finish both in one click.
 func (p *Plugin) canApproveStep(user *model.User, step approverStep) (bool, error) {
 	if user == nil {
 		return false, nil
 	}
-	// System Admins always qualify for the system step (role OR system group).
-	if step == stepSystem && user.IsSystemAdmin() {
-		return true, nil
+	if step == stepSystem {
+		return user.IsSystemAdmin(), nil
 	}
 
 	cfg := p.getConfiguration()
@@ -114,59 +109,52 @@ func (p *Plugin) canApproveStep(user *model.User, step approverStep) (bool, erro
 	case twoStepModeSystemAdmin:
 		return user.IsSystemAdmin(), nil
 	case twoStepModeUserGroup:
-		return p.canApproveStepViaGroup(user, step)
+		return p.canApproveStepViaGroup(user, stepSecurity)
 	default:
-		return p.canApproveStepViaAttribute(user, step)
+		return p.canApproveStepViaAttribute(user, stepSecurity)
 	}
 }
 
 func (p *Plugin) canApproveStepViaAttribute(user *model.User, step approverStep) (bool, error) {
-	attrName := p.getConfiguration().approverAttributeName(step)
+	if step != stepSecurity {
+		return false, nil
+	}
+	attrName := p.getConfiguration().approverAttributeName(stepSecurity)
 	if attrName == "" {
-		return user.IsSystemAdmin(), nil
+		return false, nil
 	}
 
 	ok, err := p.userIsApprover(user, attrName)
 	if err != nil {
 		p.API.LogWarn("approver attribute check failed", "attr", attrName, "step", step.String(), "error", err.Error())
-		return p.poolLookupSoftFallback(user, step), nil
+		return false, nil
 	}
 	if ok {
 		return true, nil
-	}
-	if !p.approverAttributePoolReady(attrName) {
-		return p.poolLookupSoftFallback(user, step), nil
 	}
 	return false, nil
 }
 
 func (p *Plugin) canApproveStepViaGroup(user *model.User, step approverStep) (bool, error) {
-	groupName := p.getConfiguration().approverGroupName(step)
+	if step != stepSecurity {
+		return false, nil
+	}
+	groupName := p.getConfiguration().approverGroupName(stepSecurity)
 	if groupName == "" {
-		return user.IsSystemAdmin(), nil
+		return false, nil
 	}
 
 	in, err := p.userInApproverGroup(user.Id, groupName)
 	if err != nil {
 		p.API.LogWarn("approver group check failed", "group", groupName, "step", step.String(), "error", err.Error())
-		return p.poolLookupSoftFallback(user, step), nil
+		return false, nil
 	}
 	return in, nil
 }
 
-// poolLookupSoftFallback: once a security pool name is configured, System
-// Admins must not cover the security step — that would skip the forced
-// security review. System-step lookups may still fall back to System Admin.
-func (p *Plugin) poolLookupSoftFallback(user *model.User, step approverStep) bool {
-	if step == stepSecurity && p.getConfiguration().securityPoolConfigured() {
-		return false
-	}
-	return user.IsSystemAdmin()
-}
-
-// userInApproverGroup reports whether userID belongs to the LDAP or
-// plugin-synced group configured as groupName. It returns an error when that
-// group can't be found, so callers don't treat a failed lookup as "not a
+// userInApproverGroup reports whether userID belongs to the configured
+// Mattermost group (custom or LDAP/plugin-synced). It returns an error when
+// that group can't be found, so callers don't treat a failed lookup as "not a
 // member".
 func (p *Plugin) userInApproverGroup(userID, groupName string) (bool, error) {
 	if userID == "" || normalizeApproverGroupName(groupName) == "" {
@@ -188,16 +176,14 @@ func (p *Plugin) userInApproverGroup(userID, groupName string) (bool, error) {
 	return false, nil
 }
 
-// securityPoolConfigured is true when attribute/usergroup mode has a non-empty
-// security pool name — meaning a forced security review is required.
+// securityPoolConfigured is true in attribute/usergroup mode: those modes
+// always require a distinct security reviewer (pool name defaults if blank).
 func (c *configuration) securityPoolConfigured() bool {
 	switch c.twoStepMode() {
 	case twoStepModeSystemAdmin:
 		return false
-	case twoStepModeUserGroup:
-		return c.approverGroupName(stepSecurity) != ""
 	default:
-		return c.approverAttributeName(stepSecurity) != ""
+		return true
 	}
 }
 

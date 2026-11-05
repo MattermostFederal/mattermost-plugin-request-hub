@@ -201,18 +201,19 @@ func argumentFormCases() map[string]argumentFormCase {
 			},
 		},
 		"bot": {
-			command: "bot svcbot Service Bot --description Posts build results --owner @owner --purpose Posts CI results --privilege post --ingestion Jenkins payloads --env mattermost-prod",
+			command: "bot svcbot Service Bot --owner @owner --purpose Posts CI results --integration https://ci.example/hooks/mm --architecture https://docs.example/arch --env ci_cd",
 			stub: func(api *plugintest.API) {
 				api.On("GetChannel", "chX").Return(&model.Channel{Id: "chX", Name: "builds", TeamId: "team1", Type: model.ChannelTypeOpen}, nil).Maybe()
 				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Maybe()
 				api.On("GetUserByUsername", "owner").Return(&model.User{Id: testOwnerID}, nil)
 				api.On("GetUser", testOwnerID).Return(&model.User{Id: testOwnerID, Username: "owner"}, nil)
+				api.On("GetConfig").Return(&model.Config{}).Maybe()
 			},
 			kvPrefix: kvBotRequestPrefix,
 			want: map[string]any{
-				"username": "svcbot", "display_name": "Service Bot", "description": "Posts build results", "owner_user_id": testOwnerID,
-				"purpose": "Posts CI results", "privilege_level": "post", "data_ingestion": "Jenkins payloads", "hosting_env": "mattermost-prod",
-				"home_team_id": "team1", "home_channel_id": "chX",
+				"username": "svcbot", "display_name": "Service Bot", "description": "Posts CI results", "owner_user_id": testOwnerID,
+				"purpose": "Posts CI results", "architecture_url": "https://docs.example/arch", "integration_endpoint": "https://ci.example/hooks/mm",
+				"hosting_env": "ci_cd", "home_team_id": "team1", "home_channel_id": "chX",
 			},
 		},
 		"incoming webhook": {
@@ -340,7 +341,7 @@ func TestExecuteCommand_ArgumentFormsUsage(t *testing.T) {
 		"bot svcbot Svc --owner @":                   "name the owner as `@user`",
 		"bot svcbot":                                 "a bot username and a display name are required",
 		"bot svcbot Svc --owner a b":                 "`--owner` takes exactly one value",
-		"bot svcbot Svc --description":               "`--description` needs some text",
+		"bot svcbot Svc --integration":               "`--integration` needs an https URL",
 		"bot --x":                                    "unknown option `--x`",
 		"webhook-incoming ~alerts":                   "a channel and a display name are required",
 		"webhook-incoming ~alerts A --callback http": "unknown option `--callback`",

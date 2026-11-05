@@ -892,9 +892,12 @@ func (p *Plugin) seedExerciseBotDeclaration(req *botRequest, teamID string, spec
 	if req.Purpose == "" {
 		req.Purpose = spec.DisplayName
 	}
-	req.PrivilegeLevel = privilegePost
-	req.DataIngestion = "Exercise data only."
-	req.HostingEnv = c.HostingEnvs()[0]
+	req.PrivilegeLevel = privilegeUserEquivalent
+	req.MMPrivilege = mmPrivilegeMemberUserOnly
+	req.DataIngestion = defaultChannelAccessNote
+	req.HostingEnv = hostingCICD
+	req.IntegrationURL = "https://exercise.example/hooks/mm"
+	req.Description = req.Purpose
 	home := req.IncomingWebhookChannelID
 	if home == "" {
 		home = req.OutgoingWebhookChannelID

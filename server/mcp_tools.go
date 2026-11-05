@@ -78,16 +78,16 @@ type RequestTeamGuestArgs struct {
 }
 
 type RequestBotArgs struct {
-	Username       string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
-	DisplayName    string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
-	Description    string `json:"description,omitempty" jsonschema:"What the bot is for, at most 500 characters"`
-	Owner          string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
-	Purpose        string `json:"purpose" jsonschema:"Why the bot is needed and what it will do, at most 500 characters"`
-	PrivilegeLevel string `json:"privilege_level" jsonschema:"The access the bot needs: read, post or elevated"`
-	DataIngestion  string `json:"data_ingestion" jsonschema:"What data the bot reads or receives and from where, at most 500 characters"`
-	HostingEnv     string `json:"hosting_env" jsonschema:"Where the bot runs; one of the environments the server lists"`
-	TeamID         string `json:"team_id" jsonschema:"The ID of the bot's home team, a team the user is a member of"`
-	ChannelID      string `json:"channel_id" jsonschema:"The ID of the bot's home channel, a public or private channel of that team the user is a member of; the bot joins it on approval"`
+	Username           string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
+	DisplayName        string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
+	Owner              string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
+	Purpose            string `json:"purpose" jsonschema:"What the bot does and why; becomes the bot profile description, at most 500 characters"`
+	ArchitectureURL    string `json:"architecture_url,omitempty" jsonschema:"Optional https link to an architecture or design review"`
+	IntegrationURL     string `json:"integration_endpoint" jsonschema:"Required https URL of the integration that drives this bot"`
+	HostingEnv         string `json:"hosting_env" jsonschema:"Where the script/service runs: ci_cd, on_prem_server, cloud_or_k8s, workstation, external_saas, or other"`
+	HostingOtherDetail string `json:"hosting_other_detail,omitempty" jsonschema:"Required when hosting_env is other: where the script or service runs"`
+	TeamID             string `json:"team_id" jsonschema:"The ID of the bot's home team, a team the user is a member of"`
+	ChannelID          string `json:"channel_id" jsonschema:"The ID of the bot's home channel, a public or private channel of that team the user is a member of; the bot joins it on approval"`
 }
 
 type RequestWebhookArgs struct {
@@ -379,15 +379,15 @@ func (p *Plugin) requestBotTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return mcpMessage(p.submitBotRequest(userID, botRequestInput{
 		Username:    in.Username,
 		DisplayName: in.DisplayName,
-		Description: in.Description,
 		OwnerUserID: ownerID,
 
-		Purpose:        in.Purpose,
-		PrivilegeLevel: in.PrivilegeLevel,
-		DataIngestion:  in.DataIngestion,
-		HostingEnv:     in.HostingEnv,
-		HomeTeamID:     in.TeamID,
-		HomeChannelID:  in.ChannelID,
+		Purpose:            in.Purpose,
+		ArchitectureURL:    in.ArchitectureURL,
+		IntegrationURL:     in.IntegrationURL,
+		HostingEnv:         in.HostingEnv,
+		HostingOtherDetail: in.HostingOtherDetail,
+		HomeTeamID:         in.TeamID,
+		HomeChannelID:      in.ChannelID,
 	}))
 }
 

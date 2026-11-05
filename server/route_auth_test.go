@@ -124,7 +124,6 @@ func stubTwoStepGroups(api *plugintest.API, p *Plugin, userID string, groups ...
 		AllowWebhookRequests:  true,
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 	stubSyncedGroup(api, "security-approvers", "g-sec")
 	stubSyncedGroup(api, "system-approvers", "g-sys")

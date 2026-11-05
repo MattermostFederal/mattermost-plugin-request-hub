@@ -78,7 +78,12 @@ func stubPendingMigrated(api *plugintest.API) {
 // approvableConfig is a configuration whose prefix list allows the
 // "team-" channel names the approval tests use.
 func approvableConfig() *configuration {
-	return &configuration{AllowChannelRequests: true, AllowChannelAdminRequests: true, prefixes: []channelPrefix{{Prefix: "team-"}}}
+	return &configuration{
+		AllowChannelRequests:      true,
+		AllowChannelAdminRequests: true,
+		TwoStepApproverMode:       twoStepModeSystemAdmin,
+		prefixes:                  []channelPrefix{{Prefix: "team-"}},
+	}
 }
 
 // stubActiveTeamMember makes userID an active member of teamID.

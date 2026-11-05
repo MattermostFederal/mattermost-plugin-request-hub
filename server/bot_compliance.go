@@ -11,11 +11,26 @@ import (
 	"github.com/pkg/errors"
 )
 
-// defaultBotComplianceText is the statement a bot requester accepts when
-// BotComplianceText is blank.
-const defaultBotComplianceText = "By submitting this request I confirm that I will not use this bot for unauthorized, abusive, or harmful activity. " +
-	"I am responsible for all actions taken with this bot account, its tokens, and any webhooks associated with this request. " +
-	"I understand that activity may be audited and that misuse may result in revocation of access and other actions under organizational policy."
+// defaultBotComplianceText is the built-in Terms and Conditions a bot
+// requester must accept when BotComplianceStatement is blank. System Console
+// can replace this text; the request stores the exact wording that was shown.
+const defaultBotComplianceText = `MATTERMOST REQUEST HUB — BOT ACCOUNT TERMS AND CONDITIONS
+
+By requesting a bot account you agree to the following:
+
+1. Authorized use only. You will not use this bot, its access tokens, or any associated webhooks for unauthorized, abusive, harmful, deceptive, or illegal activity.
+
+2. Responsibility. You are responsible for all actions taken with this bot account, including posts, API calls, file access, and webhook traffic, whether performed by you or by systems you connect to the bot.
+
+3. Credentials. You will protect tokens and webhook URLs, store them in an approved secrets manager where required, and revoke or rotate them if they may have been exposed. Delivery DMs that contain secrets may auto-delete; save secrets before they disappear.
+
+4. Least privilege. The bot remains a regular Mattermost user (not Team Admin or System Admin). You will not attempt to escalate the bot's role outside approved organizational process.
+
+5. Audit and review. Activity may be audited. Request Hub may retain declaration fields, compliance acceptance, and related history. Misuse may result in revocation of access and other actions under organizational policy.
+
+6. Accuracy. The purpose, hosting, architecture, and integration details you declare are accurate to the best of your knowledge.
+
+If your organization has published a replacement statement in System Console, that statement controls instead of this built-in text.`
 
 const (
 	botComplianceRequiredMsg = "Accept the bot compliance statement to submit this request."
@@ -108,16 +123,10 @@ func slashComplianceText(c *configuration) string {
 		"\n\nTo accept it, run the command again with `--accept-compliance`."
 }
 
-// botFormDTO is what the webapp's bot form needs from the server.
+// botFormDTO is what the webapp's bot form needs from the server: the
+// Terms and Conditions statement shown in the submit popup.
 type botFormDTO struct {
-	Compliance      botComplianceDTO `json:"compliance"`
-	HostingEnvs     []string         `json:"hosting_envs"`
-	PrivilegeLevels []botOptionDTO   `json:"privilege_levels"`
-}
-
-type botOptionDTO struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+	Compliance botComplianceDTO `json:"compliance"`
 }
 
 type botComplianceDTO struct {
@@ -126,18 +135,14 @@ type botComplianceDTO struct {
 	SHA256  string `json:"sha256,omitempty"`
 }
 
-// handleBotForm serves the bot form's settings: whether the compliance
-// statement is required, its text and its hash, and the hosting
-// environments and privilege levels to pick from.
+// handleBotForm serves whether the compliance statement is required and
+// its text/hash for the Terms and Conditions popup on submit.
 func (p *Plugin) handleBotForm(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
 	c := p.getConfiguration()
-	out := botFormDTO{HostingEnvs: c.HostingEnvs()}
-	for _, level := range botPrivilegeLevels {
-		out.PrivilegeLevels = append(out.PrivilegeLevels, botOptionDTO{Value: level.Value, Label: level.Label})
-	}
+	out := botFormDTO{}
 	if c.BotComplianceRequired() {
 		text := c.BotComplianceText()
 		out.Compliance = botComplianceDTO{Enabled: true, Text: text, SHA256: complianceHash(text)}

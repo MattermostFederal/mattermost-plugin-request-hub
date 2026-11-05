@@ -1075,15 +1075,15 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 	message, err := p.submitBotRequest(userID, botRequestInput{
 		Username:    submissionString(submission.Submission, fieldBotUsername),
 		DisplayName: submissionString(submission.Submission, fieldBotDisplayName),
-		Description: submissionString(submission.Submission, fieldBotDescription),
 		OwnerUserID: submissionString(submission.Submission, fieldBotOwner),
 
-		Purpose:        submissionString(submission.Submission, fieldBotPurpose),
-		PrivilegeLevel: submissionString(submission.Submission, fieldBotPrivilege),
-		DataIngestion:  submissionString(submission.Submission, fieldBotIngestion),
-		HostingEnv:     submissionString(submission.Submission, fieldBotHostingEnv),
-		HomeTeamID:     submission.TeamId,
-		HomeChannelID:  submission.ChannelId,
+		Purpose:            submissionString(submission.Submission, fieldBotPurpose),
+		ArchitectureURL:    submissionString(submission.Submission, fieldBotArchitectureURL),
+		IntegrationURL:     submissionString(submission.Submission, fieldBotIntegrationURL),
+		HostingEnv:         submissionString(submission.Submission, fieldBotHostingEnv),
+		HostingOtherDetail: submissionString(submission.Submission, fieldBotHostingOtherDetail),
+		HomeTeamID:         submission.TeamId,
+		HomeChannelID:      submission.ChannelId,
 
 		ComplianceAccepted: submissionBool(submission.Submission, fieldBotCompliance),
 		ComplianceTextHash: submission.State,
@@ -1835,12 +1835,12 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Username                   string `json:"username"`
 		DisplayName                string `json:"display_name"`
-		Description                string `json:"description"`
 		BotOwner                   string `json:"bot_owner"`
 		Purpose                    string `json:"purpose"`
-		PrivilegeLevel             string `json:"privilege_level"`
-		DataIngestion              string `json:"data_ingestion"`
+		ArchitectureURL            string `json:"architecture_url"`
+		IntegrationURL             string `json:"integration_endpoint"`
 		HostingEnv                 string `json:"hosting_env"`
+		HostingOtherDetail         string `json:"hosting_other_detail"`
 		HomeTeamID                 string `json:"home_team_id"`
 		HomeChannelID              string `json:"home_channel_id"`
 		RequestToken               bool   `json:"request_token"`
@@ -1862,12 +1862,12 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 		ComplianceTextHash:         payload.ComplianceTextHash,
 		Username:                   payload.Username,
 		DisplayName:                payload.DisplayName,
-		Description:                payload.Description,
 		OwnerUserID:                payload.BotOwner,
 		Purpose:                    payload.Purpose,
-		PrivilegeLevel:             payload.PrivilegeLevel,
-		DataIngestion:              payload.DataIngestion,
+		ArchitectureURL:            payload.ArchitectureURL,
+		IntegrationURL:             payload.IntegrationURL,
 		HostingEnv:                 payload.HostingEnv,
+		HostingOtherDetail:         payload.HostingOtherDetail,
 		HomeTeamID:                 payload.HomeTeamID,
 		HomeChannelID:              payload.HomeChannelID,
 		RequestToken:               payload.RequestToken,

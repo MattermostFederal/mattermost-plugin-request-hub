@@ -1,15 +1,18 @@
 import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
-import {fetchBotForm, submitBotRequest} from './client';
-import type {BotForm} from './client';
+import {
+    fetchBotForm,
+    fetchBotHomeChannels,
+    fetchBotHomeTeams,
+    submitBotRequest,
+} from './client';
+import type {BotForm, BotHomeChannel, BotHomeTeam, BotRequestPayload} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeBotRequestModal,
     getCurrentChannelId,
-    getCurrentTeamDisplayName,
     getCurrentTeamId,
-    getChannelDisplayName,
     isBotRequestModalOpen,
 } from './store';
 import type {GlobalState} from './store';
@@ -27,12 +30,43 @@ const dialogStyle: React.CSSProperties = {
     background: 'var(--center-channel-bg, #fff)',
     color: 'var(--center-channel-color, #3d3c40)',
     borderRadius: 8,
-    width: 540,
+    width: 560,
     maxWidth: '90vw',
     maxHeight: '90vh',
     overflowY: 'auto',
     padding: 24,
     boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+};
+const nestedOverlayStyle: React.CSSProperties = {
+    ...overlayStyle,
+    zIndex: 1060,
+    background: 'rgba(0, 0, 0, 0.55)',
+};
+const nestedDialogStyle: React.CSSProperties = {
+    ...dialogStyle,
+    width: 520,
+    maxHeight: '80vh',
+};
+const termsDialogStyle: React.CSSProperties = {
+    ...dialogStyle,
+    width: 720,
+    maxWidth: '94vw',
+    maxHeight: '92vh',
+    display: 'flex',
+    flexDirection: 'column',
+};
+const statementStyle: React.CSSProperties = {
+    flex: '1 1 auto',
+    minHeight: 360,
+    maxHeight: 'calc(92vh - 220px)',
+    overflowY: 'auto',
+    whiteSpace: 'pre-wrap',
+    padding: '12px 16px',
+    marginBottom: 16,
+    border: '1px solid var(--center-channel-color-16, rgba(61,60,64,0.16))',
+    borderRadius: 4,
+    fontSize: 14,
+    lineHeight: 1.45,
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 const sectionStyle: React.CSSProperties = {
@@ -49,35 +83,67 @@ const readOnlyFieldStyle: React.CSSProperties = {
     opacity: 0.7,
 };
 const subFieldStyle: React.CSSProperties = {marginTop: 12};
-const statementStyle: React.CSSProperties = {
-    maxHeight: 160,
-    overflowY: 'auto',
-    whiteSpace: 'pre-wrap',
-    padding: '8px 12px',
-    marginBottom: 8,
-    border: '1px solid var(--center-channel-color-16, rgba(61,60,64,0.16))',
-    borderRadius: 4,
+const checkRowStyle: React.CSSProperties = {display: 'block', marginBottom: 6, fontWeight: 'normal' as const};
+
+type HostingEnv = BotRequestPayload['hosting_env'];
+
+const HOSTING_OPTIONS: Array<{value: HostingEnv; label: string}> = [
+    {value: 'ci_cd', label: 'CI/CD pipeline'},
+    {value: 'on_prem_server', label: 'On-prem server / VM'},
+    {value: 'cloud_or_k8s', label: 'Cloud VM / Kubernetes'},
+    {value: 'workstation', label: 'Developer workstation'},
+    {value: 'external_saas', label: 'External SaaS / vendor'},
+    {value: 'other', label: 'Other'},
+];
+
+const channelLabel = (ch: BotHomeChannel) => {
+    const kind = ch.type === 'P' ? 'private' : 'public';
+    return `${ch.display_name || ch.name} (~${ch.name}, ${kind})`;
 };
 
-// botFormLoading marks the form settings as still loading; null means they
-// couldn't be loaded.
 const botFormLoading = 'loading';
+
+// isSecureHTTPSURL mirrors the server's https-only checks.
+export const isSecureHTTPSURL = (raw: string): boolean => {
+    const trimmed = raw.trim();
+    const lower = trimmed.toLowerCase();
+    for (const bad of ['javascript:', 'data:', 'vbscript:', 'file:']) {
+        if (lower.startsWith(bad) || lower.includes(bad)) {
+            return false;
+        }
+    }
+    if (!lower.startsWith('https://')) {
+        return false;
+    }
+    try {
+        const u = new URL(trimmed);
+        return u.protocol === 'https:' && Boolean(u.host);
+    } catch {
+        return false;
+    }
+};
 
 export const RequestBotModal = () => {
     const dispatch = useDispatch();
     const isOpen = useSelector(isBotRequestModalOpen);
-    const channelId = useSelector((state: GlobalState) => getCurrentChannelId(state));
-    const channelName = useSelector((state: GlobalState) => getChannelDisplayName(state, channelId));
-    const teamName = useSelector((state: GlobalState) => getCurrentTeamDisplayName(state));
-    const teamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
+    const currentChannelId = useSelector((state: GlobalState) => getCurrentChannelId(state));
+    const currentTeamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
 
     const [username, setUsername] = useState('');
     const [displayName, setDisplayName] = useState('');
-    const [description, setDescription] = useState('');
     const [purpose, setPurpose] = useState('');
-    const [privilegeLevel, setPrivilegeLevel] = useState('');
-    const [dataIngestion, setDataIngestion] = useState('');
-    const [hostingEnv, setHostingEnv] = useState('');
+    const [architectureURL, setArchitectureURL] = useState('');
+    const [integrationURL, setIntegrationURL] = useState('');
+    const [hostingEnv, setHostingEnv] = useState<HostingEnv>('ci_cd');
+    const [hostingOtherDetail, setHostingOtherDetail] = useState('');
+
+    const [teams, setTeams] = useState<BotHomeTeam[]>([]);
+    const [channels, setChannels] = useState<BotHomeChannel[]>([]);
+    const [homeTeamId, setHomeTeamId] = useState('');
+    const [homeChannelId, setHomeChannelId] = useState('');
+    const [loadingTeams, setLoadingTeams] = useState(false);
+    const [loadingChannels, setLoadingChannels] = useState(false);
+    const [homeLoadError, setHomeLoadError] = useState('');
 
     const [requestToken, setRequestToken] = useState(true);
 
@@ -89,14 +155,48 @@ export const RequestBotModal = () => {
     const [outgoingCallbackURL, setOutgoingCallbackURL] = useState('');
 
     const [botForm, setBotForm] = useState<BotForm | null | typeof botFormLoading>(botFormLoading);
-    const [complianceAccepted, setComplianceAccepted] = useState(false);
+    const [termsOpen, setTermsOpen] = useState(false);
+    const [termsAccepted, setTermsAccepted] = useState(false);
+    const [archConfirmOpen, setArchConfirmOpen] = useState(false);
 
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
-    // The statement is fetched each time the form opens, so it is the one
-    // the server checks the acceptance against.
+    const reset = () => {
+        setUsername('');
+        setDisplayName('');
+        setPurpose('');
+        setArchitectureURL('');
+        setIntegrationURL('');
+        setHostingEnv('ci_cd');
+        setHostingOtherDetail('');
+        setTeams([]);
+        setChannels([]);
+        setHomeTeamId('');
+        setHomeChannelId('');
+        setHomeLoadError('');
+        setRequestToken(true);
+        setRequestIncomingWebhook(false);
+        setIncomingWebhookName('');
+        setRequestOutgoingWebhook(false);
+        setOutgoingWebhookName('');
+        setOutgoingCallbackURL('');
+        setTermsOpen(false);
+        setTermsAccepted(false);
+        setArchConfirmOpen(false);
+        setError('');
+        setSuccess('');
+        setSubmitting(false);
+    };
+
+    const close = () => {
+        reset();
+        dispatch(closeBotRequestModal());
+    };
+
+    const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
+
     useEffect(() => {
         if (!isOpen) {
             return undefined;
@@ -113,37 +213,77 @@ export const RequestBotModal = () => {
         };
     }, [isOpen]);
 
-    const reset = () => {
-        setUsername('');
-        setDisplayName('');
-        setDescription('');
-        setPurpose('');
-        setPrivilegeLevel('');
-        setDataIngestion('');
-        setHostingEnv('');
-        setRequestToken(true);
-        setRequestIncomingWebhook(false);
-        setIncomingWebhookName('');
-        setRequestOutgoingWebhook(false);
-        setOutgoingWebhookName('');
-        setOutgoingCallbackURL('');
-        setComplianceAccepted(false);
-        setError('');
-        setSuccess('');
-        setSubmitting(false);
-    };
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+        let cancelled = false;
+        setLoadingTeams(true);
+        setHomeLoadError('');
+        fetchBotHomeTeams().
+            then((list) => {
+                if (cancelled) {
+                    return;
+                }
+                setTeams(list);
+                const preferred = list.find((t) => t.id === currentTeamId)?.id || list[0]?.id || '';
+                setHomeTeamId(preferred);
+            }).
+            catch(() => {
+                if (!cancelled) {
+                    setHomeLoadError('Could not load teams.');
+                }
+            }).
+            finally(() => {
+                if (!cancelled) {
+                    setLoadingTeams(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, currentTeamId]);
 
-    const close = () => {
-        reset();
-        dispatch(closeBotRequestModal());
-    };
-
-    // Must run unconditionally — never after `if (!isOpen) return null`.
-    const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
+    useEffect(() => {
+        if (!isOpen || !homeTeamId) {
+            setChannels([]);
+            setHomeChannelId('');
+            return;
+        }
+        let cancelled = false;
+        setLoadingChannels(true);
+        setHomeChannelId('');
+        fetchBotHomeChannels(homeTeamId).
+            then((list) => {
+                if (cancelled) {
+                    return;
+                }
+                setChannels(list);
+                const preferred = list.find((c) => c.id === currentChannelId)?.id || list[0]?.id || '';
+                setHomeChannelId(preferred);
+            }).
+            catch(() => {
+                if (!cancelled) {
+                    setChannels([]);
+                    setHomeLoadError('Could not load channels for that team.');
+                }
+            }).
+            finally(() => {
+                if (!cancelled) {
+                    setLoadingChannels(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, homeTeamId, currentChannelId]);
 
     if (!isOpen) {
         return null;
     }
+
+    const selectedChannel = channels.find((c) => c.id === homeChannelId);
+    const homeLabel = selectedChannel ? channelLabel(selectedChannel) : (homeChannelId || 'Select a channel');
 
     const handleIncomingWebhookToggle = (checked: boolean) => {
         setRequestIncomingWebhook(checked);
@@ -159,82 +299,75 @@ export const RequestBotModal = () => {
         }
     };
 
-    const submit = async () => {
+    const validateForm = (): string | null => {
         const u = username.trim().toLowerCase();
         if (!u) {
-            setError('A bot username is required.');
-            return;
+            return 'A bot username is required.';
         }
         if (u.length < 3 || u.length > 22) {
-            setError('Bot username must be 3-22 characters.');
-            return;
+            return 'Bot username must be 3-22 characters.';
         }
         if (!displayName.trim()) {
-            setError('A display name is required.');
-            return;
+            return 'A display name is required.';
         }
         if (botForm === botFormLoading) {
-            setError('The form is still loading. Try again in a moment.');
-            return;
+            return 'The form is still loading. Try again in a moment.';
         }
         if (botForm === null) {
-            setError('Could not load the compliance statement. Close the form and try again.');
-            return;
+            return 'Could not load the Terms and Conditions. Close the form and try again.';
         }
         if (!purpose.trim()) {
-            setError("Describe the bot's purpose.");
-            return;
+            return 'A purpose is required: describe what the bot does and why.';
         }
-        if (!privilegeLevel) {
-            setError('Pick a privilege level.');
-            return;
+        if (architectureURL.trim() && !isSecureHTTPSURL(architectureURL)) {
+            return 'Architecture link must be an https address (not http, javascript, or data URLs).';
         }
-        if (!dataIngestion.trim()) {
-            setError('Describe the data the bot takes in.');
-            return;
+        if (!integrationURL.trim()) {
+            return 'An integration endpoint is required (https URL).';
         }
-        if (!hostingEnv) {
-            setError('Pick a hosting environment.');
-            return;
+        if (!isSecureHTTPSURL(integrationURL)) {
+            return 'Integration endpoint must be an https address (not http, javascript, or data URLs).';
         }
-        if (!teamId || !channelId) {
-            setError('Open this form from a channel of a team: that channel becomes the bot\'s home.');
-            return;
+        if (hostingEnv === 'other' && !hostingOtherDetail.trim()) {
+            return 'Specify where the script or service runs when Hosting is Other.';
         }
-        if (botForm.compliance.enabled && !complianceAccepted) {
-            setError('Accept the bot compliance statement to submit this request.');
-            return;
+        if (!homeTeamId || !homeChannelId) {
+            return 'Pick a home team and channel.';
         }
         if (requestOutgoingWebhook) {
             if (!outgoingCallbackURL.trim()) {
-                setError('A callback URL is required for the outgoing webhook.');
-                return;
+                return 'A callback URL is required for the outgoing webhook.';
             }
             if (!outgoingCallbackURL.trim().startsWith('http://') && !outgoingCallbackURL.trim().startsWith('https://')) {
-                setError('Callback URL must start with http:// or https://.');
-                return;
+                return 'Callback URL must start with http:// or https://.';
             }
         }
+        return null;
+    };
 
+    const sendRequest = async () => {
+        if (botForm === botFormLoading || botForm === null) {
+            return;
+        }
         setSubmitting(true);
         setError('');
         try {
             const result = await submitBotRequest({
                 username: username.trim(),
                 display_name: displayName.trim(),
-                description: description.trim() || undefined,
-                purpose: purpose.trim(),
-                privilege_level: privilegeLevel,
-                data_ingestion: dataIngestion.trim(),
-                hosting_env: hostingEnv,
-                home_team_id: teamId,
-                home_channel_id: channelId,
                 request_token: requestToken,
-                incoming_webhook_channel_id: requestIncomingWebhook ? channelId : undefined,
+                incoming_webhook_channel_id: requestIncomingWebhook ? homeChannelId : undefined,
                 incoming_webhook_display_name: requestIncomingWebhook ? incomingWebhookName.trim() : undefined,
-                outgoing_webhook_channel_id: requestOutgoingWebhook ? channelId : undefined,
+                outgoing_webhook_channel_id: requestOutgoingWebhook ? homeChannelId : undefined,
                 outgoing_webhook_display_name: requestOutgoingWebhook ? outgoingWebhookName.trim() : undefined,
                 outgoing_webhook_callback_url: requestOutgoingWebhook ? outgoingCallbackURL.trim() : undefined,
+                purpose: purpose.trim(),
+                architecture_url: architectureURL.trim() || undefined,
+                home_team_id: homeTeamId,
+                home_channel_id: homeChannelId,
+                integration_endpoint: integrationURL.trim(),
+                hosting_env: hostingEnv,
+                hosting_other_detail: hostingEnv === 'other' ? hostingOtherDetail.trim() : undefined,
                 ...(botForm.compliance.enabled ? {compliance_accepted: true, compliance_text_hash: botForm.compliance.sha256} : {}),
             });
             if (result.error) {
@@ -246,7 +379,34 @@ export const RequestBotModal = () => {
             setError('Could not reach the server. Please check your connection and try again.');
         } finally {
             setSubmitting(false);
+            setTermsOpen(false);
+            setTermsAccepted(false);
+            setArchConfirmOpen(false);
         }
+    };
+
+    const continueAfterArch = () => {
+        setArchConfirmOpen(false);
+        if (botForm !== botFormLoading && botForm?.compliance.enabled) {
+            setTermsAccepted(false);
+            setTermsOpen(true);
+            return;
+        }
+        void sendRequest();
+    };
+
+    const beginSubmit = () => {
+        const validationError = validateForm();
+        if (validationError) {
+            setError(validationError);
+            return;
+        }
+        setError('');
+        if (!architectureURL.trim()) {
+            setArchConfirmOpen(true);
+            return;
+        }
+        continueAfterArch();
     };
 
     return (
@@ -268,7 +428,9 @@ export const RequestBotModal = () => {
                     id='rb-title'
                     style={{marginTop: 0}}
                 >{'Request a Bot Account'}</h3>
-                <p style={{opacity: 0.72}}>{'Bot account requests need a security approval and a system approval.'}</p>
+                <p style={{opacity: 0.72}}>
+                    {'Bot account requests need a security approval and a system approval from two different people. The bot is always a regular Mattermost user (never Team Admin or System Admin). On approval it is joined to the home team and channel you pick.'}
+                </p>
 
                 {success ? (
                     <div>
@@ -309,90 +471,129 @@ export const RequestBotModal = () => {
                             />
                         </div>
                         <div style={fieldStyle}>
-                            <label htmlFor='bot-description'>{'Description (optional)'}</label>
-                            <textarea
-                                id='bot-description'
-                                className='form-control'
-                                value={description}
-                                maxLength={500}
-                                rows={3}
-                                placeholder='What does this bot do? What systems will it integrate with?'
-                                onChange={(e) => setDescription(e.target.value)}
-                            />
-                        </div>
-
-                        <div style={fieldStyle}>
                             <label htmlFor='bot-purpose'>{'Purpose'}</label>
                             <textarea
                                 id='bot-purpose'
                                 className='form-control'
                                 value={purpose}
                                 maxLength={500}
-                                rows={2}
-                                placeholder='e.g. Posts CI build results; answers questions from the on-call runbook'
+                                rows={3}
+                                placeholder='What the bot does and why'
                                 onChange={(e) => setPurpose(e.target.value)}
                             />
-                        </div>
-                        <div style={fieldStyle}>
-                            <label htmlFor='bot-privilege'>{'Privilege level'}</label>
-                            <select
-                                id='bot-privilege'
-                                className='form-control'
-                                value={privilegeLevel}
-                                onChange={(e) => setPrivilegeLevel(e.target.value)}
-                            >
-                                <option value=''>{'Choose a level'}</option>
-                                {(botForm !== botFormLoading && botForm ? botForm.privilege_levels : []).map((level) => (
-                                    <option
-                                        key={level.value}
-                                        value={level.value}
-                                    >{level.label}</option>
-                                ))}
-                            </select>
-                            <small style={{opacity: 0.6}}>{'The access the bot needs. This is declared for review; it does not limit the token.'}</small>
-                        </div>
-                        <div style={fieldStyle}>
-                            <label htmlFor='bot-ingestion'>{'Data ingestion'}</label>
-                            <textarea
-                                id='bot-ingestion'
-                                className='form-control'
-                                value={dataIngestion}
-                                maxLength={500}
-                                rows={2}
-                                placeholder='e.g. Reads posts in its home channel; receives webhook payloads from Jenkins'
-                                onChange={(e) => setDataIngestion(e.target.value)}
-                            />
-                        </div>
-                        <div style={fieldStyle}>
-                            <label htmlFor='bot-env'>{'Hosting environment'}</label>
-                            <select
-                                id='bot-env'
-                                className='form-control'
-                                value={hostingEnv}
-                                onChange={(e) => setHostingEnv(e.target.value)}
-                            >
-                                <option value=''>{'Choose an environment'}</option>
-                                {(botForm !== botFormLoading && botForm ? botForm.hosting_envs : []).map((env) => (
-                                    <option
-                                        key={env}
-                                        value={env}
-                                    >{env}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div style={fieldStyle}>
-                            <label>{'Home channel'}</label>
-                            <div
-                                style={readOnlyFieldStyle}
-                                data-testid='bot-home'
-                            >
-                                {channelName || channelId}
-                                {teamName ? <span style={{opacity: 0.6, marginLeft: 6}}>{`(Team: ${teamName})`}</span> : null}
-                            </div>
-                            <small style={{opacity: 0.6}}>{'The bot joins this channel when approved. Switch channels before opening this form to change it. A home does not limit what the bot\'s token can reach.'}</small>
+                            <small style={{opacity: 0.6}}>{'Required. This also becomes the bot’s Mattermost profile description.'}</small>
                         </div>
 
-                        {/* Access token section */}
+                        <div style={sectionStyle}>
+                            <div style={{fontWeight: 600, marginBottom: 8}}>{'Security declaration'}</div>
+                            <div style={fieldStyle}>
+                                <label htmlFor='bot-home-team'>{'Home team'}</label>
+                                <select
+                                    id='bot-home-team'
+                                    className='form-control'
+                                    value={homeTeamId}
+                                    disabled={loadingTeams || submitting}
+                                    onChange={(e) => setHomeTeamId(e.target.value)}
+                                >
+                                    <option value=''>{loadingTeams ? 'Loading teams…' : 'Select a team'}</option>
+                                    {teams.map((t) => (
+                                        <option
+                                            key={t.id}
+                                            value={t.id}
+                                        >{t.display_name || t.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div style={fieldStyle}>
+                                <label htmlFor='bot-home-channel'>{'Home channel'}</label>
+                                <select
+                                    id='bot-home-channel'
+                                    className='form-control'
+                                    value={homeChannelId}
+                                    disabled={!homeTeamId || loadingChannels || submitting}
+                                    onChange={(e) => setHomeChannelId(e.target.value)}
+                                >
+                                    <option value=''>{loadingChannels ? 'Loading channels…' : 'Select a channel'}</option>
+                                    {channels.map((c) => (
+                                        <option
+                                            key={c.id}
+                                            value={c.id}
+                                        >{channelLabel(c)}</option>
+                                    ))}
+                                </select>
+                                <small style={{opacity: 0.6}}>{'Only teams and channels you belong to. The bot is auto-joined here on approval.'}</small>
+                                {homeLoadError ? <div
+                                    className='alert alert-danger'
+                                    style={{marginTop: 8}}
+                                                   >{homeLoadError}</div> : null}
+                            </div>
+                            <div style={fieldStyle}>
+                                <label>{'Mattermost role'}</label>
+                                <div style={readOnlyFieldStyle}>{'Regular user (member); never Team Admin or System Admin'}</div>
+                            </div>
+                            <div style={fieldStyle}>
+                                <label>{'Transit security'}</label>
+                                <div style={readOnlyFieldStyle}>{'Recorded from server policy (HTTPS / TLS for integrations)'}</div>
+                            </div>
+                            <div style={fieldStyle}>
+                                <label>{'Activity logs'}</label>
+                                <div style={readOnlyFieldStyle}>{'Request Hub audit history; forensic pull by bot user ID after approval'}</div>
+                            </div>
+                            <div style={fieldStyle}>
+                                <label htmlFor='bot-arch'>{'Architecture link (optional)'}</label>
+                                <input
+                                    id='bot-arch'
+                                    className='form-control'
+                                    value={architectureURL}
+                                    placeholder='https://…'
+                                    onChange={(e) => setArchitectureURL(e.target.value)}
+                                />
+                                <small style={{opacity: 0.6}}>{'https link to an architecture or design review. Prefer including one when you have it.'}</small>
+                            </div>
+                            <div style={fieldStyle}>
+                                <label htmlFor='bot-endpoint'>{'Integration endpoint'}</label>
+                                <input
+                                    id='bot-endpoint'
+                                    className='form-control'
+                                    value={integrationURL}
+                                    placeholder='https://ci.example/hooks/mm'
+                                    onChange={(e) => setIntegrationURL(e.target.value)}
+                                />
+                                <small style={{opacity: 0.6}}>{'Required https URL of the integration that drives this bot.'}</small>
+                            </div>
+                            <fieldset style={fieldStyle}>
+                                <legend style={{fontSize: 14, fontWeight: 600, border: 'none', marginBottom: 4}}>{'Where does the script / service run?'}</legend>
+                                {HOSTING_OPTIONS.map((opt) => (
+                                    <label
+                                        key={opt.value}
+                                        style={checkRowStyle}
+                                    >
+                                        <input
+                                            type='radio'
+                                            name='bot-hosting'
+                                            checked={hostingEnv === opt.value}
+                                            onChange={() => setHostingEnv(opt.value)}
+                                            disabled={submitting}
+                                        />{' '}{opt.label}
+                                    </label>
+                                ))}
+                                <small style={{opacity: 0.6}}>{'Where the integration that drives this bot runs (not which Mattermost environment).'}</small>
+                            </fieldset>
+                            {hostingEnv === 'other' ? (
+                                <div style={fieldStyle}>
+                                    <label htmlFor='bot-hosting-other'>{'Specify hosting'}</label>
+                                    <input
+                                        id='bot-hosting-other'
+                                        className='form-control'
+                                        value={hostingOtherDetail}
+                                        maxLength={120}
+                                        placeholder='e.g. air-gapped appliance in building A'
+                                        onChange={(e) => setHostingOtherDetail(e.target.value)}
+                                    />
+                                </div>
+                            ) : null}
+                        </div>
+
                         <div style={sectionStyle}>
                             <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600}}>
                                 <input
@@ -409,7 +610,6 @@ export const RequestBotModal = () => {
                             )}
                         </div>
 
-                        {/* Incoming webhook section */}
                         <div style={sectionStyle}>
                             <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600}}>
                                 <input
@@ -439,17 +639,12 @@ export const RequestBotModal = () => {
                                     </div>
                                     <div style={subFieldStyle}>
                                         <label>{'Target channel'}</label>
-                                        <div style={readOnlyFieldStyle}>
-                                            {channelName || channelId}
-                                            {teamName ? <span style={{opacity: 0.6, marginLeft: 6}}>{`(Team: ${teamName})`}</span> : null}
-                                        </div>
-                                        <small style={{opacity: 0.6}}>{'Switch to a different channel before opening this form to change the target.'}</small>
+                                        <div style={readOnlyFieldStyle}>{homeLabel}</div>
                                     </div>
                                 </div>
                             )}
                         </div>
 
-                        {/* Outgoing webhook section */}
                         <div style={sectionStyle}>
                             <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600}}>
                                 <input
@@ -479,11 +674,7 @@ export const RequestBotModal = () => {
                                     </div>
                                     <div style={subFieldStyle}>
                                         <label>{'Source channel'}</label>
-                                        <div style={readOnlyFieldStyle}>
-                                            {channelName || channelId}
-                                            {teamName ? <span style={{opacity: 0.6, marginLeft: 6}}>{`(Team: ${teamName})`}</span> : null}
-                                        </div>
-                                        <small style={{opacity: 0.6}}>{'Switch to a different channel before opening this form to change the source.'}</small>
+                                        <div style={readOnlyFieldStyle}>{homeLabel}</div>
                                     </div>
                                     <div style={subFieldStyle}>
                                         <label htmlFor='owh-callback'>{'Callback URL'}</label>
@@ -500,23 +691,9 @@ export const RequestBotModal = () => {
                         </div>
 
                         {botForm !== botFormLoading && botForm?.compliance.enabled ? (
-                            <div style={sectionStyle}>
-                                <strong id='bot-compliance-title'>{'Compliance statement'}</strong>
-                                <div
-                                    style={statementStyle}
-                                    aria-labelledby='bot-compliance-title'
-                                    data-testid='bot-compliance-text'
-                                >{botForm.compliance.text}</div>
-                                <label style={{fontWeight: 'normal'}}>
-                                    <input
-                                        type='checkbox'
-                                        checked={complianceAccepted}
-                                        onChange={(e) => setComplianceAccepted(e.target.checked)}
-                                        style={{marginRight: 8}}
-                                    />
-                                    {'I accept the compliance statement above'}
-                                </label>
-                            </div>
+                            <p style={{opacity: 0.72, marginBottom: 16}}>
+                                {'Submitting opens the Terms and Conditions for you to review and agree.'}
+                            </p>
                         ) : null}
 
                         {error ? <div
@@ -533,7 +710,7 @@ export const RequestBotModal = () => {
                             >{'Cancel'}</button>
                             <button
                                 className='btn btn-primary'
-                                onClick={submit}
+                                onClick={beginSubmit}
                                 disabled={submitting}
                             >
                                 {submitting ? 'Submitting…' : 'Submit request'}
@@ -542,6 +719,105 @@ export const RequestBotModal = () => {
                     </div>
                 )}
             </div>
+
+            {archConfirmOpen ? (
+                <div
+                    style={nestedOverlayStyle}
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid='bot-arch-confirm'
+                >
+                    <div
+                        style={nestedDialogStyle}
+                        role='dialog'
+                        aria-modal={true}
+                        aria-labelledby='rb-arch-title'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3
+                            id='rb-arch-title'
+                            style={{marginTop: 0}}
+                        >{'No architecture link'}</h3>
+                        <p>{'You did not include an architecture or design review link. Prefer adding one when you have it. Submit without one?'}</p>
+                        <div style={{textAlign: 'right'}}>
+                            <button
+                                className='btn btn-tertiary'
+                                style={{marginRight: 8}}
+                                onClick={() => setArchConfirmOpen(false)}
+                                disabled={submitting}
+                            >{'Go back'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={continueAfterArch}
+                                disabled={submitting}
+                            >{'Submit without architecture link'}</button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            {termsOpen && botForm !== botFormLoading && botForm?.compliance.enabled ? (
+                <div
+                    style={nestedOverlayStyle}
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid='bot-terms-popup'
+                >
+                    <div
+                        style={termsDialogStyle}
+                        role='dialog'
+                        aria-modal={true}
+                        aria-labelledby='rb-terms-title'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3
+                            id='rb-terms-title'
+                            style={{marginTop: 0, marginBottom: 12}}
+                        >{'Terms and Conditions'}</h3>
+                        <div
+                            style={statementStyle}
+                            data-testid='bot-compliance-text'
+                        >{botForm.compliance.text}</div>
+                        <label
+                            htmlFor='bot-terms-accept'
+                            style={{display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16, fontWeight: 'normal', cursor: 'pointer'}}
+                        >
+                            <input
+                                id='bot-terms-accept'
+                                type='checkbox'
+                                checked={termsAccepted}
+                                onChange={(e) => setTermsAccepted(e.target.checked)}
+                                disabled={submitting}
+                                style={{marginTop: 3}}
+                                data-testid='bot-terms-checkbox'
+                            />
+                            <span>{'I have read and agree to the Terms and Conditions above.'}</span>
+                        </label>
+                        <div style={{textAlign: 'right'}}>
+                            <button
+                                className='btn btn-tertiary'
+                                style={{marginRight: 8}}
+                                onClick={() => {
+                                    setTermsOpen(false);
+                                    setTermsAccepted(false);
+                                }}
+                                disabled={submitting}
+                            >{'Cancel'}</button>
+                            <button
+                                className='btn btn-primary'
+                                onClick={() => {
+                                    if (!termsAccepted) {
+                                        setError('Check the box to agree to the Terms and Conditions.');
+                                        return;
+                                    }
+                                    void sendRequest();
+                                }}
+                                disabled={submitting || !termsAccepted}
+                            >
+                                {submitting ? 'Submitting…' : 'Agree and submit'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 };

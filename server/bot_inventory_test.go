@@ -35,8 +35,8 @@ func inventoryPlugin(t *testing.T) (*Plugin, *plugintest.API, map[string][]byte)
 	} {
 		store[kvBotIndexPrefix+e.BotUserID] = recordJSON(t, e)
 	}
-	api.On("GetBot", "b1", true).Return(&model.Bot{UserId: "b1", Username: "alpha-renamed", DisplayName: "Alpha"}, nil).Maybe()
-	api.On("GetBot", "b2", true).Return(&model.Bot{UserId: "b2", Username: "beta", DeleteAt: 9}, nil).Maybe()
+	api.On("GetBot", "b1", true).Return(&model.Bot{UserId: "b1", Username: "alpha-renamed", DisplayName: "Alpha", OwnerId: "u_req"}, nil).Maybe()
+	api.On("GetBot", "b2", true).Return(&model.Bot{UserId: "b2", Username: "beta", DeleteAt: 9, OwnerId: "u_other"}, nil).Maybe()
 	api.On("GetBot", "b3", true).Return(nil, model.NewAppError("GetBot", "not_found", nil, "", http.StatusNotFound)).Maybe()
 	api.On("GetTeam", "t1").Return(&model.Team{Id: "t1", DisplayName: "Ops"}, nil).Maybe()
 	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1", DisplayName: "Alerts"}, nil).Maybe()
@@ -55,6 +55,29 @@ func botIDs(rows []inventoryRow) []string {
 	return out
 }
 
+func TestBuildBotInventory_LiveOwnerOverridesIndex(t *testing.T) {
+	p, api, store := inventoryPlugin(t)
+	store[kvBotIndexPrefix+"b1"] = recordJSON(t, botIndexEntry{
+		BotUserID: "b1", RequestID: "r1", Username: "alpha", RequesterID: "u_req", OwnerUserID: "u_req", CreatedAt: 100, HostingEnv: "mattermost-prod",
+	})
+	api.ExpectedCalls = nil
+	api.On("KVList", 0, botIndexPageSize).Return([]string{kvBotIndexPrefix + "b1"}, nil).Maybe()
+	api.On("KVList", 1, botIndexPageSize).Return(nil, nil).Maybe()
+	api.On("KVGet", kvBotIndexPrefix+"b1").Return(store[kvBotIndexPrefix+"b1"], nil).Maybe()
+	api.On("GetBot", "b1", true).Return(&model.Bot{UserId: "b1", Username: "alpha", OwnerId: "u_other"}, nil)
+	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
+	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other"}, nil).Maybe()
+	api.On("GetTeam", mock.Anything).Return(nil, testAppErr("skip")).Maybe()
+	api.On("GetChannel", mock.Anything).Return(nil, testAppErr("skip")).Maybe()
+
+	rows, err := p.buildBotInventory(auditExportFilter{}, 1)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "u_other", rows[0].OwnerID)
+	require.Equal(t, "other", rows[0].OwnerUsername)
+}
+
 func TestBuildBotInventory(t *testing.T) {
 	p, _, _ := inventoryPlugin(t)
 
@@ -66,7 +89,8 @@ func TestBuildBotInventory(t *testing.T) {
 		BotID: "b1", BotUsername: "alpha-renamed", BotDisplayName: "Alpha", BotStatus: botStatusActive, BotActive: true,
 		HomeTeamID: "t1", HomeTeamName: "Ops", HomeChannelID: "c1", HomeChannelName: "Alerts",
 		Purpose: "=posts alerts", PrivilegeLevel: privilegePost, DataIngestion: "webhooks", HostingEnv: "mattermost-prod",
-		RequesterID: "u_req", RequesterUsername: "req", RequestID: "r1", RequestedAt: 50, ApprovedAt: 100,
+		RequesterID: "u_req", RequesterUsername: "req", OwnerID: "u_req", OwnerUsername: "req",
+		RequestID: "r1", RequestedAt: 50, ApprovedAt: 100,
 		ApprovedByID: "admin1", ApprovedByUsername: "admin",
 		ComplianceAccepted: true, ComplianceAcceptedAt: 5, ComplianceTextSHA256: "abc123",
 		RHManaged: true, AsOf: 999,
@@ -75,8 +99,11 @@ func TestBuildBotInventory(t *testing.T) {
 	require.False(t, rows[1].BotActive)
 	require.Empty(t, rows[1].HomeChannelName, "a home channel that's gone has no name")
 	require.False(t, rows[1].ComplianceAccepted)
+	require.Equal(t, "u_other", rows[1].OwnerID, "index with no owner falls back to requester")
+	require.Equal(t, "other", rows[1].OwnerUsername)
 	require.Equal(t, botStatusDeleted, rows[2].BotStatus)
 	require.Equal(t, "gamma", rows[2].BotUsername, "a deleted bot keeps its indexed username")
+	require.Equal(t, "u_owner", rows[2].OwnerID)
 	require.Empty(t, rows[2].OwnerUsername)
 
 	t.Run("filters", func(t *testing.T) {
@@ -159,11 +186,17 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		require.Equal(t, "b1", rows[1][col["bot_id"]])
 		require.Equal(t, "'=posts alerts", rows[1][col["purpose"]], "formulas are neutralised")
 		require.Equal(t, "Ops", rows[1][col["home_team_name"]])
+		require.Equal(t, "u_req", rows[1][col["owner_id"]])
+		require.Equal(t, "req", rows[1][col["owner_username"]])
 		require.Equal(t, "1970-01-01T00:00:00Z", rows[1][col["approved_at_utc"]])
 		require.Equal(t, "true", rows[1][col["compliance_accepted"]])
 		require.Equal(t, "deactivated", rows[2][col["bot_status"]])
+		require.Equal(t, "u_other", rows[2][col["owner_id"]])
+		require.Equal(t, "other", rows[2][col["owner_username"]])
 		require.Equal(t, "", rows[2][col["compliance_accepted_at_utc"]])
 		require.Equal(t, "true", rows[3][col["rh_managed"]])
+		require.Equal(t, "u_owner", rows[3][col["owner_id"]])
+		require.Equal(t, "", rows[3][col["owner_username"]], "gone owner keeps the id")
 	})
 	t.Run("pdf", func(t *testing.T) {
 		export := build("pdf", auditExportFilter{})

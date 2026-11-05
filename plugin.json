@@ -101,60 +101,23 @@
             {
                 "key": "TwoStepApproverMode",
                 "display_name": "Bot/webhook two-step approver mode",
-                "type": "dropdown",
+                "type": "custom",
                 "default": "attribute",
-                "help_text": "Bot/webhook requests require two distinct approvers: (1) a security review from the security pool, then (2) a System Admin or member of the system pool. Use User Attributes when ABAC/CPA is configured; User Groups when you manage approvers via LDAP or plugin-synced groups; System Admins only as a setup backup (one System Admin can complete both steps).",
-                "options": [
-                    {
-                        "display_name": "User Attributes (ABAC / CPA)",
-                        "value": "attribute"
-                    },
-                    {
-                        "display_name": "User Groups",
-                        "value": "usergroup"
-                    },
-                    {
-                        "display_name": "System Admins only (no ABAC)",
-                        "value": "system_admin"
-                    }
-                ]
+                "help_text": "Bot/webhook requests need two distinct people: (1) a security reviewer from the pool below, then (2) a System Admin. Pick how security reviewers are identified. System Admins only is a setup backup where one System Admin can complete both steps."
             },
             {
                 "key": "SecurityApproverAttribute",
-                "display_name": "Security approver attribute name",
-                "type": "text",
+                "display_name": "Security approver attribute",
+                "type": "custom",
                 "default": "security_approver",
-                "help_text": "Used when mode is User Attributes. Exact CPA / User Attribute name for the forced security review. System Admins do not auto-qualify for this step while this name is set. Manage attributes in System Console → User Management → Attributes (admin-managed or LDAP/SAML-synced)."
-            },
-            {
-                "key": "SystemApproverAttribute",
-                "display_name": "System approver attribute name",
-                "type": "text",
-                "default": "system_approver",
-                "help_text": "Used when mode is User Attributes. Exact CPA / User Attribute name for the system step. System Admins OR holders of this attribute can approve (must be a different person than the security reviewer)."
+                "help_text": "Shown when mode is User Attributes. CPA / User Attribute name for the security review. Required: System Admins do not cover this step. Default is security_approver even if that attribute is not created yet."
             },
             {
                 "key": "SecurityApproverGroup",
                 "display_name": "Security approver user group",
-                "type": "text",
+                "type": "custom",
                 "default": "security-approvers",
-                "placeholder": "security-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group. A custom group is used only when Allow custom approver groups is on. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers. Change it freely. Clear the field only if you intentionally want System Admins to cover security during setup."
-            },
-            {
-                "key": "SystemApproverGroup",
-                "display_name": "System approver user group",
-                "type": "text",
-                "default": "system-approvers",
-                "placeholder": "system-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group. A custom group is used only when Allow custom approver groups is on. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers. Change it freely. Clear the field to use System Admins only for that step."
-            },
-            {
-                "key": "AllowCustomApproverGroups",
-                "display_name": "Allow custom approver groups",
-                "type": "bool",
-                "default": false,
-                "help_text": "Used when mode is User Groups. When on, the security and system approver groups may be custom groups, for servers without LDAP. Anyone who can manage a custom group's members can make themselves an approver, so turn this on only when you control who manages those groups (System Console > User Management > Permissions > Custom Groups). Off: only LDAP and plugin-synced groups are used."
+                "help_text": "Shown when mode is User Groups. Mattermost user group (custom or LDAP/synced) whose members must complete the security review. Required: System Admins do not cover this step. Default is security-approvers even if that group is not created yet."
             },
             {
                 "key": "ApprovalTeam",

@@ -160,7 +160,8 @@ func dialogRoutes() map[string]dialogRoute {
 			},
 			ok: model.SubmitDialogRequest{TeamId: "team1", Submission: map[string]any{
 				fieldBotUsername: "svcbot", fieldBotDisplayName: "Service Bot", fieldBotPurpose: "Posts CI results",
-				fieldBotPrivilege: "read", fieldBotIngestion: "Build logs", fieldBotHostingEnv: "mattermost-prod",
+				fieldBotIntegrationURL: testBotIntegURL, fieldBotArchitectureURL: testBotArchURL,
+				fieldBotHostingEnv: hostingCICD,
 			}},
 			bad:     model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "@ab"}},
 			wantErr: "3-22 characters",
@@ -356,12 +357,12 @@ func webappRoutes() map[string]webappRoute {
 			route:    routeSubmitBotWebapp,
 			kvPrefix: kvBotRequestPrefix,
 			stub:     stubBotHome,
-			ok: `{"username":"svcbot","display_name":"Service Bot","description":"Posts alerts","request_token":true,` +
-				`"purpose":"Posts CI results","privilege_level":"elevated","data_ingestion":"Build logs","hosting_env":"mattermost-dev",` +
-				`"home_team_id":"team1","home_channel_id":"` + testHomeChannelID + `"}`,
+			ok: `{"username":"svcbot","display_name":"Service Bot","request_token":true,` +
+				`"purpose":"Posts CI results","architecture_url":"` + testBotArchURL + `","integration_endpoint":"` + testBotIntegURL + `",` +
+				`"hosting_env":"ci_cd","home_team_id":"team1","home_channel_id":"` + testHomeChannelID + `"}`,
 			refusals: map[string]webappRefusal{
 				"username too short": {body: `{"username":"ab"}`, wantErr: "3-22 characters"},
-				"no purpose":         {body: `{"username":"svcbot","display_name":"Service Bot"}`, stub: stubNamesFree, wantErr: "Describe the bot's purpose."},
+				"no purpose":         {body: `{"username":"svcbot","display_name":"Service Bot"}`, stub: stubNamesFree, wantErr: "purpose is required"},
 			},
 		},
 		"incoming webhook": {
@@ -543,7 +544,7 @@ func TestHandleListSidebarCategories_SkipsEmptyEntries(t *testing.T) {
 func TestHandleConfig_ReportsEachRequestType(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{AllowChannelRequests: true, AllowBotTokenRequests: true, AllowWebhookRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, AllowChannelRequests: true, AllowBotTokenRequests: true, AllowWebhookRequests: true})
 
 	w := serve(p, http.MethodGet, routeConfig, "u1", "")
 

@@ -276,6 +276,15 @@ func TestTwoStepActionHandlers_PartialApprovalLostToConcurrentUpdate(t *testing.
 			api := &plugintest.API{}
 			stubRelayLookups(api)
 			p := newTestPlugin(api)
+			// First-step only: admin is in the security group; system step stays open.
+			p.setConfiguration(&configuration{
+				AllowBotTokenRequests: true,
+				AllowWebhookRequests:  true,
+				TwoStepApproverMode:   twoStepModeUserGroup,
+				SecurityApproverGroup: "security-approvers",
+			})
+			stubSyncedGroup(api, "security-approvers", "g-sec")
+			api.On("GetGroupsForUser", "admin1").Return([]*model.Group{{Id: "g-sec"}}, nil).Maybe()
 			raw := mustMarshal(t, tc.record)
 			stubSystemAdmin(api)
 			stubRequester(api)
@@ -310,6 +319,14 @@ func TestTwoStepActionHandlers_PartialApprovalRecordsStepAndRepaintsCard(t *test
 			api := &plugintest.API{}
 			stubRelayLookups(api)
 			p := newTestPlugin(api)
+			p.setConfiguration(&configuration{
+				AllowBotTokenRequests: true,
+				AllowWebhookRequests:  true,
+				TwoStepApproverMode:   twoStepModeUserGroup,
+				SecurityApproverGroup: "security-approvers",
+			})
+			stubSyncedGroup(api, "security-approvers", "g-sec")
+			api.On("GetGroupsForUser", "admin1").Return([]*model.Group{{Id: "g-sec"}}, nil).Maybe()
 			raw := mustMarshal(t, tc.record)
 			stubSystemAdmin(api)
 			stubRequester(api)

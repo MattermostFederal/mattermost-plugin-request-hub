@@ -54,9 +54,9 @@ export type StoredBotRequest = {
 // otherwise; its home is town-square, which every team member is in.
 export const DECLARED = {
     purpose: 'E2E test bot',
-    privilege_level: 'post',
-    data_ingestion: 'None',
-    hosting_env: 'mattermost-dev',
+    architecture_url: 'https://docs.example/arch',
+    integration_endpoint: 'https://ci.example/hooks/e2e',
+    hosting_env: 'ci_cd',
 };
 
 // submitBot accepts the compliance statement, which is required by default,
@@ -77,7 +77,7 @@ export const ACCEPT = '--accept-compliance';
 
 // The slash flags that declare DECLARED. A slash request's home is the
 // channel it is run in.
-export const DECLARE = `--purpose ${DECLARED.purpose} --privilege ${DECLARED.privilege_level} --ingestion ${DECLARED.data_ingestion} --env ${DECLARED.hosting_env}`;
+export const DECLARE = `--purpose ${DECLARED.purpose} --integration ${DECLARED.integration_endpoint} --architecture ${DECLARED.architecture_url} --env ${DECLARED.hosting_env}`;
 
 // A valid bot username that is unique on the server (3-22 characters).
 export const botName = () => uid('b').slice(0, 22);

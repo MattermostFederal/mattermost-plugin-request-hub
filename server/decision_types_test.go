@@ -177,6 +177,16 @@ func TestExecuteDecision_TwoStepFirstApprovalRedrawsEveryCopy(t *testing.T) {
 	for _, kind := range []string{pendingKindBot, pendingKindWebhook} {
 		t.Run(kind, func(t *testing.T) {
 			api, p, store, updated := newerTypeFixture(t)
+			// User-group mode: admin1 is in the security pool but a second
+			// distinct System Admin must finish the system step.
+			p.setConfiguration(&configuration{
+				AllowBotTokenRequests: true,
+				AllowWebhookRequests:  true,
+				TwoStepApproverMode:   twoStepModeUserGroup,
+				SecurityApproverGroup: "security-approvers",
+			})
+			stubSyncedGroup(api, "security-approvers", "g-sec")
+			api.On("GetGroupsForUser", "admin1").Return([]*model.Group{{Id: "g-sec"}}, nil).Maybe()
 			api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil).Maybe()
 			id := model.NewId()
 			storeDMFallback(t, store, kind, id, newerTypeRecord(kind, id, twoStepState{}))
