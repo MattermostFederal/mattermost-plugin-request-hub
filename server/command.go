@@ -917,7 +917,10 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		HomeTeamID:         args.TeamId,
 		HomeChannelID:      args.ChannelId,
 
+		// --accept-compliance accepts the statement configured now, the one
+		// a refused slash command prints.
 		ComplianceAccepted: accepted,
+		ComplianceTextHash: complianceHash(p.getConfiguration().BotComplianceText()),
 	}))
 }
 

@@ -1,5 +1,6 @@
 import {expect, test} from '../helpers/fixtures';
 import {ADMIN, PLUGIN_ID, REQUEST_CHANNELS, atLeast, uid} from '../helpers/requesthub';
+import {complianceHash} from '../helpers/bots';
 
 const TOKEN_LIFETIME_MONTHS = 1;
 
@@ -41,6 +42,7 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
             display_name: 'E2E Bot',
             request_token: true,
             compliance_accepted: true,
+            compliance_text_hash: await complianceHash(hub, requester.username),
             purpose: 'e2e',
             integration_endpoint: 'https://ci.example/hooks/e2e',
             hosting_env: 'ci_cd',

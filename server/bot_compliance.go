@@ -35,6 +35,7 @@ If your organization has published a replacement statement in System Console, th
 const (
 	botComplianceRequiredMsg = "Accept the bot compliance statement to submit this request."
 	botComplianceChangedMsg  = "The bot compliance statement changed after you opened the form. Read it again and resubmit."
+	botComplianceUnseenMsg   = "Open the bot form again so it shows the current compliance statement, then resubmit."
 	botComplianceMCPMsg      = "Bot requests through an agent are off while the bot compliance statement is required. Use the Request a Bot Account form or the bot slash command."
 
 	// complianceHashShort is how many characters of the hash name the
@@ -80,9 +81,11 @@ func shortHash(hash string) string {
 }
 
 // checkBotCompliance returns the acceptance to store with a bot request, or
-// nil when no acceptance is required. shownHash, when set, is the hash of
-// the statement the requester was shown; a different current statement is
-// refused so nobody accepts text they never saw.
+// nil when no acceptance is required. shownHash is the hash of the statement
+// the requester was shown, and it must match the current statement, so the
+// stored acceptance names text they actually saw. A missing hash is refused
+// too: only the slash command, whose --accept-compliance means "the
+// statement configured now", passes the current hash itself.
 func checkBotCompliance(c *configuration, accepted bool, shownHash string) (*botCompliance, error) {
 	if !c.BotComplianceRequired() {
 		return nil, nil
@@ -92,7 +95,10 @@ func checkBotCompliance(c *configuration, accepted bool, shownHash string) (*bot
 	}
 	text := c.BotComplianceText()
 	hash := complianceHash(text)
-	if shownHash = strings.TrimSpace(shownHash); shownHash != "" && shownHash != hash {
+	switch shownHash = strings.TrimSpace(shownHash); {
+	case shownHash == "":
+		return nil, errors.New(botComplianceUnseenMsg)
+	case shownHash != hash:
 		return nil, errors.New(botComplianceChangedMsg)
 	}
 	return &botCompliance{AcceptedAt: model.GetMillis(), TextSHA256: hash, Text: text}, nil

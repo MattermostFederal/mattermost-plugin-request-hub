@@ -329,15 +329,16 @@ func TestLookupApprovalChannel_PrivateChannelOfARegularUserIsTaken(t *testing.T)
 	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }
 
-func TestLookupApprovalChannel_AdoptsPrivateChannelOfASystemAdminOrBot(t *testing.T) {
+func TestLookupApprovalChannel_AdoptsPrivateChannelOfASystemAdminOrThePluginsBot(t *testing.T) {
 	for name, creator := range map[string]*model.User{
-		"system admin": {Id: "u1", Roles: model.SystemUserRoleId + " " + model.SystemAdminRoleId},
-		"bot":          {Id: "u1", Roles: model.SystemUserRoleId, IsBot: true},
+		"system admin":          {Id: "u1", Roles: model.SystemUserRoleId + " " + model.SystemAdminRoleId},
+		"an earlier plugin bot": {Id: "u1", Roles: model.SystemUserRoleId, IsBot: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, api := newApprovalTeamPlugin(t)
 			api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
 			api.On("GetUser", "u1").Return(creator, nil).Once()
+			api.On("GetBot", "u1", true).Return(&model.Bot{UserId: "u1", OwnerId: manifest.Id}, nil).Maybe()
 			api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 			api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil).Once()
 
@@ -353,6 +354,35 @@ func TestLookupApprovalChannel_AdoptsPrivateChannelOfASystemAdminOrBot(t *testin
 			require.False(t, taken)
 			api.AssertNumberOfCalls(t, "GetUser", 1)
 			api.AssertNumberOfCalls(t, "AddChannelMember", 1)
+		})
+	}
+}
+
+// A bot this plugin doesn't own could pre-create the name and read the
+// cards, so its channel is refused like a regular user's.
+func TestLookupApprovalChannel_PrivateChannelOfAnotherBotIsTaken(t *testing.T) {
+	for name, getBot := range map[string]func(api *plugintest.API){
+		"owned by another plugin": func(api *plugintest.API) {
+			api.On("GetBot", "u1", true).Return(&model.Bot{UserId: "u1", OwnerId: "com.example.other"}, nil)
+		},
+		"owned by a user": func(api *plugintest.API) {
+			api.On("GetBot", "u1", true).Return(&model.Bot{UserId: "u1", OwnerId: "u2"}, nil)
+		},
+		"bot lookup fails": func(api *plugintest.API) {
+			api.On("GetBot", "u1", true).Return(nil, testAppErr("db down"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, api := newApprovalTeamPlugin(t)
+			api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
+			api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId, IsBot: true}, nil)
+			getBot(api)
+
+			ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+			require.Nil(t, ch)
+			require.True(t, taken)
+			api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 		})
 	}
 }

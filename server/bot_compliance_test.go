@@ -33,15 +33,19 @@ func TestCheckBotCompliance(t *testing.T) {
 		_, err := checkBotCompliance(on, true, complianceHash("Be nice."))
 		require.EqualError(t, err, botComplianceChangedMsg)
 	})
-	for name, shown := range map[string]string{"shown hash matches": hash, "no hash (slash command)": ""} {
+	for name, shown := range map[string]string{"no hash": "", "blank hash": "  "} {
 		t.Run(name, func(t *testing.T) {
-			bc, err := checkBotCompliance(on, true, shown)
-			require.NoError(t, err)
-			require.Equal(t, "Be good.", bc.Text)
-			require.Equal(t, hash, bc.TextSHA256)
-			require.NotZero(t, bc.AcceptedAt)
+			_, err := checkBotCompliance(on, true, shown)
+			require.EqualError(t, err, botComplianceUnseenMsg)
 		})
 	}
+	t.Run("shown hash matches", func(t *testing.T) {
+		bc, err := checkBotCompliance(on, true, hash)
+		require.NoError(t, err)
+		require.Equal(t, "Be good.", bc.Text)
+		require.Equal(t, hash, bc.TextSHA256)
+		require.NotZero(t, bc.AcceptedAt)
+	})
 }
 
 // stubBotSubmit lets u_req submit a bot request into the bot approval

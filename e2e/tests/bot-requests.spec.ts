@@ -406,6 +406,15 @@ test.describe('compliance statement', () => {
         await expectNothingSubmitted(hub, requester, username);
     });
 
+    test('a request without the hash of the statement it showed is refused', async ({hub}) => {
+        const requester = await hub.createUser();
+        const username = botName();
+        expect(await submitBot(hub, requester.username, {username, compliance_text_hash: ''})).toEqual({
+            error: 'Open the bot form again so it shows the current compliance statement, then resubmit.',
+        });
+        await expectNothingSubmitted(hub, requester, username);
+    });
+
     test('a statement changed after the form opened is refused', async ({hub}) => {
         const requester = await hub.createUser();
         const username = botName();

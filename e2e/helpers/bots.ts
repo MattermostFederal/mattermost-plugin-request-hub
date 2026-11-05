@@ -63,13 +63,22 @@ export const DECLARED = {
     hosting_env: 'ci_cd',
 };
 
+export const BOT_FORM_ROUTE = '/api/v1/bot_form';
+
+// complianceHash is the SHA-256 of the compliance statement username is
+// shown now, which a REST submission must send while the statement is
+// required (undefined while it isn't).
+export const complianceHash = async (hub: RequestHub, username: string) =>
+    (await hub.pluginFetch<{compliance: {sha256?: string}}>(username, BOT_FORM_ROUTE)).compliance.sha256;
+
 // submitBot accepts the compliance statement, which is required by default,
-// and declares DECLARED with a home of town-square, unless body says
-// otherwise.
+// with the hash of the statement shown now, and declares DECLARED with a
+// home of town-square, unless body says otherwise.
 export const submitBot = async (hub: RequestHub, username: string, body: BotRequestBody) =>
     hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {
         display_name: 'E2E Bot',
         compliance_accepted: true,
+        compliance_text_hash: await complianceHash(hub, username),
         ...DECLARED,
         home_team_id: hub.teamId,
         home_channel_id: await hub.channelId('town-square'),

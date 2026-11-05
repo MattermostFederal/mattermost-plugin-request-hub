@@ -100,8 +100,8 @@ type botRequestInput struct {
 	OutgoingWebhookDisplayName string
 	OutgoingWebhookCallbackURL string
 	// ComplianceAccepted is the requester's tick on the compliance
-	// statement; ComplianceTextHash, when set, the hash of the statement
-	// they were shown.
+	// statement; ComplianceTextHash the hash of the statement they were
+	// shown, required while the statement is.
 	ComplianceAccepted bool
 	ComplianceTextHash string
 }
