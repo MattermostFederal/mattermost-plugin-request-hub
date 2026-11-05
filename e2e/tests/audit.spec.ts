@@ -1,4 +1,4 @@
-import {botName, createAttribute, createGroup, setAttribute, submitBot} from '../helpers/bots';
+import {DECLARED, botName, createAttribute, createGroup, setAttribute, submitBot, userNamed} from '../helpers/bots';
 import {expect, test} from '../helpers/fixtures';
 import {ADMIN, PLUGIN_ID, REQUEST_CHANNELS, cardRequestId, uid, type RequestHub} from '../helpers/requesthub';
 import {login, openChannel} from '../helpers/ui';
@@ -174,6 +174,63 @@ test.describe('audit trail', () => {
 
             await expect.poll(() => eventsOf(hub, requestId)).toEqual(['submitted', 'decision_refused', 'approved']);
             expect((await history(hub, requestId))?.status).toBe('approved');
+        });
+    });
+
+    test('the bot inventory lists a bot Request Hub created, downloaded directly and delivered on request', async ({hub}) => {
+        const requester = await hub.createUser();
+        const security = await hub.createUser();
+        const username = botName();
+        const env = 'mattermost-prod';
+
+        await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
+            const res = await submitBot(hub, requester.username, {username, hosting_env: env});
+            expect(res.error, JSON.stringify(res)).toBeUndefined();
+            const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
+            await (await hub.client(ADMIN)).doPostAction(card.id, 'approve');
+        });
+        await expect.poll(async () => (await userNamed(hub, username))?.id).toBeTruthy();
+        const bot = (await userNamed(hub, username))!;
+        await expect.poll(() => hub.kv(`bot_index_${bot.id}`)).toBeTruthy();
+
+        // A System Admin downloads it as JSON while direct export is on.
+        await hub.withPluginConfig({allowdirectauditexport: true}, async () => {
+            const json = await exportAs(hub, ADMIN, `?type=bot_inventory&env=${env}&requester=${requester.id}`);
+            expect(json.status, json.body).toBe(200);
+            const rows = JSON.parse(json.body);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({
+                bot_id: bot.id, bot_username: username, bot_status: 'active', bot_active: true,
+                hosting_env: env, purpose: DECLARED.purpose, privilege_level: DECLARED.privilege_level, data_ingestion: DECLARED.data_ingestion,
+                home_team_id: hub.teamId, home_channel_name: 'Town Square',
+                requester_id: requester.id, requester_username: requester.username, approved_by_username: ADMIN,
+                compliance_accepted: true, rh_managed: true,
+            });
+            expect((await exportAs(hub, ADMIN, '?type=bot_inventory&kind=bot')).status).toBe(400);
+        });
+
+        // A security approver asks for it as a PDF, and a System Admin approves.
+        const group = await createGroup(hub, [security]);
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: group, auditchanneldetail: 'decisions'}, async () => {
+            const reason = uid('fleet');
+            const res = await hub.pluginFetch(security.username, '/api/v1/submit_audit_export_request', {
+                type: 'bot_inventory', format: 'pdf', env, requester: requester.username, reason,
+            });
+            expect(res.message, JSON.stringify(res)).toContain('sent to the System Admins');
+            const card = await hub.findAudit(reason);
+            expect(JSON.stringify(card.props)).toContain('Bot inventory');
+            expect(await hub.slash(ADMIN, `approve ${cardRequestId(card)}`)).toBe(`✅ Approved by @${ADMIN} for @${security.username}. Audit export (PDF, 1 bots) sent.`);
+
+            const delivered = await hub.findDM(security.username, 'Audit export: Bot inventory');
+            expect(delivered.file_ids).toHaveLength(1);
+            const c = await hub.client(security.username);
+            const file = await fetch(`${hub.mm.url()}/api/v4/files/${delivered.file_ids![0]}`, c.getOptions({method: 'get'}));
+            expect(file.status).toBe(200);
+            const pdf = Buffer.from(await file.arrayBuffer()).toString('latin1');
+            expect(pdf.startsWith('%PDF-1.4')).toBe(true);
+            expect(pdf.trimEnd().endsWith('%%EOF')).toBe(true);
+            expect(pdf).toContain(`(@${username}`);
+            expect(pdf).toContain(`(${bot.id}) Tj`);
         });
     });
 

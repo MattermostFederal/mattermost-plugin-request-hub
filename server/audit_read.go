@@ -23,7 +23,7 @@ const (
 	subcommandAudit = "audit"
 	auditRecent     = "recent"
 	auditExportSub  = "export"
-	auditArgsHint   = "<request ID> | recent [count] | export [type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
+	auditArgsHint   = "<request ID> | recent [count] | export [type] [format] [--request ID] [--kind kind] [--env name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
 
 	defaultAuditRecent = 20
 	maxAuditRecent     = 200
@@ -110,7 +110,11 @@ func (p *Plugin) executeAuditExport(args *model.CommandArgs, params []commandArg
 	}
 	if isAdmin && direct {
 		// No format links every format the type comes in.
-		if typeErr := checkExportType(f.withDefaults()); typeErr != nil {
+		typeErr := checkExportType(f.withDefaults())
+		if typeErr == nil {
+			typeErr = checkExportScope(f)
+		}
+		if typeErr != nil {
 			return usageReply(typeErr, subcommandAudit+" "+auditExportSub, auditExportArgsHint)
 		}
 		return ephemeralResponse(p.exportLinksText(args, f))
@@ -136,14 +140,14 @@ func flagDay(flags map[string][]string, flag string) (int64, error) {
 	return t.UnixMilli(), nil
 }
 
-const auditExportArgsHint = "[type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
+const auditExportArgsHint = "[type] [format] [--request ID] [--kind kind] [--env name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
 
 // parseAuditExportArgs reads `audit export` arguments: an export type and
 // a format in either order, then filters. The format is left empty when
 // not given.
 func (p *Plugin) parseAuditExportArgs(params []commandArg) (auditExportFilter, string, error) {
 	var f auditExportFilter
-	positional, flags, err := readArgs(params, "--request", "--kind", "--requester", "--since", "--until", "--reason")
+	positional, flags, err := readArgs(params, "--request", "--kind", "--env", "--requester", "--since", "--until", "--reason")
 	if err != nil {
 		return f, "", err
 	}
@@ -162,6 +166,9 @@ func (p *Plugin) parseAuditExportArgs(params []commandArg) (auditExportFilter, s
 		return f, "", err
 	}
 	if f.Kind, err = flagOne(flags, "--kind"); err != nil {
+		return f, "", err
+	}
+	if f.HostingEnv, err = flagOne(flags, "--env"); err != nil {
 		return f, "", err
 	}
 	requester, err := flagOne(flags, "--requester")
@@ -240,7 +247,7 @@ func (p *Plugin) exportLinksText(args *model.CommandArgs, f auditExportFilter) s
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Download the audit export: %s**\n\n", et.Label)
 	b.WriteString(downloadLinks(args, p.describeExportFilter(f), f))
-	b.WriteString("\n\n" + et.About + " Add `kind`, `requester` (a user ID), `since` or `until` (Unix milliseconds) to the link to narrow it. " +
+	b.WriteString("\n\n" + et.About + " Add " + et.Narrow + " to the link to narrow it. " +
 		"Each download is recorded in the server audit log.")
 	return b.String()
 }
@@ -362,6 +369,7 @@ func (p *Plugin) requireAuditReader(w http.ResponseWriter, r *http.Request) (*mo
 // Export types and formats.
 const (
 	exportFullHistories = "full_histories"
+	exportBotInventory  = "bot_inventory"
 )
 
 var exportFormats = []string{"csv", "json", "pdf"}
@@ -375,6 +383,10 @@ type auditExportType struct {
 	// About says what the file holds, under download links and on the
 	// approval card.
 	About string
+	// Unit counts what the file lists, such as "requests".
+	Unit string
+	// Narrow names the link parameters that filter it.
+	Narrow string
 }
 
 // auditExportTypes are the exports the plugin builds.
@@ -383,6 +395,16 @@ var auditExportTypes = []auditExportType{
 		Type: exportFullHistories, Label: "Request histories", Formats: []string{"csv", "json"},
 		About: "The file has every event with all its details, including the full text of ticket thread messages. " +
 			"The CSV has one row per event; the JSON has one object per request, with its latest copy of the request.",
+		Unit:   "requests",
+		Narrow: "`kind`, `requester` (a user ID), `since` or `until` (Unix milliseconds)",
+	},
+	{
+		Type: exportBotInventory, Label: "Bot inventory", Formats: []string{"pdf", "csv", "json"},
+		About: "The file lists every bot Request Hub created: what its requester declared (purpose, privilege level, data ingestion, " +
+			"hosting environment and home channel), who requested and approved it, the compliance statement they accepted, and whether " +
+			"the bot is still active. Bots made outside Request Hub, or before it kept a bot index, are not listed.",
+		Unit:   "bots",
+		Narrow: "`env`, `requester` (a user ID), `since` or `until` (Unix milliseconds, on the approval date)",
 	},
 }
 
@@ -414,9 +436,11 @@ type auditExportFilter struct {
 	Format    string `json:"format"` // one of the type's Formats
 	RequestID string `json:"request_id,omitempty"`
 	Kind      string `json:"kind,omitempty"`
-	Requester string `json:"requester,omitempty"` // a user ID
-	Since     int64  `json:"since,omitempty"`     // Unix millis
-	Until     int64  `json:"until,omitempty"`
+	// HostingEnv narrows the bot inventory to one hosting environment.
+	HostingEnv string `json:"env,omitempty"`
+	Requester  string `json:"requester,omitempty"` // a user ID
+	Since      int64  `json:"since,omitempty"`     // Unix millis
+	Until      int64  `json:"until,omitempty"`
 }
 
 // exportType is f's export type, with "" read as full_histories.
@@ -454,6 +478,7 @@ func (f auditExportFilter) query() string {
 	}
 	add("request", f.RequestID)
 	add("kind", f.Kind)
+	add("env", f.HostingEnv)
 	add("requester", f.Requester)
 	if f.Since > 0 {
 		add("since", strconv.FormatInt(f.Since, 10))
@@ -466,7 +491,7 @@ func (f auditExportFilter) query() string {
 
 // detail is the filter as audit event detail.
 func (f auditExportFilter) detail() map[string]any {
-	return map[string]any{"type": f.exportType(), "format": f.Format, "request": f.RequestID, "kind": f.Kind, "requester": f.Requester, "since": f.Since, "until": f.Until}
+	return map[string]any{"type": f.exportType(), "format": f.Format, "request": f.RequestID, "kind": f.Kind, "env": f.HostingEnv, "requester": f.Requester, "since": f.Since, "until": f.Until}
 }
 
 // auditExport is a built export file.
@@ -474,7 +499,19 @@ type auditExport struct {
 	data        []byte
 	filename    string
 	contentType string
-	requests    int
+	// count is how many requests or bots the file lists.
+	count int
+}
+
+// exportUnit is what f's export counts, such as "bots".
+func exportUnit(f auditExportFilter) string {
+	et, _ := findExportType(f.exportType())
+	return et.Unit
+}
+
+// exportCount says how many of what f's export lists, such as "3 bots".
+func exportCount(f auditExportFilter, n int) string {
+	return fmt.Sprintf("%d %s", n, exportUnit(f))
 }
 
 // buildAuditExport builds the export file f asks for.
@@ -483,8 +520,11 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 		return nil, err
 	}
 	filename := "request-hub-" + strings.ReplaceAll(f.exportType(), "_", "-") + "-" + time.Now().UTC().Format("20060102-150405")
-	if f.exportType() == exportFullHistories {
+	switch f.exportType() {
+	case exportFullHistories:
 		return p.buildHistoryExport(f, filename)
+	case exportBotInventory:
+		return p.buildInventoryExport(f, filename)
 	}
 	return nil, errors.New("unknown export type")
 }
@@ -508,7 +548,7 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt < filtered[j].CreatedAt })
 
-	out := &auditExport{requests: len(filtered), filename: filename}
+	out := &auditExport{count: len(filtered), filename: filename}
 	var buf bytes.Buffer
 	if f.Format == "json" {
 		if err := json.NewEncoder(&buf).Encode(filtered); err != nil {
@@ -542,7 +582,7 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 
 // parseExportFilter reads an export filter from query parameters.
 func parseExportFilter(q url.Values) (auditExportFilter, error) {
-	f := auditExportFilter{Type: q.Get("type"), Format: q.Get("format"), RequestID: q.Get("request"), Kind: q.Get("kind"), Requester: q.Get("requester")}
+	f := auditExportFilter{Type: q.Get("type"), Format: q.Get("format"), RequestID: q.Get("request"), Kind: q.Get("kind"), HostingEnv: q.Get("env"), Requester: q.Get("requester")}
 	// The API has always given JSON when no format is named.
 	if et, ok := findExportType(f.exportType()); ok && f.Format == "" && slices.Contains(et.Formats, "json") {
 		f.Format = "json"
@@ -554,7 +594,10 @@ func parseExportFilter(q url.Values) (auditExportFilter, error) {
 	if sinceErr != nil || untilErr != nil {
 		return f, errors.New("since and until are Unix times in milliseconds")
 	}
-	return f, checkExportType(f)
+	if err := checkExportType(f); err != nil {
+		return f, err
+	}
+	return f, checkExportScope(f)
 }
 
 // handleAuditExport serves an audit export, filtered by request, kind,
@@ -581,10 +624,10 @@ func (p *Plugin) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail := f.detail()
-	detail["requests"] = export.requests
+	detail[exportUnit(f)] = export.count
 	p.recordEvent(auditEntry{
 		Event: eventAuditExported, ActorID: user.Id, ActorName: user.Username, Detail: detail,
-		Note: fmt.Sprintf("@%s downloaded the %s export (%s, %d requests)", user.Username, exportLabel(f), strings.ToUpper(f.Format), export.requests),
+		Note: fmt.Sprintf("@%s downloaded the %s export (%s, %s)", user.Username, exportLabel(f), strings.ToUpper(f.Format), exportCount(f, export.count)),
 	})
 	w.Header().Set("Content-Type", export.contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+export.filename+`"`)

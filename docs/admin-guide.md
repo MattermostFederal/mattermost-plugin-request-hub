@@ -223,17 +223,24 @@ Changes to these settings need a server restart. Every record from the plugin ha
 
 ### Audit history in the Request Hub
 
-System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. When **Allow direct audit export** is on, download buttons give the whole history, every request of one type, or one request, as CSV or JSON. When it is off (the default), the window has a **Request an export** button instead.
+System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. When **Allow direct audit export** is on, download buttons give the whole history, every request of one type, or one request, as CSV or JSON, and the [bot inventory](#bot-inventory) as PDF, CSV or JSON. When it is off (the default), the window has a **Request an export** button instead.
 
 ### Audit export requests
 
 Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead. While **Allow direct audit export** is off, System Admins request exports too, from **Request an export** in Audit history or with the slash command, and a different System Admin must approve them. The slash command is:
 
 ```
-/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--env name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
 ```
 
-The requester picks the export type (today, `full_histories`: every event of the requests covered) and a format that type comes in (CSV or JSON). They can narrow it to one request, one request type, one requester or a date range, and must give a reason. The approval card shows the export type, format, what it covers and the reason. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Nobody can approve their own export request. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
+The requester picks the export type and a format that type comes in:
+
+| Type | Formats (default first) | Narrowed by |
+|------|-------------------------|-------------|
+| `full_histories` | CSV, JSON | Request, request type, requester, dates the request was active |
+| `bot_inventory` | PDF, CSV, JSON | Hosting environment (`--env`), requester, dates the bot was approved |
+
+They must give a reason. The approval card shows the export type, format, what it covers and the reason. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Nobody can approve their own export request. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
 
 ### Exporting
 
@@ -241,18 +248,34 @@ While **Allow direct audit export** is on, System Admins can download exports fr
 
 | Parameter | Values |
 |-----------|--------|
-| `type` | `full_histories` (default) |
-| `format` | `json` (default): one object per request, with its events. `csv`: one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. |
-| `request` | One request ID |
-| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` |
+| `type` | `full_histories` (default) or `bot_inventory` |
+| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. |
+| `request` | One request ID (`full_histories` only) |
+| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` (`full_histories` only) |
+| `env` | One hosting environment (`bot_inventory` only) |
 | `requester` | A requester's user ID |
-| `since`, `until` | Unix time in milliseconds |
+| `since`, `until` | Unix time in milliseconds. For `bot_inventory`, the date the bot was approved. |
 
 Each export is itself recorded in the server audit log as `requesthub_audit_exported`.
 
 Every cell of a CSV export that a spreadsheet could run as a formula (one starting with `=`, `+`, `-` or `@`, even after spaces, or with a tab, carriage return or other control character) starts with an apostrophe.
 
 If the history can't be saved for an event, the server log has `failed to save request audit history` with the whole event.
+
+### Bot inventory
+
+The `bot_inventory` export lists every bot Request Hub created, oldest first, for Security to review the fleet. Each bot has:
+
+- its user ID, username and display name, and its status as of the export: `active`, `deactivated`, `deleted`, or `unknown` when the server could not be asked
+- its home team and channel, by ID and by their current display names
+- what the requester declared: purpose, privilege level, data ingestion and hosting environment
+- the requester, the owner (when another user owns it), the request ID, when it was requested, and who approved it and when
+- whether the requester accepted the bot compliance statement, when, and the SHA-256 of the statement's text
+- `rh_managed: true` and the time of the export (`as_of`)
+
+The PDF is for reading: a title, what it covers and one block per bot. The CSV and JSON have the same fields for tooling, and the CSV guards against formulas as above.
+
+The inventory is built from the bot index Request Hub writes when it creates a bot, so it lists only bots created after the index was added. Bots created outside Request Hub are not listed. The declared fields are the requester's word: they do not limit what the bot's token can do.
 
 A request's history keeps relayed messages in full until it reaches 2 MB. After that, each new message is kept to its first 2 KB in the history (marked `message_truncated`), so a very long ticket thread can't stop the history being saved. The server audit log always gets the full text.
 

@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {auditExportURL, fetchAuditAccess, fetchAuditHistory, fetchAuditRequests} from './client';
-import type {AuditEvent, AuditHistory, AuditRequestSummary} from './client';
+import type {AuditExportFormat, AuditEvent, AuditHistory, AuditRequestSummary} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditHistoryModal, isAuditHistoryModalOpen, openAuditExportRequestModal} from './store';
 
@@ -80,19 +80,26 @@ const actorOf = (ev: AuditEvent) => {
     return ev.actor_name ? `@${ev.actor_name}` : ev.actor_id;
 };
 
-const DownloadLinks = ({label, filter}: {label: string; filter?: {request?: string; kind?: string}}) => (
+type DownloadLinksProps = {
+    label: string;
+    filter?: {type?: string; request?: string; kind?: string};
+    formats?: AuditExportFormat[];
+
+    // noun goes in each link's name, as in "Download inventory PDF".
+    noun?: string;
+};
+
+const DownloadLinks = ({label, filter, formats = ['csv', 'json'], noun}: DownloadLinksProps) => (
     <span style={{display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
         <span style={mutedStyle}>{label}</span>
-        <a
-            className='btn btn-tertiary btn-sm'
-            href={auditExportURL('csv', filter)}
-            download={true}
-        >{'Download CSV'}</a>
-        <a
-            className='btn btn-tertiary btn-sm'
-            href={auditExportURL('json', filter)}
-            download={true}
-        >{'Download JSON'}</a>
+        {formats.map((format) => (
+            <a
+                key={format}
+                className='btn btn-tertiary btn-sm'
+                href={auditExportURL(format, filter)}
+                download={true}
+            >{`Download ${noun ? `${noun} ` : ''}${format.toUpperCase()}`}</a>
+        ))}
     </span>
 );
 
@@ -351,10 +358,18 @@ export const AuditHistoryModal = () => {
 
                         <div style={{marginTop: 12}}>
                             {directExport === true ? (
-                                <DownloadLinks
-                                    label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
-                                    filter={kind ? {kind} : {}}
-                                />
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                                    <DownloadLinks
+                                        label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
+                                        filter={kind ? {kind} : {}}
+                                    />
+                                    <DownloadLinks
+                                        label='Every bot Request Hub created:'
+                                        filter={{type: 'bot_inventory'}}
+                                        formats={['pdf', 'csv', 'json']}
+                                        noun='inventory'
+                                    />
+                                </div>
                             ) : null}
                             {directExport === false ? (
                                 <span style={{display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>

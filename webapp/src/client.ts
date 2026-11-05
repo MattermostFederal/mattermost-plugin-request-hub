@@ -548,17 +548,19 @@ export function fetchAuditHistory(requestId: string): Promise<{summary: AuditReq
 
 export type AuditExportFormat = 'csv' | 'json' | 'pdf';
 
-// auditExportURL is the download link for the request histories export,
-// as CSV or JSON, narrowed to one request or one kind when given. It works
-// only while direct export is on.
-export function auditExportURL(format: 'csv' | 'json', filter: {request?: string; kind?: string} = {}): string {
-    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({format, request: filter.request, kind: filter.kind})}`;
+// auditExportURL is the download link for an export: the request
+// histories by default, narrowed to one request or one kind when given, or
+// another type such as bot_inventory. It works only while direct export is
+// on.
+export function auditExportURL(format: AuditExportFormat, filter: {type?: string; request?: string; kind?: string} = {}): string {
+    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({type: filter.type, format, request: filter.request, kind: filter.kind})}`;
 }
 
 export type AuditExportRequestPayload = {
     type: string;
     format: AuditExportFormat;
     kind?: string;
+    env?: string;
     requester?: string;
     since?: number;
     until?: number;

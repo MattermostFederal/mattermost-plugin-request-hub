@@ -1,8 +1,8 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {KIND_OPTIONS} from './AuditHistoryModal';
-import {submitAuditExportRequest} from './client';
+import {fetchBotForm, submitAuditExportRequest} from './client';
 import type {AuditExportFormat} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditExportRequestModal, isAuditExportRequestModalOpen} from './store';
@@ -34,6 +34,13 @@ type ExportType = {
     value: string;
     label: string;
     formats: Array<[AuditExportFormat, string]>;
+
+    // byRequest: narrowed by request type (the histories); otherwise by
+    // hosting environment (the bot inventory).
+    byRequest: boolean;
+
+    // dates labels the date range.
+    dates: string;
 };
 
 // EXPORT_TYPES are the exports the server builds and the formats each comes
@@ -43,6 +50,15 @@ export const EXPORT_TYPES: ExportType[] = [
         value: 'full_histories',
         label: 'Request histories',
         formats: [['csv', 'CSV (one row per event)'], ['json', 'JSON (one object per request)']],
+        byRequest: true,
+        dates: 'Active',
+    },
+    {
+        value: 'bot_inventory',
+        label: 'Bot inventory',
+        formats: [['pdf', 'PDF (for reading)'], ['csv', 'CSV (one row per bot)'], ['json', 'JSON (one object per bot)']],
+        byRequest: false,
+        dates: 'Approved',
     },
 ];
 
@@ -61,6 +77,8 @@ export const RequestAuditExportModal = () => {
     const [exportType, setExportType] = useState(EXPORT_TYPES[0].value);
     const [format, setFormat] = useState<AuditExportFormat>(EXPORT_TYPES[0].formats[0][0]);
     const [kind, setKind] = useState('');
+    const [env, setEnv] = useState('');
+    const [envs, setEnvs] = useState<string[]>([]);
     const [requester, setRequester] = useState('');
     const [since, setSince] = useState('');
     const [until, setUntil] = useState('');
@@ -73,6 +91,7 @@ export const RequestAuditExportModal = () => {
         setExportType(EXPORT_TYPES[0].value);
         setFormat(EXPORT_TYPES[0].formats[0][0]);
         setKind('');
+        setEnv('');
         setRequester('');
         setSince('');
         setUntil('');
@@ -83,6 +102,23 @@ export const RequestAuditExportModal = () => {
         dispatch(closeAuditExportRequestModal());
     };
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
+
+    // The bot inventory is narrowed by the hosting environments bot
+    // requesters pick from. Without them the field is a free text box.
+    useEffect(() => {
+        if (!isOpen) {
+            return undefined;
+        }
+        let cancelled = false;
+        fetchBotForm().then((form) => {
+            if (!cancelled) {
+                setEnvs(form?.hosting_envs ?? []);
+            }
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen]);
 
     if (!isOpen) {
         return null;
@@ -109,7 +145,8 @@ export const RequestAuditExportModal = () => {
             const result = await submitAuditExportRequest({
                 type: exportType,
                 format,
-                kind: kind || undefined,
+                kind: currentType.byRequest ? kind || undefined : undefined,
+                env: currentType.byRequest ? undefined : env.trim() || undefined,
                 requester: requester.trim().replace(/^@/, '') || undefined,
                 since: dayStart(since),
                 until: dayEnd(until),
@@ -162,7 +199,7 @@ export const RequestAuditExportModal = () => {
                 ) : (
                     <div>
                         <p style={{opacity: 0.8}}>
-                            {'Ask for a copy of the request audit history. A System Admin reviews the request; once approved, the file is posted in your request thread with the Request Hub bot. Leave the filters empty for the whole history.'}
+                            {'Ask for a copy of the request audit history or the inventory of bots Request Hub created. A System Admin reviews the request; once approved, the file is posted in your request thread with the Request Hub bot. Leave the filters empty for everything.'}
                         </p>
                         {EXPORT_TYPES.length > 1 ? (
                             <fieldset style={fieldStyle}>
@@ -200,7 +237,38 @@ export const RequestAuditExportModal = () => {
                                 </label>
                             ))}
                         </fieldset>
-                        <div style={fieldStyle}>
+                        {currentType.byRequest ? null : (
+                            <div style={fieldStyle}>
+                                <label htmlFor='rae-env'>{'Hosting environment (optional)'}</label>
+                                {envs.length > 0 ? (
+                                    <select
+                                        id='rae-env'
+                                        className='form-control'
+                                        value={env}
+                                        onChange={(e) => setEnv(e.target.value)}
+                                        disabled={submitting}
+                                    >
+                                        <option value=''>{'All environments'}</option>
+                                        {envs.map((value) => (
+                                            <option
+                                                key={value}
+                                                value={value}
+                                            >{value}</option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <input
+                                        id='rae-env'
+                                        className='form-control'
+                                        placeholder='All environments'
+                                        value={env}
+                                        onChange={(e) => setEnv(e.target.value)}
+                                        disabled={submitting}
+                                    />
+                                )}
+                            </div>
+                        )}
+                        {currentType.byRequest ? (<div style={fieldStyle}>
                             <label htmlFor='rae-kind'>{'Request type (optional)'}</label>
                             <select
                                 id='rae-kind'
@@ -217,7 +285,7 @@ export const RequestAuditExportModal = () => {
                                     >{label}</option>
                                 ))}
                             </select>
-                        </div>
+                        </div>) : null}
                         <div style={fieldStyle}>
                             <label htmlFor='rae-requester'>{'Requested by (optional username)'}</label>
                             <input
@@ -231,7 +299,7 @@ export const RequestAuditExportModal = () => {
                         </div>
                         <div style={{...fieldStyle, display: 'flex', gap: 12}}>
                             <div style={{flex: 1}}>
-                                <label htmlFor='rae-since'>{'Active from (optional)'}</label>
+                                <label htmlFor='rae-since'>{`${currentType.dates} from (optional)`}</label>
                                 <input
                                     id='rae-since'
                                     type='date'
@@ -242,7 +310,7 @@ export const RequestAuditExportModal = () => {
                                 />
                             </div>
                             <div style={{flex: 1}}>
-                                <label htmlFor='rae-until'>{'Active until (optional)'}</label>
+                                <label htmlFor='rae-until'>{`${currentType.dates} until (optional)`}</label>
                                 <input
                                     id='rae-until'
                                     type='date'

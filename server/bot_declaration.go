@@ -25,6 +25,9 @@ const (
 	// blank.
 	defaultBotHostingEnvironments = "mattermost-dev\nmattermost-prod"
 
+	// maxHostingEnvLen caps an environment name in an export filter.
+	maxHostingEnvLen = 200
+
 	kvBotIndexPrefix = "bot_index_"
 	botIndexPageSize = 200
 )
