@@ -71,6 +71,7 @@ Create and assign attributes in **System Console → User Management → Attribu
 | **Bot hosting environments** | The hosting environments a bot requester picks from, one per line. Default `mattermost-dev` and `mattermost-prod`; blank uses those. Each bot request also declares a purpose, a privilege level (read only, read and post, or elevated) and its data ingestion, and names a home team and channel the bot joins on approval. A home is an accountability anchor, not a sandbox: the bot's token can still reach anything the bot account can. Approved bots are indexed by bot user ID with what was declared for them; bots approved before this have no entry. |
 | **Bot token lifetime** | **1 to 12 months**, default **12**. How long an access token issued with an approved bot request lasts. The token DM gives the expiry date, and the requester gets reminders before it (see [Token expiry reminders](#token-expiry-reminders)). Only affects tokens issued after the change. Not the same as Request expiry. Needs Mattermost 11.9 or later (see [Token expiry reminders](#token-expiry-reminders)). |
 | **Audit channel detail** | Default **Every lifecycle event**. What is posted to `mattermost-audit-requests`: **Decisions only** (approved, denied, expired), **Every lifecycle event** (also submissions, approval steps, failures, token reminders), or **Everything** (also refused approvals and every relayed message). It changes only the channel. The request history and the server audit log always get every event (see [Audit trail](#audit-trail)). |
+| **Allow direct audit export** | Default off. Off: every audit export is a request with a reason that a System Admin approves (see [Audit export requests](#audit-export-requests)), and the export API refuses downloads. On: System Admins can also download exports directly from Audit history, `audit export` and the export API. |
 | **Enable exercise mode** | Default **off**. **Do not enable in production.** Lets System Admins run `/mattermost-request-hub exercise populate`, `teardown` and `status` to seed and remove marked exercise data in a team: persona accounts nobody can sign in as, channels, and pending requests of every type on real approval cards. Populate needs **Allow channel requests**, at least one prefix, and the setting for each other type the scenario seeds (the built-in scenario seeds all eight). Approving a seeded request does the real thing, marked EXERCISE: a channel, team, bot or webhook, a Team Admin or team member change for a persona, or a guest invite. Teardown deletes the webhooks and bots, archives the teams and channels, and undoes the personas' team changes. Personas and guest invites use `exercise.invalid` email addresses, so a server or team that restricts email domains, or a guest domain list, must allow that domain, and guest access must be on for a scenario with guest invites. A guest invite can't be withdrawn; it reaches nobody and expires on its own. |
 | **Exercise scenario (JSON)** | Optional. Blank uses the built-in fictional scenario. Paste a scenario to seed your own; it is stored only in this server's configuration. The format is on the plugin's built-in `slash.html#exercise-scenario` page. |
 
@@ -222,18 +223,25 @@ Changes to these settings need a server restart. Every record from the plugin ha
 
 ### Audit history in the Request Hub
 
-System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. Download buttons give the whole history, every request of one type, or one request, as CSV or JSON.
+System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. When **Allow direct audit export** is on, download buttons give the whole history, every request of one type, or one request, as CSV or JSON. When it is off (the default), the window has a **Request an export** button instead.
 
 ### Audit export requests
 
-Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead, and `/mattermost-request-hub audit export [csv|json]` sends the same request. They choose CSV or JSON and can narrow it to one request type, one requester or a date range. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
+Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead. While **Allow direct audit export** is off, System Admins request exports too, from **Request an export** in Audit history or with the slash command, and a different System Admin must approve them. The slash command is:
+
+```
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
+```
+
+The requester picks the export type (today, `full_histories`: every event of the requests covered) and a format that type comes in (CSV or JSON). They can narrow it to one request, one request type, one requester or a date range, and must give a reason. The approval card shows the export type, format, what it covers and the reason. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Nobody can approve their own export request. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
 
 ### Exporting
 
-System Admins can download the whole request history from `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/audit/export`. `audit recent` links to it. The export is a `GET` with these optional parameters:
+While **Allow direct audit export** is on, System Admins can download exports from `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/audit/export`. `audit recent` and `audit export` link to it. While it is off, the endpoint answers `403 Direct export is off. Request an export instead.` The export is a `GET` with these optional parameters:
 
 | Parameter | Values |
 |-----------|--------|
+| `type` | `full_histories` (default) |
 | `format` | `json` (default): one object per request, with its events. `csv`: one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. |
 | `request` | One request ID |
 | `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` |
@@ -241,6 +249,8 @@ System Admins can download the whole request history from `/plugins/com.mattermo
 | `since`, `until` | Unix time in milliseconds |
 
 Each export is itself recorded in the server audit log as `requesthub_audit_exported`.
+
+Every cell of a CSV export that a spreadsheet could run as a formula (one starting with `=`, `+`, `-` or `@`, even after spaces, or with a tab, carriage return or other control character) starts with an apostrophe.
 
 If the history can't be saved for an event, the server log has `failed to save request audit history` with the whole event.
 
@@ -392,7 +402,7 @@ The plugin records which team **Approval team** named the first time it was used
 | Bot account (+ token + webhooks) | More actions, Integrations page | `mattermost-bot-requests` | Two-step: security, then system |
 | Incoming webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
 | Outgoing webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
-| Audit export | Request Hub, `audit export` (security approvers who aren't System Admins) | `mattermost-audit-requests` | System Admins |
+| Audit export | Request Hub, `audit export` (security approvers, and System Admins while direct export is off) | `mattermost-audit-requests` | System Admins (not the requester) |
 
 Every request is queued for approval, including requests from System Admins.
 

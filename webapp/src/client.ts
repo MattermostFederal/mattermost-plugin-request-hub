@@ -441,10 +441,12 @@ export async function submitAdminRequest(payload: AdminRequestPayload): Promise<
 }
 
 // AuditAccess says what the user may do with the audit history: System
-// Admins view and download it; security approvers ask for a copy.
+// Admins view it, and download it while direct export is on; security
+// approvers (and System Admins while direct export is off) ask for a copy.
 export type AuditAccess = {
     can_view: boolean;
     can_request: boolean;
+    direct_export: boolean;
 };
 
 // fetchAuditAccess fails closed: on any error neither entry point shows.
@@ -456,12 +458,12 @@ export async function fetchAuditAccess(): Promise<AuditAccess> {
             headers: {'X-Requested-With': 'XMLHttpRequest'},
         });
         if (!response.ok) {
-            return {can_view: false, can_request: false};
+            return {can_view: false, can_request: false, direct_export: false};
         }
         const body = await response.json();
-        return {can_view: Boolean(body?.can_view), can_request: Boolean(body?.can_request)};
+        return {can_view: Boolean(body?.can_view), can_request: Boolean(body?.can_request), direct_export: Boolean(body?.direct_export)};
     } catch {
-        return {can_view: false, can_request: false};
+        return {can_view: false, can_request: false, direct_export: false};
     }
 }
 
@@ -544,19 +546,23 @@ export function fetchAuditHistory(requestId: string): Promise<{summary: AuditReq
     return getAuditJSON(`/api/v1/audit/request${auditQuery({id: requestId})}`);
 }
 
-// auditExportURL is the download link for the export, as CSV or JSON,
-// narrowed to one request or one kind when given.
+export type AuditExportFormat = 'csv' | 'json' | 'pdf';
+
+// auditExportURL is the download link for the request histories export,
+// as CSV or JSON, narrowed to one request or one kind when given. It works
+// only while direct export is on.
 export function auditExportURL(format: 'csv' | 'json', filter: {request?: string; kind?: string} = {}): string {
     return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({format, request: filter.request, kind: filter.kind})}`;
 }
 
 export type AuditExportRequestPayload = {
-    format: 'csv' | 'json';
+    type: string;
+    format: AuditExportFormat;
     kind?: string;
     requester?: string;
     since?: number;
     until?: number;
-    reason?: string;
+    reason: string;
 };
 
 export async function submitAuditExportRequest(payload: AuditExportRequestPayload): Promise<ChannelRequestResult> {

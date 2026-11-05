@@ -287,6 +287,13 @@
                 ]
             },
             {
+                "key": "AllowDirectAuditExport",
+                "display_name": "Allow direct audit export",
+                "type": "bool",
+                "default": false,
+                "help_text": "When true, System Admins can download the audit history straight from Audit history in the Request Hub, the audit slash command and the export API. When false (the default), every export is a request: anyone allowed to ask (a security approver, or a System Admin) submits one with a reason, another System Admin approves it, and the file is posted in the requester's request thread. Each export is recorded either way."
+            },
+            {
                 "key": "EnableExercise",
                 "display_name": "Enable exercise mode",
                 "type": "bool",

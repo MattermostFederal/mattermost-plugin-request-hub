@@ -33,7 +33,7 @@ test.describe('audit trail', () => {
         const systemField = await createAttribute(hub, systemAttr);
         const admin = await hub.client(ADMIN);
         try {
-            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, systemapproverattribute: systemAttr, auditchanneldetail: 'all'}, async () => {
+            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, systemapproverattribute: systemAttr, auditchanneldetail: 'all', allowdirectauditexport: true}, async () => {
                 await setAttribute(hub, security.id, securityField, 'yes');
                 const res = await submitBot(hub, requester.username, {username});
                 expect(res.error, JSON.stringify(res)).toBeUndefined();
@@ -76,7 +76,7 @@ test.describe('audit trail', () => {
                 await requesterClient.createPost({channel_id: dmRoot.channel_id, root_id: dmRoot.root_id || dmRoot.id, message: note} as Parameters<typeof requesterClient.createPost>[0]);
                 await expect.poll(async () => (await history(hub, requestId))?.events.find((e) => e.event === 'message_relayed')?.detail?.message).toBe(note);
 
-                // The export: System Admins only, JSON and CSV.
+                // The direct export (on for this test): System Admins only, JSON and CSV.
                 expect((await exportAs(hub, requester.username, '')).status).toBe(403);
                 const json = await exportAs(hub, ADMIN, '?kind=bot');
                 expect(json.status).toBe(200);
@@ -137,22 +137,31 @@ test.describe('audit trail', () => {
         const group = await createGroup(hub, [security]);
         await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: group}, async () => {
             // Only the security approver may ask; an outsider is refused and nothing is stored.
-            expect(await hub.pluginFetch(security.username, '/api/v1/audit/access')).toEqual({can_view: false, can_request: true});
-            expect(await hub.pluginFetch(outsider.username, '/api/v1/audit/access')).toEqual({can_view: false, can_request: false});
-            expect((await hub.pluginFetch(outsider.username, '/api/v1/submit_audit_export_request', {format: 'csv'})).error).toContain('Only security approvers');
+            expect(await hub.pluginFetch(security.username, '/api/v1/audit/access')).toEqual({can_view: false, can_request: true, direct_export: false});
+            expect(await hub.pluginFetch(outsider.username, '/api/v1/audit/access')).toEqual({can_view: false, can_request: false, direct_export: false});
+            expect((await hub.pluginFetch(outsider.username, '/api/v1/submit_audit_export_request', {format: 'csv', reason: 'why'})).error).toContain('Only security approvers');
             expect((await exportAs(hub, security.username, '')).status).toBe(403);
+            expect((await hub.pluginFetch(security.username, '/api/v1/submit_audit_export_request', {format: 'csv'})).error).toContain('Give a reason for the export');
+
+            // Direct export is off by default: System Admins ask too, and the download is refused.
+            expect(await hub.pluginFetch(ADMIN, '/api/v1/audit/access')).toEqual({can_view: true, can_request: true, direct_export: false});
+            const direct = await exportAs(hub, ADMIN, '');
+            expect(direct.status).toBe(403);
+            expect(direct.body).toContain('Direct export is off. Request an export instead.');
+            expect(await hub.slash(ADMIN, 'audit recent')).toContain('Direct downloads are off');
 
             const res = await hub.pluginFetch(security.username, '/api/v1/submit_audit_export_request', {format: 'csv', kind: 'bot', reason: uid('why')});
             expect(res.message, JSON.stringify(res)).toContain('sent to the System Admins');
             const card = await hub.findAudit('Audit export request');
             const requestId = cardRequestId(card);
             expect(JSON.stringify(card.props)).toContain('Audit export request');
+            expect(JSON.stringify(card.props)).toContain('Request histories');
 
             // The requester can't approve it, a System Admin can.
             expect(await hub.slash(security.username, `approve ${requestId}`)).toBe('Only System Admins can approve or deny audit export requests.');
             expect(await hub.slash(ADMIN, `approve ${requestId}`)).toMatch(/^✅ Approved by @sysadmin for @.+\. Audit export \(CSV, \d+ requests\) sent\.$/);
 
-            const delivered = await hub.findDM(security.username, 'Audit export');
+            const delivered = await hub.findDM(security.username, 'Audit export: Request histories');
             expect(delivered.file_ids).toHaveLength(1);
             const c = await hub.client(security.username);
             const file = await fetch(`${hub.mm.url()}/api/v4/files/${delivered.file_ids![0]}`, c.getOptions({method: 'get'}));
@@ -171,7 +180,7 @@ test.describe('audit trail', () => {
     test('the Request Hub shows System Admins the audit history and its downloads', async ({hub, page}) => {
         const requester = await hub.createUser();
         const username = botName();
-        await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
+        await hub.withPluginConfig({twostepapprovermode: 'system_admin', allowdirectauditexport: true}, async () => {
             const res = await submitBot(hub, requester.username, {username});
             expect(res.error, JSON.stringify(res)).toBeUndefined();
             const requestId = cardRequestId(await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`));

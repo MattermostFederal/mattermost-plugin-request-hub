@@ -4,23 +4,26 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/pkg/errors"
 )
 
 const (
 	subcommandAudit = "audit"
 	auditRecent     = "recent"
 	auditExportSub  = "export"
-	auditArgsHint   = "<request ID> | recent [count] | export [csv|json]"
+	auditArgsHint   = "<request ID> | recent [count] | export [type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
 
 	defaultAuditRecent = 20
 	maxAuditRecent     = 200
@@ -35,43 +38,16 @@ const (
 // executeAudit routes `/mattermost-request-hub audit`: a request's
 // timeline by ID, or the most recently updated requests.
 func (p *Plugin) executeAudit(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
-	// A security approver who isn't a System Admin asks for the export,
-	// for a System Admin to approve.
-	if len(params) >= 1 && len(params) <= 2 && strings.EqualFold(params[0].Text, auditExportSub) {
-		if user, appErr := p.API.GetUser(args.UserId); appErr == nil && user != nil && !user.IsSystemAdmin() {
-			if _, canRequest := p.auditAccess(user); canRequest {
-				format := "csv"
-				if len(params) == 2 {
-					format = strings.ToLower(params[1].Text)
-				}
-				msg, err := p.submitAuditExportRequest(user.Id, auditExportFilter{Format: format}, "")
-				if err != nil {
-					return ephemeralResponse("Could not send the request: " + escapeMarkdown(err.Error()))
-				}
-				return ephemeralResponse(msg)
-			}
-		}
+	if len(params) >= 1 && strings.EqualFold(params[0].Text, auditExportSub) {
+		return p.executeAuditExport(args, params[1:])
 	}
 	if msg := p.systemAdminOnly(args.UserId, "/"+commandTrigger+" "+subcommandAudit); msg != "" {
 		return ephemeralResponse(msg)
 	}
-	usage := fmt.Sprintf("Use `/%[1]s %[2]s <request ID>` for a request's history, `/%[1]s %[2]s %[3]s [count]` for the latest requests, or `/%[1]s %[2]s %[4]s [csv|json]` to download the whole audit history.",
+	usage := fmt.Sprintf("Use `/%[1]s %[2]s <request ID>` for a request's history, `/%[1]s %[2]s %[3]s [count]` for the latest requests, or `/%[1]s %[2]s %[4]s` to export the audit history.",
 		commandTrigger, subcommandAudit, auditRecent, auditExportSub)
 	if len(params) == 0 {
 		return ephemeralResponse(usage)
-	}
-	if strings.EqualFold(params[0].Text, auditExportSub) {
-		if len(params) > 2 {
-			return ephemeralResponse(usage)
-		}
-		format := ""
-		if len(params) == 2 {
-			format = strings.ToLower(params[1].Text)
-			if format != "csv" && format != "json" {
-				return ephemeralResponse(usage)
-			}
-		}
-		return ephemeralResponse(exportLinksText(args, format))
 	}
 	if strings.EqualFold(params[0].Text, auditRecent) {
 		count := defaultAuditRecent
@@ -95,7 +71,126 @@ func (p *Plugin) executeAudit(args *model.CommandArgs, params []commandArg) *mod
 	if h == nil {
 		return ephemeralResponse("No history is recorded for that request ID.")
 	}
-	return ephemeralResponse(historyTimelineText(h) + "\n\n" + downloadLinks(args, "This request in full", "request="+h.RequestID))
+	f := auditExportFilter{RequestID: h.RequestID}
+	return ephemeralResponse(historyTimelineText(h) + "\n\n" + p.exportOffer(args, "This request in full", f))
+}
+
+// exportOffer is the line under an audit reply that offers its export:
+// download links when direct export is on, or how to request it.
+func (p *Plugin) exportOffer(args *model.CommandArgs, label string, f auditExportFilter) string {
+	if p.getConfiguration().AllowDirectAuditExport {
+		return downloadLinks(args, label, f)
+	}
+	request := ""
+	if f.RequestID != "" {
+		request = " --request " + f.RequestID
+	}
+	return fmt.Sprintf("Direct downloads are off. Run `/%s %s %s%s` to request a copy, which another System Admin approves.",
+		commandTrigger, subcommandAudit, auditExportSub, request)
+}
+
+// executeAuditExport answers `audit export`: links to download it for a
+// System Admin when direct export is on, or else a request for a copy
+// from anyone allowed to ask.
+func (p *Plugin) executeAuditExport(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
+	user, appErr := p.API.GetUser(args.UserId)
+	if appErr != nil && !isNotFound(appErr) {
+		p.API.LogWarn("failed to load the user running audit export", "user_id", args.UserId, "error", appErr.Error())
+		return ephemeralResponse("Could not check your account. Please try again.")
+	}
+	direct := p.getConfiguration().AllowDirectAuditExport
+	_, canRequest := p.auditAccess(user)
+	isAdmin := appErr == nil && user != nil && user.IsSystemAdmin()
+	if !canRequest && (!isAdmin || !direct) {
+		return ephemeralResponse("Only System Admins and security approvers can run `/" + commandTrigger + " " + subcommandAudit + " " + auditExportSub + "`.")
+	}
+	f, reason, err := p.parseAuditExportArgs(params)
+	if err != nil {
+		return usageReply(err, subcommandAudit+" "+auditExportSub, auditExportArgsHint)
+	}
+	if isAdmin && direct {
+		// No format links every format the type comes in.
+		if typeErr := checkExportType(f.withDefaults()); typeErr != nil {
+			return usageReply(typeErr, subcommandAudit+" "+auditExportSub, auditExportArgsHint)
+		}
+		return ephemeralResponse(p.exportLinksText(args, f))
+	}
+	msg, err := p.submitAuditExportRequest(user.Id, f, reason)
+	if err != nil {
+		return ephemeralResponse("Could not send the request: " + escapeMarkdown(err.Error()))
+	}
+	return ephemeralResponse(msg)
+}
+
+// flagDay reads flag as a YYYY-MM-DD date, in Unix milliseconds at the
+// start of that UTC day, or 0 when it wasn't given.
+func flagDay(flags map[string][]string, flag string) (int64, error) {
+	value, err := flagOne(flags, flag)
+	if err != nil || value == "" {
+		return 0, err
+	}
+	t, err := time.Parse(time.DateOnly, value)
+	if err != nil {
+		return 0, errors.Errorf("`%s` takes a date like 2026-01-31", flag)
+	}
+	return t.UnixMilli(), nil
+}
+
+const auditExportArgsHint = "[type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
+
+// parseAuditExportArgs reads `audit export` arguments: an export type and
+// a format in either order, then filters. The format is left empty when
+// not given.
+func (p *Plugin) parseAuditExportArgs(params []commandArg) (auditExportFilter, string, error) {
+	var f auditExportFilter
+	positional, flags, err := readArgs(params, "--request", "--kind", "--requester", "--since", "--until", "--reason")
+	if err != nil {
+		return f, "", err
+	}
+	for _, word := range positional {
+		word = strings.ToLower(word)
+		switch {
+		case f.Type == "" && isExportType(strings.ReplaceAll(word, "-", "_")):
+			f.Type = strings.ReplaceAll(word, "-", "_")
+		case f.Format == "" && slices.Contains(exportFormats, word):
+			f.Format = word
+		default:
+			return f, "", errors.Errorf("%s is not an export type or format", inlineCode(word))
+		}
+	}
+	if f.RequestID, err = flagOne(flags, "--request"); err != nil {
+		return f, "", err
+	}
+	if f.Kind, err = flagOne(flags, "--kind"); err != nil {
+		return f, "", err
+	}
+	requester, err := flagOne(flags, "--requester")
+	if err != nil {
+		return f, "", err
+	}
+	if name := strings.TrimPrefix(requester, "@"); name != "" {
+		ids, resolveErr := p.resolveUsernameList([]string{name})
+		if resolveErr != nil || len(ids) != 1 {
+			return f, "", errors.Errorf("could not find a user named @%s", name)
+		}
+		f.Requester = ids[0]
+	}
+	// Dates are whole UTC days: since from the start of its day, until to
+	// the end of its.
+	if f.Since, err = flagDay(flags, "--since"); err != nil {
+		return f, "", err
+	}
+	if f.Until, err = flagDay(flags, "--until"); err != nil {
+		return f, "", err
+	}
+	if f.Until > 0 {
+		f.Until += (24 * time.Hour).Milliseconds() - 1
+	}
+	reason, err := flagText(flags, "--reason", "a reason")
+	if err != nil {
+		return f, "", err
+	}
+	return f, reason, nil
 }
 
 // exportURL is the export endpoint with query, absolute when the server's
@@ -111,30 +206,41 @@ func exportURL(args *model.CommandArgs, query string) string {
 	return location
 }
 
-// downloadLinks is a line with CSV and JSON download links for query.
-func downloadLinks(args *model.CommandArgs, label, query string) string {
-	sep := ""
-	if query != "" {
-		sep = "&"
+// downloadLinks is a line with a download link for each format f's
+// export type comes in, or only f.Format when it is set.
+func downloadLinks(args *model.CommandArgs, label string, f auditExportFilter) string {
+	formats := []string{f.Format}
+	if f.Format == "" {
+		et, _ := findExportType(f.exportType())
+		formats = et.Formats
 	}
-	return fmt.Sprintf("%s: [CSV](%s) or [JSON](%s).", label,
-		exportURL(args, query+sep+"format=csv"), exportURL(args, query+sep+"format=json"))
+	query := f.query()
+	if query != "" {
+		query += "&"
+	}
+	links := make([]string, 0, len(formats))
+	for _, format := range formats {
+		links = append(links, fmt.Sprintf("[%s](%s)", strings.ToUpper(format), exportURL(args, query+"format="+format)))
+	}
+	return label + ": " + joinOr(links) + "."
 }
 
-// exportLinksText answers `audit export`: links to the whole history, in
-// one format or both.
-func exportLinksText(args *model.CommandArgs, format string) string {
-	var b strings.Builder
-	b.WriteString("**Download the whole audit history**\n\n")
-	switch format {
-	case "":
-		b.WriteString(downloadLinks(args, "Every request, every event", ""))
-	default:
-		fmt.Fprintf(&b, "Every request, every event: [%s](%s).", strings.ToUpper(format), exportURL(args, "format="+format))
+// joinOr joins items as "a", "a or b", or "a, b or c".
+func joinOr(items []string) string {
+	if len(items) <= 1 {
+		return strings.Join(items, "")
 	}
-	b.WriteString("\n\nThe file has every event with all its details, including the full text of ticket thread messages. " +
-		"The CSV has one row per event; the JSON has one object per request, with its latest copy of the request. " +
-		"Add `kind`, `requester` (a user ID), `since` or `until` (Unix milliseconds) to the link to narrow it. " +
+	return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
+}
+
+// exportLinksText answers `audit export` for a System Admin while direct
+// export is on: links to download what f asks for.
+func (p *Plugin) exportLinksText(args *model.CommandArgs, f auditExportFilter) string {
+	et, _ := findExportType(f.exportType())
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Download the audit export: %s**\n\n", et.Label)
+	b.WriteString(downloadLinks(args, p.describeExportFilter(f), f))
+	b.WriteString("\n\n" + et.About + " Add `kind`, `requester` (a user ID), `since` or `until` (Unix milliseconds) to the link to narrow it. " +
 		"Each download is recorded in the server audit log.")
 	return b.String()
 }
@@ -212,7 +318,7 @@ func (p *Plugin) recentAuditText(args *model.CommandArgs, count int) string {
 		}
 		fmt.Fprintf(&b, "- `%s` · %s · **%s** · last event `%s` at %s\n", h.RequestID, kindLabel(h.Kind), h.Status, last, formatAuditTime(h.UpdatedAt))
 	}
-	b.WriteString("\n" + downloadLinks(args, "Download everything", ""))
+	b.WriteString("\n" + p.exportOffer(args, "Download everything", auditExportFilter{}))
 	return b.String()
 }
 
@@ -253,9 +359,59 @@ func (p *Plugin) requireAuditReader(w http.ResponseWriter, r *http.Request) (*mo
 	return user, true
 }
 
+// Export types and formats.
+const (
+	exportFullHistories = "full_histories"
+)
+
+var exportFormats = []string{"csv", "json", "pdf"}
+
+// auditExportType is one export the plugin builds and the formats it
+// comes in, the default first.
+type auditExportType struct {
+	Type    string
+	Label   string
+	Formats []string
+	// About says what the file holds, under download links and on the
+	// approval card.
+	About string
+}
+
+// auditExportTypes are the exports the plugin builds.
+var auditExportTypes = []auditExportType{
+	{
+		Type: exportFullHistories, Label: "Request histories", Formats: []string{"csv", "json"},
+		About: "The file has every event with all its details, including the full text of ticket thread messages. " +
+			"The CSV has one row per event; the JSON has one object per request, with its latest copy of the request.",
+	},
+}
+
+func findExportType(t string) (auditExportType, bool) {
+	for _, et := range auditExportTypes {
+		if et.Type == t {
+			return et, true
+		}
+	}
+	return auditExportType{}, false
+}
+
+// exportLabel names f's export type.
+func exportLabel(f auditExportFilter) string {
+	et, _ := findExportType(f.exportType())
+	return et.Label
+}
+
+func isExportType(t string) bool {
+	_, ok := findExportType(t)
+	return ok
+}
+
 // auditExportFilter narrows an export. Zero values don't filter.
 type auditExportFilter struct {
-	Format    string `json:"format"` // "csv" or "json"
+	// Type is the export (see auditExportTypes); "" is full_histories, as
+	// requests stored before there were types have it.
+	Type      string `json:"type,omitempty"`
+	Format    string `json:"format"` // one of the type's Formats
 	RequestID string `json:"request_id,omitempty"`
 	Kind      string `json:"kind,omitempty"`
 	Requester string `json:"requester,omitempty"` // a user ID
@@ -263,9 +419,54 @@ type auditExportFilter struct {
 	Until     int64  `json:"until,omitempty"`
 }
 
+// exportType is f's export type, with "" read as full_histories.
+func (f auditExportFilter) exportType() string {
+	if f.Type == "" {
+		return exportFullHistories
+	}
+	return f.Type
+}
+
+// withDefaults normalises f: the type and format lowercased, and the
+// type's default format when none is given.
+func (f auditExportFilter) withDefaults() auditExportFilter {
+	f.Type = strings.ToLower(strings.TrimSpace(f.Type))
+	f.Format = strings.ToLower(strings.TrimSpace(f.Format))
+	if f.Format == "" {
+		if et, ok := findExportType(f.exportType()); ok {
+			f.Format = et.Formats[0]
+		}
+	}
+	return f
+}
+
+// query is f as export link parameters, without the format. The type is
+// left out when it is the default.
+func (f auditExportFilter) query() string {
+	var parts []string
+	add := func(key, value string) {
+		if value != "" {
+			parts = append(parts, key+"="+url.QueryEscape(value))
+		}
+	}
+	if f.exportType() != exportFullHistories {
+		add("type", f.Type)
+	}
+	add("request", f.RequestID)
+	add("kind", f.Kind)
+	add("requester", f.Requester)
+	if f.Since > 0 {
+		add("since", strconv.FormatInt(f.Since, 10))
+	}
+	if f.Until > 0 {
+		add("until", strconv.FormatInt(f.Until, 10))
+	}
+	return strings.Join(parts, "&")
+}
+
 // detail is the filter as audit event detail.
 func (f auditExportFilter) detail() map[string]any {
-	return map[string]any{"format": f.Format, "request": f.RequestID, "kind": f.Kind, "requester": f.Requester, "since": f.Since, "until": f.Until}
+	return map[string]any{"type": f.exportType(), "format": f.Format, "request": f.RequestID, "kind": f.Kind, "requester": f.Requester, "since": f.Since, "until": f.Until}
 }
 
 // auditExport is a built export file.
@@ -276,10 +477,22 @@ type auditExport struct {
 	requests    int
 }
 
-// buildAuditExport builds the export file for f: JSON with one object per
-// request and its latest copy, or CSV with one row per event and every
-// detail.
+// buildAuditExport builds the export file f asks for.
 func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
+	if err := checkExportType(f); err != nil {
+		return nil, err
+	}
+	filename := "request-hub-" + strings.ReplaceAll(f.exportType(), "_", "-") + "-" + time.Now().UTC().Format("20060102-150405")
+	if f.exportType() == exportFullHistories {
+		return p.buildHistoryExport(f, filename)
+	}
+	return nil, errors.New("unknown export type")
+}
+
+// buildHistoryExport builds the request histories export: JSON with one
+// object per request and its latest copy, or CSV with one row per event
+// and every detail.
+func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*auditExport, error) {
 	histories, err := p.listHistories()
 	if err != nil {
 		return nil, err
@@ -295,7 +508,7 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt < filtered[j].CreatedAt })
 
-	out := &auditExport{requests: len(filtered), filename: "request-hub-audit-" + time.Now().UTC().Format("20060102-150405")}
+	out := &auditExport{requests: len(filtered), filename: filename}
 	var buf bytes.Buffer
 	if f.Format == "json" {
 		if err := json.NewEncoder(&buf).Encode(filtered); err != nil {
@@ -305,18 +518,18 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 		return out, nil
 	}
 	cw := csv.NewWriter(&buf)
-	_ = cw.Write([]string{"request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"})
+	_ = cw.Write(csvRecord("request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"))
 	for _, h := range filtered {
 		for _, ev := range h.Events {
 			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
 				continue
 			}
 			message, details := csvDetail(ev.Detail)
-			_ = cw.Write([]string{
+			_ = cw.Write(csvRecord(
 				h.RequestID, h.Kind, h.RequesterID, h.Status,
 				time.UnixMilli(ev.At).UTC().Format(time.RFC3339),
-				ev.Event, ev.Outcome, ev.ActorID, csvSafe(ev.ActorName), csvSafe(ev.Note), csvSafe(message), csvSafe(details),
-			})
+				ev.Event, ev.Outcome, ev.ActorID, ev.ActorName, ev.Note, message, details,
+			))
 		}
 	}
 	cw.Flush()
@@ -329,27 +542,31 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 
 // parseExportFilter reads an export filter from query parameters.
 func parseExportFilter(q url.Values) (auditExportFilter, error) {
-	f := auditExportFilter{Format: strings.ToLower(q.Get("format")), RequestID: q.Get("request"), Kind: q.Get("kind"), Requester: q.Get("requester")}
-	if f.Format == "" {
+	f := auditExportFilter{Type: q.Get("type"), Format: q.Get("format"), RequestID: q.Get("request"), Kind: q.Get("kind"), Requester: q.Get("requester")}
+	// The API has always given JSON when no format is named.
+	if et, ok := findExportType(f.exportType()); ok && f.Format == "" && slices.Contains(et.Formats, "json") {
 		f.Format = "json"
 	}
-	if f.Format != "json" && f.Format != "csv" {
-		return f, errors.New("format must be json or csv")
-	}
+	f = f.withDefaults()
 	var sinceErr, untilErr error
 	f.Since, sinceErr = parseMillisParam(q.Get("since"))
 	f.Until, untilErr = parseMillisParam(q.Get("until"))
 	if sinceErr != nil || untilErr != nil {
 		return f, errors.New("since and until are Unix times in milliseconds")
 	}
-	return f, nil
+	return f, checkExportType(f)
 }
 
-// handleAuditExport serves the request histories as JSON or CSV, filtered
-// by request, kind, requester and time range. System Admins only.
+// handleAuditExport serves an audit export, filtered by request, kind,
+// requester and time range. System Admins only, and only while direct
+// export is on.
 func (p *Plugin) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 	user, ok := p.requireAuditReader(w, r)
 	if !ok {
+		return
+	}
+	if !p.getConfiguration().AllowDirectAuditExport {
+		http.Error(w, "Direct export is off. Request an export instead.", http.StatusForbidden)
 		return
 	}
 	f, err := parseExportFilter(r.URL.Query())
@@ -367,7 +584,7 @@ func (p *Plugin) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 	detail["requests"] = export.requests
 	p.recordEvent(auditEntry{
 		Event: eventAuditExported, ActorID: user.Id, ActorName: user.Username, Detail: detail,
-		Note: fmt.Sprintf("@%s exported the audit history of %d requests", user.Username, export.requests),
+		Note: fmt.Sprintf("@%s downloaded the %s export (%s, %d requests)", user.Username, exportLabel(f), strings.ToUpper(f.Format), export.requests),
 	})
 	w.Header().Set("Content-Type", export.contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+export.filename+`"`)
@@ -398,9 +615,27 @@ func csvDetail(detail map[string]any) (message, details string) {
 	return message, details
 }
 
-// csvSafe keeps a spreadsheet from running a cell as a formula.
+// csvRecord is one CSV row, every cell through csvSafe.
+func csvRecord(cells ...string) []string {
+	for i, c := range cells {
+		cells[i] = csvSafe(c)
+	}
+	return cells
+}
+
+// csvSafe keeps a spreadsheet from running a cell as a formula: a cell that
+// starts with a control character (tab, carriage return and so on), or
+// whose first character past any spaces and control characters starts a
+// formula, gets a leading apostrophe.
 func csvSafe(s string) string {
-	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+	if s == "" {
+		return s
+	}
+	if first, _ := utf8.DecodeRuneInString(s); unicode.IsControl(first) {
+		return "'" + s
+	}
+	trimmed := strings.TrimLeftFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+	if trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0])) {
 		return "'" + s
 	}
 	return s

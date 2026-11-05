@@ -169,6 +169,10 @@ type configuration struct {
 	// audit channel: "decisions", "lifecycle" (the default) or "all". The
 	// request history and the server audit log always get every event.
 	AuditChannelDetail string
+	// AllowDirectAuditExport lets System Admins download the audit export
+	// directly. Off by default: every export is then a request another
+	// System Admin approves.
+	AllowDirectAuditExport bool
 
 	// --- 9. Exercise mode ---
 	// EnableExercise lets System Admins run the exercise subcommand.

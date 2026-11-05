@@ -3,6 +3,7 @@ import {useDispatch, useSelector} from 'react-redux';
 
 import {KIND_OPTIONS} from './AuditHistoryModal';
 import {submitAuditExportRequest} from './client';
+import type {AuditExportFormat} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditExportRequestModal, isAuditExportRequestModalOpen} from './store';
 
@@ -27,6 +28,23 @@ const dialogStyle: React.CSSProperties = {
     boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
 };
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
+const legendStyle: React.CSSProperties = {fontSize: 14, fontWeight: 600, border: 'none', marginBottom: 4};
+
+type ExportType = {
+    value: string;
+    label: string;
+    formats: Array<[AuditExportFormat, string]>;
+};
+
+// EXPORT_TYPES are the exports the server builds and the formats each comes
+// in, the default first. They match auditExportTypes on the server.
+export const EXPORT_TYPES: ExportType[] = [
+    {
+        value: 'full_histories',
+        label: 'Request histories',
+        formats: [['csv', 'CSV (one row per event)'], ['json', 'JSON (one object per request)']],
+    },
+];
 
 // dayStart and dayEnd turn a date field (YYYY-MM-DD, local time) into Unix
 // milliseconds at the start or end of that day; '' is no limit.
@@ -40,7 +58,8 @@ export const RequestAuditExportModal = () => {
     const dispatch = useDispatch();
     const isOpen = useSelector(isAuditExportRequestModalOpen);
 
-    const [format, setFormat] = useState<'csv' | 'json'>('csv');
+    const [exportType, setExportType] = useState(EXPORT_TYPES[0].value);
+    const [format, setFormat] = useState<AuditExportFormat>(EXPORT_TYPES[0].formats[0][0]);
     const [kind, setKind] = useState('');
     const [requester, setRequester] = useState('');
     const [since, setSince] = useState('');
@@ -51,7 +70,8 @@ export const RequestAuditExportModal = () => {
     const [success, setSuccess] = useState('');
 
     const close = () => {
-        setFormat('csv');
+        setExportType(EXPORT_TYPES[0].value);
+        setFormat(EXPORT_TYPES[0].formats[0][0]);
         setKind('');
         setRequester('');
         setSince('');
@@ -68,6 +88,16 @@ export const RequestAuditExportModal = () => {
         return null;
     }
 
+    const currentType = EXPORT_TYPES.find((t) => t.value === exportType) ?? EXPORT_TYPES[0];
+
+    // A new type keeps the format when the type comes in it.
+    const chooseType = (t: ExportType) => {
+        setExportType(t.value);
+        if (!t.formats.some(([value]) => value === format)) {
+            setFormat(t.formats[0][0]);
+        }
+    };
+
     const submit = async () => {
         if (since && until && since > until) {
             setError('The start date must be before the end date.');
@@ -77,12 +107,13 @@ export const RequestAuditExportModal = () => {
         setError('');
         try {
             const result = await submitAuditExportRequest({
+                type: exportType,
                 format,
                 kind: kind || undefined,
                 requester: requester.trim().replace(/^@/, '') || undefined,
                 since: dayStart(since),
                 until: dayEnd(until),
-                reason: reason.trim() || undefined,
+                reason: reason.trim(),
             });
             if (result.error) {
                 setError(result.error);
@@ -133,26 +164,41 @@ export const RequestAuditExportModal = () => {
                         <p style={{opacity: 0.8}}>
                             {'Ask for a copy of the request audit history. A System Admin reviews the request; once approved, the file is posted in your request thread with the Request Hub bot. Leave the filters empty for the whole history.'}
                         </p>
+                        {EXPORT_TYPES.length > 1 ? (
+                            <fieldset style={fieldStyle}>
+                                <legend style={legendStyle}>{'Export'}</legend>
+                                {EXPORT_TYPES.map((t) => (
+                                    <label
+                                        key={t.value}
+                                        style={{marginRight: 16, fontWeight: 'normal'}}
+                                    >
+                                        <input
+                                            type='radio'
+                                            name='rae-type'
+                                            checked={exportType === t.value}
+                                            onChange={() => chooseType(t)}
+                                            disabled={submitting}
+                                        />{` ${t.label}`}
+                                    </label>
+                                ))}
+                            </fieldset>
+                        ) : null}
                         <fieldset style={fieldStyle}>
-                            <legend style={{fontSize: 14, fontWeight: 600, border: 'none', marginBottom: 4}}>{'Format'}</legend>
-                            <label style={{marginRight: 16, fontWeight: 'normal'}}>
-                                <input
-                                    type='radio'
-                                    name='rae-format'
-                                    checked={format === 'csv'}
-                                    onChange={() => setFormat('csv')}
-                                    disabled={submitting}
-                                />{' CSV (one row per event)'}
-                            </label>
-                            <label style={{fontWeight: 'normal'}}>
-                                <input
-                                    type='radio'
-                                    name='rae-format'
-                                    checked={format === 'json'}
-                                    onChange={() => setFormat('json')}
-                                    disabled={submitting}
-                                />{' JSON (one object per request)'}
-                            </label>
+                            <legend style={legendStyle}>{'Format'}</legend>
+                            {currentType.formats.map(([value, label]) => (
+                                <label
+                                    key={value}
+                                    style={{marginRight: 16, fontWeight: 'normal'}}
+                                >
+                                    <input
+                                        type='radio'
+                                        name='rae-format'
+                                        checked={format === value}
+                                        onChange={() => setFormat(value)}
+                                        disabled={submitting}
+                                    />{` ${label}`}
+                                </label>
+                            ))}
                         </fieldset>
                         <div style={fieldStyle}>
                             <label htmlFor='rae-kind'>{'Request type (optional)'}</label>
@@ -208,11 +254,13 @@ export const RequestAuditExportModal = () => {
                             </div>
                         </div>
                         <div style={fieldStyle}>
-                            <label htmlFor='rae-reason'>{'Reason (optional)'}</label>
+                            <label htmlFor='rae-reason'>{'Reason'}</label>
                             <textarea
                                 id='rae-reason'
                                 className='form-control'
                                 rows={3}
+                                required={true}
+                                placeholder='Why you need this export'
                                 value={reason}
                                 onChange={(e) => setReason(e.target.value)}
                                 disabled={submitting}
@@ -235,7 +283,7 @@ export const RequestAuditExportModal = () => {
                             <button
                                 className='btn btn-primary'
                                 onClick={submit}
-                                disabled={submitting}
+                                disabled={submitting || reason.trim() === ''}
                             >{submitting ? 'Submitting…' : 'Submit request'}</button>
                         </div>
                     </div>

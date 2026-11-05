@@ -3,6 +3,7 @@ import React from 'react';
 
 import {AuditHistoryModal} from './AuditHistoryModal';
 import manifest from './manifest';
+import {RequestAuditExportModal} from './RequestAuditExportModal';
 import {StoreHarness} from './StoreHarness';
 
 import {expect, test} from '../playwright/ct-coverage';
@@ -16,8 +17,18 @@ const ROWS = [
     {request_id: 'r2', kind: 'channel', kind_label: 'channel', title: 'Ops Room', status: 'pending', requester_id: 'u2', requester_username: 'bob', created_at: 2, updated_at: 2, event_count: 1, last_event: 'submitted'},
 ];
 
+// routeAccess answers the access check, with direct export on or off.
+async function routeAccess(page: Page, directExport: boolean) {
+    await page.route(`${API}/audit/access`, (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({can_view: true, can_request: !directExport, direct_export: directExport}),
+    }));
+}
+
 // routeList answers the list with ROWS (or rows) and records each query.
+// Direct export is on unless a test routes the access check itself.
 async function routeList(page: Page, rows = ROWS, total = rows.length): Promise<URLSearchParams[]> {
+    await routeAccess(page, true);
     const queries: URLSearchParams[] = [];
     await page.route(`${API}/audit/requests**`, (route) => {
         const params = new URL(route.request().url()).searchParams;
@@ -44,6 +55,19 @@ test.describe('AuditHistoryModal', () => {
         await expect(page.getByRole('row').nth(1)).toContainText('@alice');
         await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveAttribute('href', `${EXPORT}?format=csv`);
         await expect(page.getByRole('link', {name: 'Download JSON'})).toHaveAttribute('href', `${EXPORT}?format=json`);
+    });
+
+    test('offers a request instead of downloads while direct export is off', async ({mount, page}) => {
+        await routeList(page);
+        await page.unroute(`${API}/audit/access`);
+        await routeAccess(page, false);
+        await mount(<StoreHarness pluginState={open}><AuditHistoryModal/><RequestAuditExportModal/></StoreHarness>);
+
+        await expect(page.getByText('Direct downloads are off. Another System Admin approves each export.')).toBeVisible();
+        await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveCount(0);
+        await page.getByRole('button', {name: 'Request an export'}).click();
+        await expect(page.getByRole('heading', {name: 'Request Audit Export'})).toBeVisible();
+        await expect(page.getByRole('heading', {name: 'Audit history'})).toBeHidden();
     });
 
     test('search, type and status narrow the list and the download', async ({mount, page}) => {

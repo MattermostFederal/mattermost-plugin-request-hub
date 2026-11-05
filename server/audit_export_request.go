@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,23 +40,25 @@ func (r *auditExportRequest) pendingFields() (string, string, *int64) {
 // pendingKey refuses a second pending request for the same export.
 func (r *auditExportRequest) pendingKey() string {
 	f := r.Filter
-	return fmt.Sprintf("%s/%s/%s/%s/%d/%d", f.Format, f.RequestID, f.Kind, f.Requester, f.Since, f.Until)
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%d/%d", f.exportType(), f.Format, f.RequestID, f.Kind, f.Requester, f.Since, f.Until)
 }
 
 const (
 	auditExportForAdminsText   = "System Admins can download the audit history directly: run `/%s audit export`, or open Audit history in the Request Hub."
-	auditExportNotApproverText = "Only security approvers can request a copy of the audit history."
+	auditExportNotApproverText = "Only security approvers and System Admins can request a copy of the audit history."
+	auditExportReasonText      = "Give a reason for the export (in the form, or with `--reason` on the slash command)."
 )
 
 // auditAccess says what the user may do with the audit history: System
-// Admins read and download it, and security approvers who aren't System
-// Admins ask for a copy, which a System Admin approves.
+// Admins read it, and security approvers ask for a copy, which a System
+// Admin approves. While direct export is off, System Admins ask for
+// copies too, for another System Admin to approve.
 func (p *Plugin) auditAccess(user *model.User) (canView, canRequest bool) {
 	if user == nil || user.DeleteAt != 0 {
 		return false, false
 	}
 	if user.IsSystemAdmin() {
-		return true, false
+		return true, !p.getConfiguration().AllowDirectAuditExport
 	}
 	isSecurity, err := p.canApproveStep(user, stepSecurity)
 	if err != nil {
@@ -67,8 +70,8 @@ func (p *Plugin) auditAccess(user *model.User) (canView, canRequest bool) {
 
 // checkExportFilter refuses a filter the export can't use.
 func checkExportFilter(f auditExportFilter) error {
-	if f.Format != "csv" && f.Format != "json" {
-		return errors.New("pick CSV or JSON")
+	if err := checkExportType(f); err != nil {
+		return err
 	}
 	if f.Kind != "" {
 		if _, ok := pendingKinds[f.Kind]; !ok {
@@ -83,6 +86,23 @@ func checkExportFilter(f auditExportFilter) error {
 	}
 	if f.Since < 0 || f.Until < 0 || (f.Since > 0 && f.Until > 0 && f.Since > f.Until) {
 		return errors.New("the start date must be before the end date")
+	}
+	return nil
+}
+
+// checkExportType refuses an export type the plugin doesn't make, or a
+// format that type doesn't come in.
+func checkExportType(f auditExportFilter) error {
+	et, ok := findExportType(f.exportType())
+	if !ok {
+		return errors.New("that export type isn't one the plugin makes")
+	}
+	if !slices.Contains(et.Formats, f.Format) {
+		formats := make([]string, len(et.Formats))
+		for i, format := range et.Formats {
+			formats[i] = strings.ToUpper(format)
+		}
+		return errors.Errorf("pick %s for %s", joinOr(formats), strings.ToLower(et.Label))
 	}
 	return nil
 }
@@ -128,18 +148,21 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	if appErr != nil || requester == nil {
 		return "", errors.New("could not load your account; try again")
 	}
-	if requester.IsSystemAdmin() {
-		return "", errors.Errorf(auditExportForAdminsText, commandTrigger)
-	}
 	if _, canRequest := p.auditAccess(requester); !canRequest {
+		if requester.IsSystemAdmin() {
+			return "", errors.Errorf(auditExportForAdminsText, commandTrigger)
+		}
 		return "", errors.New(auditExportNotApproverText)
 	}
-	f.Format = strings.ToLower(strings.TrimSpace(f.Format))
-	if f.Format == "" {
-		f.Format = "csv"
+	f = f.withDefaults()
+	if f.Type == "" {
+		f.Type = exportFullHistories
 	}
 	if err := checkExportFilter(f); err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return "", errors.New(auditExportReasonText)
 	}
 	if err := checkTextLen("reason", reason, maxReasonLen); err != nil {
 		return "", err
@@ -170,7 +193,7 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	}
 
 	approvalPostID, approvalChannelID, err := p.postApprovalAttachment(req.ID, p.auditExportApprovalAttachment(req, requester),
-		p.systemAdminMentions()+" — a security approver asks for a copy of the audit history.", p.ensureAuditChannel())
+		p.systemAdminMentions()+" — "+auditExportAsker(requester)+" asks for a copy of the audit history.", p.ensureAuditChannel())
 	if err != nil {
 		_ = p.API.KVDelete(kvAuditExportRequestPrefix + req.ID)
 		p.releasePending(pendingKindAuditExport, req.RequesterID, req.ID)
@@ -198,9 +221,19 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	return "Your request for a copy of the audit history has been sent to the System Admins. Once one approves it, the file is posted in your request thread with the Request Hub bot.", nil
 }
 
+// auditExportAsker says who asks for an export on the approval card.
+func auditExportAsker(requester *model.User) string {
+	if requester.IsSystemAdmin() {
+		return "a System Admin"
+	}
+	return "a security approver"
+}
+
 func (p *Plugin) auditExportApprovalAttachment(req *auditExportRequest, requester *model.User) *model.MessageAttachment {
+	et, _ := findExportType(req.Filter.exportType())
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: "@" + requester.Username, Short: true},
+		{Title: "Export", Value: et.Label, Short: true},
 		{Title: "Format", Value: strings.ToUpper(req.Filter.Format), Short: true},
 		{Title: "Covers", Value: p.describeExportFilter(req.Filter), Short: false},
 	}
@@ -216,7 +249,7 @@ func (p *Plugin) auditExportApprovalAttachment(req *auditExportRequest, requeste
 	}
 	return &model.MessageAttachment{
 		Title:  "Audit export request",
-		Text:   "The export holds every recorded event for the requests it covers, including the text of ticket thread messages.",
+		Text:   et.About,
 		Color:  "#F4A221",
 		Fields: fields,
 		Footer: requestIDFooter(req.ID),
@@ -386,7 +419,7 @@ func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, req
 		UserId:    p.botUserID,
 		ChannelId: channelID,
 		RootId:    rootID,
-		Message:   fmt.Sprintf("📎 **Audit export** (%s, %d requests). %s. It holds every recorded event for those requests, including ticket thread messages; keep it secure.", strings.ToUpper(req.Filter.Format), export.requests, p.describeExportFilter(req.Filter)),
+		Message:   fmt.Sprintf("📎 **Audit export: %s** (%s, %d requests). %s. %s Keep it secure.", exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), export.requests, p.describeExportFilter(req.Filter), auditExportTypeAbout(req.Filter)),
 		FileIds:   []string{info.Id},
 	}); appErr != nil {
 		return "", 0, errors.Wrap(appErr, "failed to post the export")
@@ -394,8 +427,16 @@ func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, req
 	return info.Id, export.requests, nil
 }
 
+// auditExportTypeAbout says what f's export holds.
+func auditExportTypeAbout(f auditExportFilter) string {
+	et, _ := findExportType(f.exportType())
+	return et.About
+}
+
 // handleAuditAccess tells the webapp whether to offer the audit history
-// (System Admins) or the request for a copy (security approvers).
+// (System Admins), the request for a copy (security approvers, and System
+// Admins while direct export is off), and the download links (System
+// Admins while direct export is on).
 func (p *Plugin) handleAuditAccess(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -403,11 +444,12 @@ func (p *Plugin) handleAuditAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	user, appErr := p.API.GetUser(userID)
 	if appErr != nil {
-		writeJSON(w, map[string]bool{"can_view": false, "can_request": false})
+		writeJSON(w, map[string]bool{"can_view": false, "can_request": false, "direct_export": false})
 		return
 	}
 	canView, canRequest := p.auditAccess(user)
-	writeJSON(w, map[string]bool{"can_view": canView, "can_request": canRequest})
+	direct := canView && p.getConfiguration().AllowDirectAuditExport
+	writeJSON(w, map[string]bool{"can_view": canView, "can_request": canRequest, "direct_export": direct})
 }
 
 // handleSubmitAuditExportWebapp takes the Request Audit Export form.
@@ -417,6 +459,7 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var payload struct {
+		Type      string `json:"type"`
 		Format    string `json:"format"`
 		Kind      string `json:"kind"`
 		Requester string `json:"requester"` // a username, optional
@@ -428,7 +471,7 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	f := auditExportFilter{Format: payload.Format, Kind: payload.Kind, Since: payload.Since, Until: payload.Until}
+	f := auditExportFilter{Type: payload.Type, Format: payload.Format, Kind: payload.Kind, Since: payload.Since, Until: payload.Until}
 	if name := strings.TrimPrefix(strings.TrimSpace(payload.Requester), "@"); name != "" {
 		ids, err := p.resolveUsernameList([]string{name})
 		if err != nil || len(ids) != 1 {

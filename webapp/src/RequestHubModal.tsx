@@ -128,7 +128,7 @@ export const RequestHubModal = () => {
 
     // Hidden until the server says otherwise: System Admins get the audit
     // history, security approvers the request for a copy of it.
-    const [audit, setAudit] = useState<AuditAccess>({can_view: false, can_request: false});
+    const [audit, setAudit] = useState<AuditAccess>({can_view: false, can_request: false, direct_export: false});
     const close = () => dispatch(closeHubModal());
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 

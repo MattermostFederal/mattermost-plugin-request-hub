@@ -22,10 +22,21 @@ test.describe('RequestAuditExportModal', () => {
         });
         await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
 
+        await page.getByLabel('Reason').fill('  incident review ');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('Sent to the System Admins.')).toBeVisible();
-        expect(body).toEqual({format: 'csv'});
+        expect(body).toEqual({type: 'full_histories', format: 'csv', reason: 'incident review'});
+    });
+
+    test('needs a reason before it sends', async ({mount, page}) => {
+        await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
+        const submit = page.getByRole('button', {name: 'Submit request'});
+        await expect(submit).toBeDisabled();
+        await page.getByLabel('Reason').fill('   ');
+        await expect(submit).toBeDisabled();
+        await page.getByLabel('Reason').fill('audit');
+        await expect(submit).toBeEnabled();
     });
 
     test('sends the filters asked for', async ({mount, page}) => {
@@ -41,11 +52,11 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByLabel('Requested by (optional username)').fill('@alice');
         await page.getByLabel('Active from (optional)').fill('2026-10-01');
         await page.getByLabel('Active until (optional)').fill('2026-10-31');
-        await page.getByLabel('Reason (optional)').fill('quarterly review');
+        await page.getByLabel('Reason').fill('quarterly review');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('ok')).toBeVisible();
-        expect(body).toMatchObject({format: 'json', kind: 'bot', requester: 'alice', reason: 'quarterly review'});
+        expect(body).toMatchObject({type: 'full_histories', format: 'json', kind: 'bot', requester: 'alice', reason: 'quarterly review'});
         expect(body.since).toBe(new Date('2026-10-01T00:00:00').getTime());
         expect(body.until).toBe(new Date('2026-10-31T23:59:59.999').getTime());
     });
@@ -59,6 +70,7 @@ test.describe('RequestAuditExportModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
         await page.getByLabel('Active from (optional)').fill('2026-10-31');
         await page.getByLabel('Active until (optional)').fill('2026-10-01');
+        await page.getByLabel('Reason').fill('why');
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('The start date must be before the end date.');
         expect(sent).toBe(false);
@@ -70,6 +82,7 @@ test.describe('RequestAuditExportModal', () => {
             body: JSON.stringify({error: 'Only security approvers can request a copy of the audit history.'}),
         }));
         await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
+        await page.getByLabel('Reason').fill('why');
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('Only security approvers can request a copy of the audit history.');
     });

@@ -246,10 +246,10 @@
         <h2 id="audit"><code>/mattermost-request-hub audit</code></h2>
 <pre><code>/mattermost-request-hub audit &lt;request ID&gt;
 /mattermost-request-hub audit recent [count]
-/mattermost-request-hub audit export [csv|json]</code></pre>
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text</code></pre>
         <p>
             System Admins can run all of it. A security approver who isn't a System Admin can run
-            <code>audit export</code>, which asks the System Admins for a copy instead (see
+            <code>audit export</code>, which asks the System Admins for a copy (see
             <a href="troubleshooting.html#audit">Audit trail</a>). The plugin keeps a history of every request: when it was submitted,
             each approval step, the decision, failures and retries, expiry, every message relayed in its ticket
             threads, and token reminders. The history is kept after the request is decided, and nothing deletes it.
@@ -258,8 +258,8 @@
             <thead><tr><th>Subcommand</th><th>What it does</th></tr></thead>
             <tbody>
                 <tr><td><code>&lt;request ID&gt;</code></td><td>Shows the request's status and its events, oldest first, with who did each one. The ID is on the approval card and in <code>list</code>. A reply shows at most the last 100 events; the export has them all.</td></tr>
-                <tr><td><code>recent [count]</code></td><td>Lists the most recently updated requests (20 unless you give a count, at most 200), then links to download the whole history as CSV or JSON.</td></tr>
-                <tr><td><code>export [csv|json]</code></td><td>Links to download the whole audit history, every event with all its details and the full text of ticket thread messages. For a security approver who isn't a System Admin, it sends a request for a copy instead (CSV unless you say <code>json</code>); the file is posted in their request thread once a System Admin approves.</td></tr>
+                <tr><td><code>recent [count]</code></td><td>Lists the most recently updated requests (20 unless you give a count, at most 200), then links to download the whole history when direct export is on.</td></tr>
+                <tr><td><code>export</code></td><td>Requests an audit export, which a System Admin other than you approves; the file is then posted in your request thread. The type is <code>full_histories</code> (every event of every request covered, with all its details and the full text of ticket thread messages) and the format <code>csv</code> or <code>json</code> (CSV unless you say otherwise). <code>--request</code>, <code>--kind</code>, <code>--requester</code>, <code>--since</code> and <code>--until</code> narrow it, and <code>--reason</code> is required. When <em>Allow direct audit export</em> is on, a System Admin gets download links instead.</td></tr>
             </tbody>
         </table>
         <p>See <a href="troubleshooting.html#audit">Audit trail</a> for what is recorded and where.</p>

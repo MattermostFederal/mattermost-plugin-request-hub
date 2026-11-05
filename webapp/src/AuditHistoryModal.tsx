@@ -1,10 +1,10 @@
 import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
-import {auditExportURL, fetchAuditHistory, fetchAuditRequests} from './client';
+import {auditExportURL, fetchAuditAccess, fetchAuditHistory, fetchAuditRequests} from './client';
 import type {AuditEvent, AuditHistory, AuditRequestSummary} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
-import {closeAuditHistoryModal, isAuditHistoryModalOpen} from './store';
+import {closeAuditHistoryModal, isAuditHistoryModalOpen, openAuditExportRequestModal} from './store';
 
 const PAGE_SIZE = 25;
 
@@ -146,6 +146,25 @@ export const AuditHistoryModal = () => {
     const [error, setError] = useState('');
     const [detail, setDetail] = useState<Detail | null>(null);
 
+    // Download links show only while direct export is on; otherwise the
+    // window offers a request for an export, for another System Admin to
+    // approve. null is still loading, when neither shows.
+    const [directExport, setDirectExport] = useState<boolean | null>(null);
+    useEffect(() => {
+        if (!isOpen) {
+            return undefined;
+        }
+        let cancelled = false;
+        fetchAuditAccess().then((access) => {
+            if (!cancelled) {
+                setDirectExport(access.direct_export);
+            }
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen]);
+
     const close = () => {
         setDetail(null);
         setSearch('');
@@ -261,12 +280,14 @@ export const AuditHistoryModal = () => {
                             {`Status: ${detail.summary.status} · Requested by ${detail.requester_username ? `@${detail.requester_username}` : detail.summary.requester_id || 'unknown'} · ${formatTime(detail.summary.created_at)} · ID ${detail.summary.request_id}`}
                             {detail.summary.exercise ? ' · exercise' : ''}
                         </p>
-                        <div style={{marginTop: 12}}>
-                            <DownloadLinks
-                                label='This request:'
-                                filter={{request: detail.summary.request_id}}
-                            />
-                        </div>
+                        {directExport ? (
+                            <div style={{marginTop: 12}}>
+                                <DownloadLinks
+                                    label='This request:'
+                                    filter={{request: detail.summary.request_id}}
+                                />
+                            </div>
+                        ) : null}
                         <ol
                             aria-label='Events'
                             style={{listStyle: 'none', padding: 0, margin: '12px 0 0'}}
@@ -329,10 +350,24 @@ export const AuditHistoryModal = () => {
                         </div>
 
                         <div style={{marginTop: 12}}>
-                            <DownloadLinks
-                                label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
-                                filter={kind ? {kind} : {}}
-                            />
+                            {directExport === true ? (
+                                <DownloadLinks
+                                    label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
+                                    filter={kind ? {kind} : {}}
+                                />
+                            ) : null}
+                            {directExport === false ? (
+                                <span style={{display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+                                    <span style={mutedStyle}>{'Direct downloads are off. Another System Admin approves each export.'}</span>
+                                    <button
+                                        className='btn btn-tertiary btn-sm'
+                                        onClick={() => {
+                                            close();
+                                            dispatch(openAuditExportRequestModal());
+                                        }}
+                                    >{'Request an export'}</button>
+                                </span>
+                            ) : null}
                         </div>
 
                         <table style={{width: '100%', borderCollapse: 'collapse', marginTop: 12, fontSize: 14}}>

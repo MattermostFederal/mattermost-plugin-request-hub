@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
@@ -40,10 +42,23 @@ func auditExportPlugin(t *testing.T) (*Plugin, *plugintest.API, map[string][]byt
 	return p, api, store
 }
 
+// withDirectExport turns on AllowDirectAuditExport, keeping the rest of
+// p's configuration.
+func withDirectExport(p *Plugin) {
+	c := *p.getConfiguration()
+	c.AllowDirectAuditExport = true
+	p.setConfiguration(&c)
+}
+
 func TestAuditAccess(t *testing.T) {
 	p, _, _ := auditExportPlugin(t)
 
 	view, request := p.auditAccess(sysadmin("admin1"))
+	require.True(t, view)
+	require.True(t, request, "while direct export is off, System Admins ask too")
+
+	withDirectExport(p)
+	view, request = p.auditAccess(sysadmin("admin1"))
 	require.True(t, view)
 	require.False(t, request, "System Admins download it themselves")
 
@@ -63,29 +78,33 @@ func TestAuditAccess(t *testing.T) {
 
 func TestSubmitAuditExportRequest_Refusals(t *testing.T) {
 	p, _, store := auditExportPlugin(t)
+	withDirectExport(p)
 	events := captureAudit(p)
 
 	for name, tc := range map[string]struct {
 		user   string
 		filter auditExportFilter
+		reason string
 		want   string
 	}{
-		"a System Admin":        {"admin1", auditExportFilter{Format: "csv"}, "System Admins can download the audit history directly"},
-		"not a security member": {"u_plain", auditExportFilter{Format: "csv"}, auditExportNotApproverText},
-		"bad format":            {"u_sec", auditExportFilter{Format: "xml"}, "pick CSV or JSON"},
-		"unknown kind":          {"u_sec", auditExportFilter{Format: "csv", Kind: "nope"}, "that request type"},
-		"dates backwards":       {"u_sec", auditExportFilter{Format: "csv", Since: 20, Until: 10}, "the start date must be before the end date"},
-		"bad requester":         {"u_sec", auditExportFilter{Format: "csv", Requester: "x"}, "the requester isn't valid"},
+		"a System Admin":        {"admin1", auditExportFilter{Format: "csv"}, "why", "System Admins can download the audit history directly"},
+		"not a security member": {"u_plain", auditExportFilter{Format: "csv"}, "why", auditExportNotApproverText},
+		"bad format":            {"u_sec", auditExportFilter{Format: "xml"}, "why", "pick CSV or JSON for request histories"},
+		"unknown type":          {"u_sec", auditExportFilter{Type: "nope"}, "why", "that export type isn't one the plugin makes"},
+		"unknown kind":          {"u_sec", auditExportFilter{Format: "csv", Kind: "nope"}, "why", "that request type"},
+		"dates backwards":       {"u_sec", auditExportFilter{Format: "csv", Since: 20, Until: 10}, "why", "the start date must be before the end date"},
+		"bad requester":         {"u_sec", auditExportFilter{Format: "csv", Requester: "x"}, "why", "the requester isn't valid"},
+		"no reason":             {"u_sec", auditExportFilter{Format: "csv"}, "  ", auditExportReasonText},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := p.submitAuditExportRequest(tc.user, tc.filter, "")
+			_, err := p.submitAuditExportRequest(tc.user, tc.filter, tc.reason)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
 	for key := range store {
 		require.False(t, strings.HasPrefix(key, kvAuditExportRequestPrefix), "nothing is stored")
 	}
-	require.Equal(t, 6, countEvents(*events, eventSubmitRefused))
+	require.Equal(t, 8, countEvents(*events, eventSubmitRefused))
 }
 
 // storedExportRequest stores a pending audit export request from u_sec,
@@ -202,7 +221,7 @@ func TestExecuteAudit_SecurityApproverRequestsTheExport(t *testing.T) {
 	api.On("GetDirectChannel", "u_sec", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: model.NewId()}, nil)
 
-	resp := runCommandAs(p, "u_sec", "/mattermost-request-hub audit export json")
+	resp := runCommandAs(p, "u_sec", "/mattermost-request-hub audit export json --reason incident review")
 
 	require.Contains(t, resp.Text, "has been sent to the System Admins")
 	var stored *auditExportRequest
@@ -222,12 +241,14 @@ func TestExecuteAudit_SecurityApproverRequestsTheExport(t *testing.T) {
 }
 
 func TestExecuteAudit_ExportLinksForAdmins(t *testing.T) {
-	p, _, store := auditExportPlugin(t)
+	p, api, store := auditExportPlugin(t)
+	withDirectExport(p)
 	id := model.NewId()
 	store[kvHistoryPrefix+id] = recordJSON(t, requestHistory{RequestID: id, Kind: pendingKindTeam, Status: historyPending, Events: []auditEvent{{At: 1, Event: eventSubmitted}}})
 
 	text := runCommandAs(p, "admin1", "/mattermost-request-hub audit export").Text
-	require.Contains(t, text, "Download the whole audit history")
+	require.Contains(t, text, "Download the audit export: Request histories")
+	require.Contains(t, text, "The whole audit history: [CSV]")
 	require.Contains(t, text, routeAuditExport+"?format=csv")
 	require.Contains(t, text, routeAuditExport+"?format=json")
 
@@ -235,7 +256,17 @@ func TestExecuteAudit_ExportLinksForAdmins(t *testing.T) {
 	require.Contains(t, text, "[JSON]("+"/plugins/"+manifest.Id+routeAuditExport+"?format=json)")
 	require.NotContains(t, text, "format=csv")
 
-	require.Contains(t, runCommandAs(p, "admin1", "/mattermost-request-hub audit export xml").Text, "to download the whole audit history")
+	require.Contains(t, runCommandAs(p, "admin1", "/mattermost-request-hub audit export xml").Text, "`xml` is not an export type or format")
+	require.Contains(t, runCommandAs(p, "admin1", "/mattermost-request-hub audit export full-histories pdf").Text, "pick CSV or JSON for request histories")
+
+	api.On("GetUserByUsername", "alice").Return(&model.User{Id: "u_alice", Username: "alice"}, nil)
+	api.On("GetUser", "u_alice").Return(&model.User{Id: "u_alice", Username: "alice"}, nil)
+	text = runCommandAs(p, "admin1", "/mattermost-request-hub audit export json full_histories --kind bot --requester @alice --since 2026-01-01 --until 2026-01-31").Text
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	until := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC).UnixMilli() - 1
+	require.Contains(t, text, fmt.Sprintf("%s?kind=bot&requester=u_alice&since=%d&until=%d&format=json)", routeAuditExport, since, until))
+	require.Contains(t, text, "Only bot account requests, requested by @alice, active from January 1, 2026 to January 31, 2026")
+	require.Contains(t, runCommandAs(p, "admin1", "/mattermost-request-hub audit export --since yesterday").Text, "takes a date like 2026-01-31")
 
 	text = runCommandAs(p, "admin1", "/mattermost-request-hub audit "+id).Text
 	require.Contains(t, text, "This request in full: [CSV]("+"/plugins/"+manifest.Id+routeAuditExport+"?request="+id+"&format=csv)")
@@ -253,9 +284,16 @@ func getAs(t *testing.T, p *Plugin, userID, route string) *httptest.ResponseReco
 func TestHandleAuditAccess(t *testing.T) {
 	p, _, _ := auditExportPlugin(t)
 	for user, want := range map[string]string{
-		"admin1":  `{"can_request":false,"can_view":true}`,
-		"u_sec":   `{"can_request":true,"can_view":false}`,
-		"u_plain": `{"can_request":false,"can_view":false}`,
+		"admin1":  `{"can_request":true,"can_view":true,"direct_export":false}`,
+		"u_sec":   `{"can_request":true,"can_view":false,"direct_export":false}`,
+		"u_plain": `{"can_request":false,"can_view":false,"direct_export":false}`,
+	} {
+		require.JSONEq(t, want, getAs(t, p, user, routeAuditAccess).Body.String(), user)
+	}
+	withDirectExport(p)
+	for user, want := range map[string]string{
+		"admin1": `{"can_request":false,"can_view":true,"direct_export":true}`,
+		"u_sec":  `{"can_request":true,"can_view":false,"direct_export":false}`,
 	} {
 		require.JSONEq(t, want, getAs(t, p, user, routeAuditAccess).Body.String(), user)
 	}
@@ -351,6 +389,7 @@ func TestHandleSubmitAuditExportWebapp(t *testing.T) {
 
 func TestExportCSV_CarriesEveryDetail(t *testing.T) {
 	p, _, store := auditExportPlugin(t)
+	withDirectExport(p)
 	store[kvHistoryPrefix+"r1"] = recordJSON(t, requestHistory{RequestID: "r1", Kind: pendingKindBot, Status: historyApproved, Events: []auditEvent{
 		{At: 1, Event: eventMessageRelayed, Outcome: "success", Detail: map[string]any{"message": "=SUM(A1)", "direction": "approvers_to_requester"}},
 		{At: 2, Event: eventApproved, Outcome: "success", Detail: map[string]any{"bot_user_id": "b1"}},
@@ -365,4 +404,87 @@ func TestExportCSV_CarriesEveryDetail(t *testing.T) {
 	require.Equal(t, "'=SUM(A1)", rows[1][10])
 	require.JSONEq(t, `{"direction":"approvers_to_requester"}`, rows[1][11])
 	require.JSONEq(t, `{"bot_user_id":"b1"}`, rows[2][11])
+}
+
+func TestCSVSafe(t *testing.T) {
+	for in, want := range map[string]string{
+		"":             "",
+		"plain":        "plain",
+		"a=b":          "a=b",
+		"=SUM(A1)":     "'=SUM(A1)",
+		"+1":           "'+1",
+		"-1":           "'-1",
+		"@cmd":         "'@cmd",
+		"  =cmd()":     "'  =cmd()",
+		"\u00a0=cmd()": "'\u00a0=cmd()",
+		"\t1":          "'\t1",
+		"\r1":          "'\r1",
+		"\n=cmd()":     "'\n=cmd()",
+		"\x00x":        "'\x00x",
+		"  plain":      "  plain",
+		"é=x":          "é=x",
+	} {
+		require.Equal(t, want, csvSafe(in), "%q", in)
+	}
+}
+
+func TestExportCSV_EveryCellIsSafe(t *testing.T) {
+	p, _, store := auditExportPlugin(t)
+	store[kvHistoryPrefix+"r1"] = recordJSON(t, requestHistory{RequestID: "r1", Kind: pendingKindBot, RequesterID: "=req", Status: historyApproved, Events: []auditEvent{
+		{At: 1, Event: eventSubmitted, Outcome: "success", ActorID: "+actor", ActorName: " @name"},
+	}})
+	export, err := p.buildAuditExport(auditExportFilter{Format: "csv"})
+	require.NoError(t, err)
+	rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
+	require.NoError(t, err)
+	require.Equal(t, "'=req", rows[1][2])
+	require.Equal(t, "'+actor", rows[1][7])
+	require.Equal(t, "' @name", rows[1][8])
+}
+
+func TestSystemAdminRequestsTheExportWhileDirectIsOff(t *testing.T) {
+	p, api, store := auditExportPlugin(t)
+	p.setConfiguration(&configuration{
+		AllowChannelRequests: true, TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "security-approvers",
+		ApprovalTeam: "appteam", AuditChannelDetail: "decisions",
+	})
+	card := mockAuditCards(api)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{sysadmin("admin1"), sysadmin("admin2")}, nil)
+	api.On("GetUser", "admin2").Return(sysadmin("admin2"), nil).Maybe()
+	api.On("GetDirectChannel", "admin1", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: model.NewId()}, nil)
+
+	resp := runCommandAs(p, "admin1", "/mattermost-request-hub audit export --reason quarterly review")
+
+	require.Contains(t, resp.Text, "has been sent to the System Admins")
+	var stored *auditExportRequest
+	for key, raw := range store {
+		if strings.HasPrefix(key, kvAuditExportRequestPrefix) {
+			stored = &auditExportRequest{}
+			require.NoError(t, json.Unmarshal(raw, stored))
+		}
+	}
+	require.NotNil(t, stored)
+	require.Equal(t, auditExportFilter{Type: exportFullHistories, Format: "csv"}, stored.Filter)
+	require.Equal(t, "quarterly review", stored.Reason)
+	require.NotNil(t, *card)
+	fields := map[string]string{}
+	for _, f := range (*card).Fields {
+		fields[f.Title] = fmt.Sprint(f.Value)
+	}
+	require.Equal(t, "Request histories", fields["Export"])
+	require.Equal(t, "CSV", fields["Format"])
+	require.Equal(t, "a System Admin", auditExportAsker(sysadmin("admin1")))
+
+	// The requester can't approve it themselves.
+	own := storedExportRequest(t, store, auditExportFilter{Format: "csv"})
+	own.RequesterID = "admin1"
+	store[kvAuditExportRequestPrefix+own.ID] = recordJSON(t, own)
+	api.On("GetPost", "card1").Return(approvalCard("card1"), nil).Maybe()
+	require.Equal(t, ownRequestText, runCommandAs(p, "admin1", "/mattermost-request-hub approve "+own.ID).Text)
+
+	// The links are gone while direct export is off.
+	text := runCommandAs(p, "admin1", "/mattermost-request-hub audit recent").Text
+	require.NotContains(t, text, routeAuditExport)
+	require.Contains(t, text, "Direct downloads are off")
 }

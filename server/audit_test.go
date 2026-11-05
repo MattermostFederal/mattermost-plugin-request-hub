@@ -437,6 +437,7 @@ func TestExecuteAudit_ShowsATimeline(t *testing.T) {
 		},
 	})
 
+	withDirectExport(p)
 	resp := runCommandAs(p, "admin1", "/mattermost-request-hub audit "+id)
 
 	require.Contains(t, resp.Text, "Audit history for webhook request `"+id+"`")
@@ -483,8 +484,18 @@ func TestHandleAuditExport(t *testing.T) {
 	})
 	store[kvRequestPrefix+"x"] = []byte(`{}`)
 
+	t.Run("refused while direct export is off", func(t *testing.T) {
+		w := exportRequest(t, p, "admin1", "")
+		require.Equal(t, http.StatusForbidden, w.Code)
+		require.Contains(t, w.Body.String(), "Direct export is off. Request an export instead.")
+	})
+	withDirectExport(p)
 	t.Run("refuses non-admins", func(t *testing.T) {
 		require.Equal(t, http.StatusForbidden, exportRequest(t, p, "u1", "").Code)
+	})
+	t.Run("refuses an unknown type, and a format the type doesn't come in", func(t *testing.T) {
+		require.Equal(t, http.StatusBadRequest, exportRequest(t, p, "admin1", "?type=nope").Code)
+		require.Equal(t, http.StatusBadRequest, exportRequest(t, p, "admin1", "?type=full_histories&format=pdf").Code)
 	})
 	t.Run("refuses a bad format", func(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, exportRequest(t, p, "admin1", "?format=xml").Code)
@@ -492,7 +503,7 @@ func TestHandleAuditExport(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		w := exportRequest(t, p, "admin1", "")
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+		require.Contains(t, w.Header().Get("Content-Disposition"), `attachment; filename="request-hub-full-histories-`)
 		var got []requestHistory
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 		require.Len(t, got, 2)
