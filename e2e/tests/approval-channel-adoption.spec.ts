@@ -1,7 +1,7 @@
 // A private channel with an approval channel's name that the plugin's bot
 // didn't create (an upgraded server, a recreated bot) is used when a System
-// Admin or a bot created it. One a regular user created is not: a user could
-// otherwise pre-create the name and read every card. Renaming the shared
+// Admin or this plugin's bot created it. One a regular user created is not: a
+// user could otherwise pre-create the name and read every card. Renaming the shared
 // approval channel would break other specs, so this file gets a server of
 // its own.
 import {postsMentioning, submitAdmin} from '../helpers/channel';
@@ -13,11 +13,14 @@ test.use({
     allowedPluginErrors: [/An approval channel name is used by a channel the plugin can't use/],
 });
 
-// Moves the current approval channel out of the way under another name.
+// Moves the current approval channel out of the way under another name. The
+// plugin creates its approval channels in the background after activation,
+// so on this fresh server the first test waits for it.
 async function renameApprovalChannel(hub: RequestHub) {
     const admin = await hub.client(ADMIN);
-    const current = await admin.getChannelByName(hub.teamId, APPROVAL_CHANNEL);
-    await admin.patchChannel(current.id, {name: uid('old-approvals')});
+    const currentId = await hub.waitForChannel(APPROVAL_CHANNEL);
+    expect(currentId, `~${APPROVAL_CHANNEL} was never created`).toBeTruthy();
+    await admin.patchChannel(currentId!, {name: uid('old-approvals')});
 }
 
 // Submits a Channel Admin request and returns the channel name it mentions.
