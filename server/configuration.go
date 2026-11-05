@@ -135,6 +135,10 @@ type configuration struct {
 	// rename them in System Console. Empty → fall back to System Admins.
 	SecurityApproverGroup string
 	SystemApproverGroup   string
+	// AllowCustomApproverGroups lets a custom (not LDAP or plugin-synced)
+	// group be an approver pool. Off by default: a custom group's managers
+	// choose its members.
+	AllowCustomApproverGroups bool
 
 	// --- 6. Agents ---
 	// EnableMCP offers the request tools to the Mattermost Agents plugin.
@@ -415,6 +419,7 @@ func twoStepPoolFingerprint(c *configuration) string {
 		strings.TrimSpace(c.SystemApproverGroup),
 		strings.TrimSpace(c.SecurityApproverAttribute),
 		strings.TrimSpace(c.SystemApproverAttribute),
+		strconv.FormatBool(c.AllowCustomApproverGroups),
 	}, "|")
 }
 

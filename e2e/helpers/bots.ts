@@ -119,8 +119,8 @@ export async function setAttribute(hub: RequestHub, userId: string, fieldId: str
 }
 
 // Inserts a group straight into the database, as LDAP or a group-sync plugin
-// would. Entry servers can't create custom groups, and the plugin refuses
-// them as approver pools anyway. Returns the group's name.
+// would. Entry servers can't create custom groups through the API, so
+// custom ones are inserted the same way. Returns the group's name.
 export async function createGroup(hub: RequestHub, members: TestUser[], source = 'plugin_e2e'): Promise<string> {
     const name = uid('grp');
     const id = uid('g').padEnd(26, '0').slice(0, 26);

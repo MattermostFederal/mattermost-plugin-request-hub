@@ -103,6 +103,27 @@ func TestListApproverGroupMemberIDs_IgnoresCustomGroups(t *testing.T) {
 	api.AssertNotCalled(t, "GetUsers", mock.Anything)
 }
 
+func TestResolveApproverGroup_UsesCustomGroupsWhenAllowed(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{AllowCustomApproverGroups: true})
+
+	secName := "security-approvers"
+	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
+	api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+
+	group, err := p.resolveApproverGroup("@security-approvers")
+	require.NoError(t, err)
+	require.Equal(t, "g-custom", group.Id)
+}
+
+func TestTwoStepPoolFingerprint_ChangesWithCustomGroupSetting(t *testing.T) {
+	off := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s"}
+	on := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s", AllowCustomApproverGroups: true}
+	require.NotEqual(t, twoStepPoolFingerprint(off), twoStepPoolFingerprint(on))
+}
+
 func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)

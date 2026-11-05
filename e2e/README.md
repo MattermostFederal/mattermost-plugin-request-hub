@@ -69,6 +69,7 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Plugin activates; request channels get one docs bookmark each | `channel-request`, `request-channels` | ✅ |
 | Channel request: dialog (browser and API), REST, approve, deny, Team Admin approves | `channel-request` | ✅ |
 | Bot token lifetime and token DM | `request-channels` | ✅ |
+| Approval channel name taken: adopted when a System Admin or bot made it, DM fallback otherwise | `approval-channel-adoption` | ✅ |
 | Bootstrap: channels, per-team approval channels, idempotent re-enable | `bootstrap` | ⬜ |
 | Channel request: inline slash, modal, prefixes, name clashes, concurrent approvals, re-checks | `channel-request` |✅ |
 | Channel Admin requests | `channel-admin` |✅ |

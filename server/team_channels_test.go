@@ -356,6 +356,7 @@ func TestEnsureTeamApprovalChannel_NameTakenByPrivateChannelOfSomeoneElse(t *tes
 
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "theirs", Type: model.ChannelTypePrivate, CreatorId: "u_other"}, nil)
+	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: model.SystemUserRoleId}, nil)
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
 	require.Error(t, err)

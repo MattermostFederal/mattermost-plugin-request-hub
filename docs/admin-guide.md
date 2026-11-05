@@ -45,7 +45,8 @@ Bot and webhook requests require **two distinct approvals**: one security step a
 |---------|---------|
 | **Security approver attribute** | User Attribute name (access_control group) that marks security-step approvers. System Admins do **not** auto-qualify for this step while it is set. |
 | **System approver attribute** | User Attribute name for system-step approvers. System Admins always qualify for this step. |
-| **Security approver user group** / **System approver user group** | Used in User Groups mode. Only LDAP or plugin-synced groups count; custom groups are ignored, because any user can join them. |
+| **Security approver user group** / **System approver user group** | Used in User Groups mode. LDAP and plugin-synced groups always count. Custom groups count only when **Allow custom approver groups** is on. |
+| **Allow custom approver groups** | Off by default. Turn it on for servers without LDAP, where the approver groups are custom groups. Anyone who can manage a custom group's members can make themselves an approver, so restrict who manages custom groups first (System Console > User Management > Permissions > Custom Groups). |
 
 Create and assign attributes in **System Console → User Management → Attributes**. If an attribute or group name is left blank, System Admins cover that step. If a security attribute or group is named but doesn't exist or has no members, nobody can fill the security step and bot/webhook cards stay pending.
 
@@ -357,7 +358,7 @@ Request Hub has a different plugin ID, so Mattermost treats it as a separate plu
 4. Before enabling Request Hub, review its settings. A new install turns on every request type except guest invites, including types the old plugin didn't have (team, Team Admin, team member, bot, webhook). Turn off the ones you don't want yet.
 5. Enter the approval team and the other settings again, then enable the plugin.
 
-Channel Requests posted its cards to an approval channel you chose. Request Hub doesn't use that channel: it creates its own private channels in the approval team (see [Approval channels](#approval-channels)). If a channel with one of those names already exists and Request Hub didn't create it, the plugin won't post there and logs an error; rename that channel so the plugin can create its own.
+Channel Requests posted its cards to an approval channel you chose. Request Hub doesn't use that channel: it creates its own private channels in the approval team (see [Approval channels](#approval-channels)). If a private channel with one of those names already exists and a System Admin or a bot created it (for example on an upgraded server, or after the plugin's bot was recreated), Request Hub adds its bot to that channel and uses it. Any other channel with one of those names (public, archived, or created by a regular user) is not used: the plugin logs an error and sends cards to System Admins by direct message instead. Rename that channel so the plugin can create its own.
 
 ### Between Request Hub versions
 

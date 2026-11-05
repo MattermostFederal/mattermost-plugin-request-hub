@@ -83,9 +83,15 @@
             <li>Team, Team Admin, team member, guest, bot and webhook requests: <em>Approval team</em> isn't set or
                 can't be found. When it names a team that can't be found, the server log has <em>cannot ensure named
                 approval channel</em>.</li>
+            <li>Any request type: a channel with the approval channel's name already exists and can't be used,
+                because it is public, archived, or was created by a regular user. The server log has <em>An approval
+                channel name is used by a channel the plugin can't use</em>, with the channel and its creator. A
+                private channel with that name created by a System Admin or a bot is used instead: the plugin adds
+                its bot and logs <em>adopted an existing approval channel</em>.</li>
         </ul>
         <p>
-            <strong>Fix:</strong> set <em>Approval team</em> in the plugin settings to the name of an existing
+            <strong>Fix:</strong> for a name that can't be used, rename or archive that channel so the plugin can
+            create its own. Otherwise, set <em>Approval team</em> in the plugin settings to the name of an existing
             team. The plugin creates its approval channels there. Any one System Admin can act on a DMed request;
             after that, the other copies are closed with the outcome. A copy sent before the plugin was upgraded
             to this version keeps its buttons, which reply <em>This request has already been handled.</em>

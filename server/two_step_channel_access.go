@@ -375,10 +375,12 @@ func normalizeApproverGroupName(groupName string) string {
 	return strings.TrimPrefix(groupName, "@")
 }
 
-// resolveApproverGroup finds the LDAP or plugin-synced group configured as an
-// approver pool, by name or display name. Custom groups are never used: any
-// user can create one or add themselves to it. Returns an error when no such
-// group can be found; it never returns (nil, nil).
+// resolveApproverGroup finds the group configured as an approver pool, by
+// name or display name. LDAP and plugin-synced groups are always used.
+// Custom groups are used only when AllowCustomApproverGroups is on: anyone
+// who manages a custom group's members can make themselves an approver.
+// Returns an error when no such group can be found; it never returns
+// (nil, nil).
 func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	groupName = normalizeApproverGroupName(groupName)
 	if groupName == "" {
@@ -386,6 +388,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	}
 
 	want := strings.ToLower(groupName)
+	allowCustom := p.getConfiguration().AllowCustomApproverGroups
 	customMatch := false
 	match := func(g *model.Group) bool {
 		if g == nil || g.DeleteAt != 0 {
@@ -394,7 +397,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 		if (g.Name == nil || strings.ToLower(*g.Name) != want) && strings.ToLower(g.DisplayName) != want {
 			return false
 		}
-		if g.Source == model.GroupSourceCustom {
+		if g.Source == model.GroupSourceCustom && !allowCustom {
 			customMatch = true
 			return false
 		}
@@ -426,7 +429,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	}
 
 	if customMatch {
-		p.API.LogWarn("two-step channel access: the approver group is a custom group; only LDAP or plugin-synced groups can approve",
+		p.API.LogWarn("two-step channel access: the approver group is a custom group; turn on Allow custom approver groups to use it, or name an LDAP or plugin-synced group",
 			"group", groupName)
 	} else {
 		p.API.LogWarn("two-step channel access: could not resolve approver group", "group", groupName)

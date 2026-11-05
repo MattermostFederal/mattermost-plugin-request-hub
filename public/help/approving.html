@@ -189,7 +189,7 @@
         </p>
 
         <h3>Mode: User Groups</h3>
-        <p>Use when ABAC is not available but you have LDAP or plugin-synced groups. Custom groups are not used, because any user can join them.</p>
+        <p>Use when ABAC is not available. LDAP and plugin-synced groups always work. Custom groups work only when <em>Allow custom approver groups</em> is on; anyone who can manage a custom group's members can make themselves an approver, so restrict who manages custom groups before you turn it on.</p>
         <ol>
             <li>Create groups (System Console → User Management → Groups). Defaults expect
                 <code>security-approvers</code> and <code>system-approvers</code>. Create those, or rename the plugin fields to match yours.</li>

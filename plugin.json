@@ -118,7 +118,7 @@
                 "type": "text",
                 "default": "security-approvers",
                 "placeholder": "security-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers. Change it freely. Clear the field only if you intentionally want System Admins to cover security during setup."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group. A custom group is used only when Allow custom approver groups is on. Members of this group must complete the security review (System Admins do not auto-qualify for this step). Default is security-approvers. Change it freely. Clear the field only if you intentionally want System Admins to cover security during setup."
             },
             {
                 "key": "SystemApproverGroup",
@@ -126,7 +126,14 @@
                 "type": "text",
                 "default": "system-approvers",
                 "placeholder": "system-approvers",
-                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group; custom groups are not used, because any user can join them. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers. Change it freely. Clear the field to use System Admins only for that step."
+                "help_text": "Used when mode is User Groups. Name an LDAP or plugin-synced group. A custom group is used only when Allow custom approver groups is on. Members of this group OR any System Admin can complete the system step (must be a different person than the security reviewer). Default is system-approvers. Change it freely. Clear the field to use System Admins only for that step."
+            },
+            {
+                "key": "AllowCustomApproverGroups",
+                "display_name": "Allow custom approver groups",
+                "type": "bool",
+                "default": false,
+                "help_text": "Used when mode is User Groups. When on, the security and system approver groups may be custom groups, for servers without LDAP. Anyone who can manage a custom group's members can make themselves an approver, so turn this on only when you control who manages those groups (System Console > User Management > Permissions > Custom Groups). Off: only LDAP and plugin-synced groups are used."
             },
             {
                 "key": "ApprovalTeam",

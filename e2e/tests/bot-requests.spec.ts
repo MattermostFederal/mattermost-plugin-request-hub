@@ -928,4 +928,20 @@ test.describe('usergroup mode', () => {
             await expectStillPending(hub, requester, s, before, username);
         });
     });
+
+    test('a custom group is a security pool once custom approver groups are allowed', async ({hub}) => {
+        const requester = await hub.createUser();
+        const member = await hub.createUser({teamAdmin: true});
+        const customGroup = await createGroup(hub, [member], 'custom');
+        const username = botName();
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, systemapprovergroup: '', allowcustomapprovergroups: true}, async () => {
+            await joinBotChannel(hub, member);
+            const s = await submitOK(hub, requester, {username});
+            await click(hub, member.username, s.card.id, 'approve');
+            expect(await storedBotRequest(hub, s.requestId)).toMatchObject({security_approver_id: member.id});
+
+            await click(hub, ADMIN, s.card.id, 'approve');
+            await expectApproved(hub, requester, s, username, ADMIN);
+        });
+    });
 });

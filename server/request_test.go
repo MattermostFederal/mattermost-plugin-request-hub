@@ -543,6 +543,7 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
+			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: "system_user"}, nil).Maybe()
 			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(taken, nil)
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 			api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)

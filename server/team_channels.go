@@ -773,15 +773,18 @@ func (p *Plugin) forgetApprovalTeam() {
 }
 
 // isPluginApprovalChannel reports whether ch is a live private channel this
-// plugin's bot created, the only kind used for approval cards.
+// plugin's bot created, the only kind used for approval cards without
+// further checks.
 func (p *Plugin) isPluginApprovalChannel(ch *model.Channel) bool {
 	return ch != nil && ch.Type == model.ChannelTypePrivate && ch.CreatorId == p.botUserID && ch.DeleteAt == 0
 }
 
 // lookupApprovalChannel finds the approval channel with the given name in a
-// team. taken is true when a channel with that name exists but the plugin
-// didn't create it; approval cards are then not posted there, and an admin
-// is asked to rename that channel.
+// team. A live private channel the plugin's bot didn't create is adopted
+// when a System Admin or a bot created it (an upgraded server, or a bot
+// account that was recreated). taken is true when a channel with that name
+// exists but can't be used; approval cards are then not posted there, and an
+// admin is asked to rename that channel.
 func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, taken bool) {
 	existing, appErr := p.API.GetChannelByName(teamID, name, true)
 	if appErr != nil || existing == nil {
@@ -790,9 +793,44 @@ func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, 
 	if p.isPluginApprovalChannel(existing) {
 		return existing, false
 	}
-	p.API.LogError("An approval channel name is used by a channel the plugin can't use (archived, public, or not created by the plugin), so requests are sent elsewhere. Rename that channel so the plugin can create its own.",
-		"team_id", teamID, "channel_id", existing.Id, "channel_name", name)
+	if p.adoptApprovalChannel(existing) {
+		return existing, false
+	}
+	p.API.LogError("An approval channel name is used by a channel the plugin can't use (archived, public, or created by someone who is not a System Admin or a bot), so requests are sent elsewhere. Rename that channel so the plugin can create its own.",
+		"team_id", teamID, "channel_id", existing.Id, "channel_name", name, "creator_id", existing.CreatorId)
 	return nil, true
+}
+
+// adoptApprovalChannel reports whether ch, a channel with an approval
+// channel's name that the plugin's bot didn't create, can be used anyway: it
+// must be live and private, its creator a System Admin or a bot, and the
+// plugin's bot must be able to join it. Anyone else's channel stays unused,
+// so a user can't pre-create the name and read the approval cards.
+func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
+	if ch.Type != model.ChannelTypePrivate || ch.DeleteAt != 0 || ch.CreatorId == "" {
+		return false
+	}
+	if _, adopted := p.adoptedApprovalChannels.Load(ch.Id); adopted {
+		return true
+	}
+	creator, appErr := p.API.GetUser(ch.CreatorId)
+	if appErr != nil || creator == nil || (!creator.IsSystemAdmin() && !creator.IsBot) {
+		return false
+	}
+	if err := p.ensureTeamMember(ch.TeamId, p.botUserID); err != nil {
+		p.API.LogWarn("could not add the bot to the team of an existing approval channel",
+			"channel_id", ch.Id, "channel_name", ch.Name, "error", err.Error())
+		return false
+	}
+	if _, appErr := p.API.AddChannelMember(ch.Id, p.botUserID); appErr != nil {
+		p.API.LogWarn("could not add the bot to an existing approval channel",
+			"channel_id", ch.Id, "channel_name", ch.Name, "error", appErr.Error())
+		return false
+	}
+	p.adoptedApprovalChannels.Store(ch.Id, true)
+	p.API.LogInfo("adopted an existing approval channel: the name matched and a System Admin or a bot created it",
+		"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
+	return true
 }
 
 // ensureTeamMember adds userID to the team unless they're already an active
