@@ -14,6 +14,11 @@ async function eventsOf(hub: RequestHub, requestId: string): Promise<string[]> {
     return ((await history(hub, requestId))?.events ?? []).map((e) => e.event);
 }
 
+type ForensicPost = {type?: string; message: string};
+
+// userPosts is the messages of a forensic export's posts that aren't system posts.
+const userPosts = (fx: {posts: ForensicPost[]}) => fx.posts.filter((post) => !post.type).map((post) => post.message);
+
 // Fetches the export as username, returning the status and body text.
 async function exportAs(hub: RequestHub, username: string, query: string) {
     const c = await hub.client(username);
@@ -219,7 +224,7 @@ test.describe('audit trail', () => {
             expect(res.message, JSON.stringify(res)).toContain('sent to the System Admins');
             const card = await hub.findAudit(reason);
             expect(JSON.stringify(card.props)).toContain('Bot inventory');
-            expect(await hub.slash(ADMIN, `approve ${cardRequestId(card)}`)).toBe(`✅ Approved by @${ADMIN} for @${security.username}. Audit export (PDF, 1 bots) sent.`);
+            expect(await hub.slash(ADMIN, `approve ${cardRequestId(card)}`)).toBe(`✅ Approved by @${ADMIN} for @${security.username}. Audit export (PDF, 1 bot) sent.`);
 
             const delivered = await hub.findDM(security.username, 'Audit export: Bot inventory');
             expect(delivered.file_ids).toHaveLength(1);
@@ -231,6 +236,83 @@ test.describe('audit trail', () => {
             expect(pdf.trimEnd().endsWith('%%EOF')).toBe(true);
             expect(pdf).toContain(`(@${username}`);
             expect(pdf).toContain(`(${bot.id}) Tj`);
+        });
+    });
+
+    test('the bot forensic export traces what one bot posted, downloaded directly and delivered on request', async ({hub}) => {
+        const requester = await hub.createUser();
+        const security = await hub.createUser();
+        const username = botName();
+
+        await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
+            const res = await submitBot(hub, requester.username, {username});
+            expect(res.error, JSON.stringify(res)).toBeUndefined();
+            const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
+            await (await hub.client(ADMIN)).doPostAction(card.id, 'approve');
+        });
+        await expect.poll(async () => (await userNamed(hub, username))?.id).toBeTruthy();
+        const bot = (await userNamed(hub, username))!;
+        await expect.poll(() => hub.kv(`bot_index_${bot.id}`)).toBeTruthy();
+
+        // The bot posts in its home channel with a token of its own.
+        const admin = await hub.client(ADMIN);
+        const {token} = await admin.createUserAccessToken(bot.id, 'e2e forensics');
+        const townSquare = await hub.channelId('town-square');
+        const message = uid('forensic-post');
+        await expect.poll(async () => {
+            const res = await fetch(`${hub.mm.url()}/api/v4/posts`, {
+                method: 'POST',
+                headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'},
+                body: JSON.stringify({channel_id: townSquare, message}),
+            });
+            return res.status;
+        }, {message: 'the bot joins its home channel on approval'}).toBe(201);
+        const since = Date.now() - (24 * 60 * 60 * 1000);
+        const until = Date.now() + (60 * 60 * 1000);
+
+        // A System Admin downloads it directly while direct export is on.
+        await hub.withPluginConfig({allowdirectauditexport: true}, async () => {
+            const json = await exportAs(hub, ADMIN, `?type=bot_forensic&bot=${bot.id}&since=${since}&until=${until}`);
+            expect(json.status, json.body).toBe(200);
+            const fx = JSON.parse(json.body);
+            expect(fx).toMatchObject({bot_id: bot.id, rh_managed: true, bot_status: 'active', truncated: false});
+            expect(fx.index.username).toBe(username);
+            expect(fx.history.kind).toBe('bot');
+            // Its own posts, plus the system posts for joining its home channel.
+            expect(userPosts(fx)).toEqual([message]);
+            expect(fx.posts.some((post: ForensicPost) => post.type === 'system_join_channel')).toBe(true);
+            expect(fx.post_count).toBe(fx.posts.length);
+            expect(fx.scanned_channels).toContainEqual(expect.objectContaining({id: townSquare, why: 'member'}));
+            expect(fx.limitations.length).toBeGreaterThan(0);
+
+            expect((await exportAs(hub, ADMIN, `?type=bot_forensic&bot=${bot.id}`)).status, 'dates are required').toBe(400);
+            expect((await exportAs(hub, ADMIN, `?type=bot_forensic&bot=${bot.id}&since=1&until=${until}`)).status, 'at most 90 days').toBe(400);
+        });
+
+        // A security approver asks for it, and a System Admin approves.
+        const group = await createGroup(hub, [security]);
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: group, auditchanneldetail: 'decisions'}, async () => {
+            const reason = uid('incident');
+            const refused = await hub.pluginFetch(security.username, '/api/v1/submit_audit_export_request', {
+                type: 'bot_forensic', format: 'json', bot: requester.username, since, until, reason,
+            });
+            expect(refused.error).toBe(`@${requester.username} is not a bot`);
+            const res = await hub.pluginFetch(security.username, '/api/v1/submit_audit_export_request', {
+                type: 'bot_forensic', format: 'json', bot: username, since, until, reason,
+            });
+            expect(res.message, JSON.stringify(res)).toContain('sent to the System Admins');
+            const card = await hub.findAudit(reason);
+            expect(JSON.stringify(card.props)).toContain('Bot forensics');
+            expect(await hub.slash(ADMIN, `approve ${cardRequestId(card)}`)).toMatch(new RegExp(`^✅ Approved by @${ADMIN} for @${security.username}\\. Audit export \\(JSON, \\d+ posts?\\) sent\\.$`));
+
+            const delivered = await hub.findDM(security.username, 'Audit export: Bot forensics');
+            expect(delivered.file_ids).toHaveLength(1);
+            const c = await hub.client(security.username);
+            const file = await fetch(`${hub.mm.url()}/api/v4/files/${delivered.file_ids![0]}`, c.getOptions({method: 'get'}));
+            expect(file.status).toBe(200);
+            const fx = JSON.parse(await file.text());
+            expect(fx.bot_id).toBe(bot.id);
+            expect(userPosts(fx)).toEqual([message]);
         });
     });
 

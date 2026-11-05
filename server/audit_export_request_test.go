@@ -142,7 +142,7 @@ func TestDecideAuditExport_ApproveSendsTheFile(t *testing.T) {
 
 	resp := runCommandAs(p, "admin1", "/mattermost-request-hub approve "+req.ID)
 
-	require.Contains(t, resp.Text, "✅ Approved by @admin for @sec. Audit export (CSV, 1 requests) sent.")
+	require.Contains(t, resp.Text, "✅ Approved by @admin for @sec. Audit export (CSV, 1 request) sent.")
 	require.NotNil(t, delivered)
 	require.Equal(t, "dmroot", delivered.RootId, "the file goes in the requester's ticket thread")
 	require.Equal(t, model.StringArray{"file1"}, delivered.FileIds)

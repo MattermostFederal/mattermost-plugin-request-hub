@@ -87,6 +87,42 @@ test.describe('RequestAuditExportModal', () => {
         expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'mattermost-prod', reason: 'fleet review'});
     });
 
+    test('asks for one bot\'s forensics, which needs the bot and both dates', async ({mount, page}) => {
+        let body: Record<string, unknown> = {};
+        await page.route(`${API}/submit_audit_export_request`, (route) => {
+            body = route.request().postDataJSON();
+            route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'ok'})});
+        });
+        await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
+
+        await page.getByLabel('Requested by (optional username)').fill('@alice');
+        await page.getByLabel('Bot forensics').check();
+        await expect(page.getByLabel('JSON', {exact: true})).toBeChecked();
+        await expect(page.getByLabel('Requested by (optional username)')).toHaveCount(0);
+        await expect(page.getByLabel('Request type (optional)')).toHaveCount(0);
+        await expect(page.getByLabel('Hosting environment (optional)')).toHaveCount(0);
+        const submit = page.getByRole('button', {name: 'Submit request'});
+        await page.getByLabel('Reason').fill('incident 42');
+        await expect(submit).toBeDisabled();
+        await page.getByLabel('Bot', {exact: true}).fill(' @alerts-bot ');
+        await expect(submit).toBeDisabled();
+        await page.getByLabel('Posted from').fill('2026-10-01');
+        await expect(submit).toBeDisabled();
+        await page.getByLabel('Posted until').fill('2026-10-31');
+        await expect(submit).toBeEnabled();
+        await submit.click();
+
+        await expect(page.getByText('ok')).toBeVisible();
+        expect(body).toEqual({
+            type: 'bot_forensic',
+            format: 'json',
+            bot: 'alerts-bot',
+            since: new Date('2026-10-01T00:00:00').getTime(),
+            until: new Date('2026-10-31T23:59:59.999').getTime(),
+            reason: 'incident 42',
+        });
+    });
+
     test('takes a typed environment when the list can\'t be loaded', async ({mount, page}) => {
         let body: Record<string, unknown> = {};
         await page.route(`${API}/bot_form`, (route) => route.fulfill({status: 500}));

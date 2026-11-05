@@ -35,12 +35,16 @@ type ExportType = {
     label: string;
     formats: Array<[AuditExportFormat, string]>;
 
-    // byRequest: narrowed by request type (the histories); otherwise by
-    // hosting environment (the bot inventory).
-    byRequest: boolean;
+    // narrow is what else narrows the export: the request type (the
+    // histories), the hosting environment (the bot inventory) or one bot
+    // (the forensics, which has no requester filter).
+    narrow: 'request' | 'env' | 'bot';
 
     // dates labels the date range.
     dates: string;
+
+    // datesRequired: the export needs both dates.
+    datesRequired?: boolean;
 };
 
 // EXPORT_TYPES are the exports the server builds and the formats each comes
@@ -50,15 +54,23 @@ export const EXPORT_TYPES: ExportType[] = [
         value: 'full_histories',
         label: 'Request histories',
         formats: [['csv', 'CSV (one row per event)'], ['json', 'JSON (one object per request)']],
-        byRequest: true,
+        narrow: 'request',
         dates: 'Active',
     },
     {
         value: 'bot_inventory',
         label: 'Bot inventory',
         formats: [['pdf', 'PDF (for reading)'], ['csv', 'CSV (one row per bot)'], ['json', 'JSON (one object per bot)']],
-        byRequest: false,
+        narrow: 'env',
         dates: 'Approved',
+    },
+    {
+        value: 'bot_forensic',
+        label: 'Bot forensics',
+        formats: [['json', 'JSON']],
+        narrow: 'bot',
+        dates: 'Posted',
+        datesRequired: true,
     },
 ];
 
@@ -78,6 +90,7 @@ export const RequestAuditExportModal = () => {
     const [format, setFormat] = useState<AuditExportFormat>(EXPORT_TYPES[0].formats[0][0]);
     const [kind, setKind] = useState('');
     const [env, setEnv] = useState('');
+    const [bot, setBot] = useState('');
     const [envs, setEnvs] = useState<string[]>([]);
     const [requester, setRequester] = useState('');
     const [since, setSince] = useState('');
@@ -92,6 +105,7 @@ export const RequestAuditExportModal = () => {
         setFormat(EXPORT_TYPES[0].formats[0][0]);
         setKind('');
         setEnv('');
+        setBot('');
         setRequester('');
         setSince('');
         setUntil('');
@@ -125,6 +139,9 @@ export const RequestAuditExportModal = () => {
     }
 
     const currentType = EXPORT_TYPES.find((t) => t.value === exportType) ?? EXPORT_TYPES[0];
+    const byBot = currentType.narrow === 'bot';
+    const ready = reason.trim() !== '' && (!byBot || (bot.trim().replace(/^@/, '') !== '' && since !== '' && until !== ''));
+    const dateLabel = (edge: string) => `${currentType.dates} ${edge}${currentType.datesRequired ? '' : ' (optional)'}`;
 
     // A new type keeps the format when the type comes in it.
     const chooseType = (t: ExportType) => {
@@ -145,9 +162,10 @@ export const RequestAuditExportModal = () => {
             const result = await submitAuditExportRequest({
                 type: exportType,
                 format,
-                kind: currentType.byRequest ? kind || undefined : undefined,
-                env: currentType.byRequest ? undefined : env.trim() || undefined,
-                requester: requester.trim().replace(/^@/, '') || undefined,
+                kind: currentType.narrow === 'request' ? kind || undefined : undefined,
+                env: currentType.narrow === 'env' ? env.trim() || undefined : undefined,
+                bot: byBot ? bot.trim().replace(/^@/, '') : undefined,
+                requester: byBot ? undefined : requester.trim().replace(/^@/, '') || undefined,
                 since: dayStart(since),
                 until: dayEnd(until),
                 reason: reason.trim(),
@@ -199,7 +217,7 @@ export const RequestAuditExportModal = () => {
                 ) : (
                     <div>
                         <p style={{opacity: 0.8}}>
-                            {'Ask for a copy of the request audit history or the inventory of bots Request Hub created. A System Admin reviews the request; once approved, the file is posted in your request thread with the Request Hub bot. Leave the filters empty for everything.'}
+                            {'Ask for a copy of the request audit history, the inventory of bots Request Hub created, or the posts and memberships of one bot. A System Admin reviews the request; once approved, the file is posted in your request thread with the Request Hub bot. Leave the filters empty for everything.'}
                         </p>
                         {EXPORT_TYPES.length > 1 ? (
                             <fieldset style={fieldStyle}>
@@ -237,7 +255,24 @@ export const RequestAuditExportModal = () => {
                                 </label>
                             ))}
                         </fieldset>
-                        {currentType.byRequest ? null : (
+                        {byBot ? (
+                            <div style={fieldStyle}>
+                                <label htmlFor='rae-bot'>{'Bot'}</label>
+                                <input
+                                    id='rae-bot'
+                                    className='form-control'
+                                    placeholder='@bot-username'
+                                    required={true}
+                                    value={bot}
+                                    onChange={(e) => setBot(e.target.value)}
+                                    disabled={submitting}
+                                />
+                                <div style={{fontSize: 12, opacity: 0.7, marginTop: 4}}>
+                                    {'Covers at most 90 days, up to 5,000 posts. Channels the bot has left, direct messages and deleted posts are not included.'}
+                                </div>
+                            </div>
+                        ) : null}
+                        {currentType.narrow === 'env' ? (
                             <div style={fieldStyle}>
                                 <label htmlFor='rae-env'>{'Hosting environment (optional)'}</label>
                                 {envs.length > 0 ? (
@@ -267,8 +302,8 @@ export const RequestAuditExportModal = () => {
                                     />
                                 )}
                             </div>
-                        )}
-                        {currentType.byRequest ? (<div style={fieldStyle}>
+                        ) : null}
+                        {currentType.narrow === 'request' ? (<div style={fieldStyle}>
                             <label htmlFor='rae-kind'>{'Request type (optional)'}</label>
                             <select
                                 id='rae-kind'
@@ -286,35 +321,39 @@ export const RequestAuditExportModal = () => {
                                 ))}
                             </select>
                         </div>) : null}
-                        <div style={fieldStyle}>
-                            <label htmlFor='rae-requester'>{'Requested by (optional username)'}</label>
-                            <input
-                                id='rae-requester'
-                                className='form-control'
-                                placeholder='@username'
-                                value={requester}
-                                onChange={(e) => setRequester(e.target.value)}
-                                disabled={submitting}
-                            />
-                        </div>
+                        {byBot ? null : (
+                            <div style={fieldStyle}>
+                                <label htmlFor='rae-requester'>{'Requested by (optional username)'}</label>
+                                <input
+                                    id='rae-requester'
+                                    className='form-control'
+                                    placeholder='@username'
+                                    value={requester}
+                                    onChange={(e) => setRequester(e.target.value)}
+                                    disabled={submitting}
+                                />
+                            </div>
+                        )}
                         <div style={{...fieldStyle, display: 'flex', gap: 12}}>
                             <div style={{flex: 1}}>
-                                <label htmlFor='rae-since'>{`${currentType.dates} from (optional)`}</label>
+                                <label htmlFor='rae-since'>{dateLabel('from')}</label>
                                 <input
                                     id='rae-since'
                                     type='date'
                                     className='form-control'
+                                    required={currentType.datesRequired}
                                     value={since}
                                     onChange={(e) => setSince(e.target.value)}
                                     disabled={submitting}
                                 />
                             </div>
                             <div style={{flex: 1}}>
-                                <label htmlFor='rae-until'>{`${currentType.dates} until (optional)`}</label>
+                                <label htmlFor='rae-until'>{dateLabel('until')}</label>
                                 <input
                                     id='rae-until'
                                     type='date'
                                     className='form-control'
+                                    required={currentType.datesRequired}
                                     value={until}
                                     onChange={(e) => setUntil(e.target.value)}
                                     disabled={submitting}
@@ -351,7 +390,7 @@ export const RequestAuditExportModal = () => {
                             <button
                                 className='btn btn-primary'
                                 onClick={submit}
-                                disabled={submitting || reason.trim() === ''}
+                                disabled={submitting || !ready}
                             >{submitting ? 'Submitting…' : 'Submit request'}</button>
                         </div>
                     </div>

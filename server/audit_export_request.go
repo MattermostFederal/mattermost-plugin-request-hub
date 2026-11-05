@@ -40,7 +40,7 @@ func (r *auditExportRequest) pendingFields() (string, string, *int64) {
 // pendingKey refuses a second pending request for the same export.
 func (r *auditExportRequest) pendingKey() string {
 	f := r.Filter
-	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/%d/%d", f.exportType(), f.Format, f.RequestID, f.Kind, f.HostingEnv, f.Requester, f.Since, f.Until)
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/%s/%d/%d", f.exportType(), f.Format, f.RequestID, f.Kind, f.HostingEnv, f.BotID, f.Requester, f.Since, f.Until)
 }
 
 const (
@@ -84,6 +84,9 @@ func checkExportFilter(f auditExportFilter) error {
 	if f.RequestID != "" && !model.IsValidId(f.RequestID) {
 		return errors.New("the request ID isn't valid")
 	}
+	if f.BotID != "" && !model.IsValidId(f.BotID) {
+		return errors.New("the bot isn't valid")
+	}
 	if f.Requester != "" && !model.IsValidId(f.Requester) {
 		return errors.New("the requester isn't valid")
 	}
@@ -94,19 +97,42 @@ func checkExportFilter(f auditExportFilter) error {
 }
 
 // checkExportScope refuses filters f's export type can't use: the bot
-// inventory isn't narrowed by request or request type, and only it is
-// narrowed by environment.
+// inventory isn't narrowed by request or request type, only it is
+// narrowed by environment, and a forensic export names one bot and a
+// date range of at most forensicMaxDays, and nothing else.
 func checkExportScope(f auditExportFilter) error {
-	if f.exportType() != exportBotInventory {
+	switch f.exportType() {
+	case exportBotForensic:
+		if f.Kind != "" || f.RequestID != "" || f.HostingEnv != "" || f.Requester != "" {
+			return errors.New("a bot forensic export is narrowed only by the bot and dates")
+		}
+		if f.BotID == "" {
+			return errors.New("name the bot a forensic export traces (`--bot @name` on the slash command)")
+		}
+		if f.Since <= 0 || f.Until <= 0 {
+			return errors.New("a bot forensic export needs a start and an end date")
+		}
+		if f.Until-f.Since > forensicMaxWindow.Milliseconds() {
+			return errors.Errorf("a bot forensic export covers at most %d days", forensicMaxDays)
+		}
+		return nil
+	case exportBotInventory:
+		if f.BotID != "" {
+			return errors.New("only a bot forensic export names a bot")
+		}
+		if f.Kind != "" || f.RequestID != "" {
+			return errors.New("the bot inventory can't be narrowed by request or request type; use the environment, requester or dates")
+		}
+		return checkTextLen("environment", f.HostingEnv, maxHostingEnvLen)
+	default:
 		if f.HostingEnv != "" {
 			return errors.New("only the bot inventory can be narrowed by environment")
 		}
+		if f.BotID != "" {
+			return errors.New("only a bot forensic export names a bot")
+		}
 		return nil
 	}
-	if f.Kind != "" || f.RequestID != "" {
-		return errors.New("the bot inventory can't be narrowed by request or request type; use the environment, requester or dates")
-	}
-	return checkTextLen("environment", f.HostingEnv, maxHostingEnvLen)
 }
 
 // checkExportType refuses an export type the plugin doesn't make, or a
@@ -129,7 +155,15 @@ func checkExportType(f auditExportFilter) error {
 // describeExportFilter says in words what an export covers.
 func (p *Plugin) describeExportFilter(f auditExportFilter) string {
 	inventory := f.exportType() == exportBotInventory
+	forensic := f.exportType() == exportBotForensic
 	var parts []string
+	if f.BotID != "" {
+		who := "bot " + f.BotID
+		if user, appErr := p.API.GetUser(f.BotID); appErr == nil && user != nil {
+			who = "@" + user.Username
+		}
+		parts = append(parts, "posts by "+who)
+	}
 	if f.HostingEnv != "" {
 		parts = append(parts, "bots in "+inlineCode(f.HostingEnv))
 	}
@@ -148,8 +182,11 @@ func (p *Plugin) describeExportFilter(f auditExportFilter) string {
 	}
 	day := func(ms int64) string { return time.UnixMilli(ms).UTC().Format("January 2, 2006") }
 	when := "active"
-	if inventory {
+	switch {
+	case inventory:
 		when = "approved"
+	case forensic:
+		when = "made"
 	}
 	switch {
 	case f.Since > 0 && f.Until > 0:
@@ -397,7 +434,7 @@ func (p *Plugin) decideAuditExportRequest(actingUserID, requestID, clickedPostID
 		})
 	}
 
-	fileID, count, deliverErr := p.deliverAuditExport(req)
+	fileID, export, deliverErr := p.deliverAuditExport(req)
 	if deliverErr != nil {
 		p.API.LogError("failed to deliver audit export", "request_id", req.ID, "error", deliverErr.Error())
 		if restoreErr := p.API.KVSet(kvAuditExportRequestPrefix+req.ID, rawReq); restoreErr != nil {
@@ -410,12 +447,11 @@ func (p *Plugin) decideAuditExportRequest(actingUserID, requestID, clickedPostID
 		return decisionResult{audited: true, Reply: fmt.Sprintf("Could not send the export: %s. The request is still pending.", deliverErr.Error())}
 	}
 	p.releasePending(pendingKindAuditExport, req.RequesterID, req.ID)
-	detail := req.Filter.detail()
-	detail[exportUnit(req.Filter)] = count
+	detail := exportDetail(req.Filter, export)
 	detail["file_id"] = fileID
 	p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s approved the audit export request from %s; the %s %s file (%s) was sent to them. %s.",
-		actingUser.Username, requesterUsername(requester, req.RequesterID), exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, count), covers), detail)
-	outcome := fmt.Sprintf("✅ Approved by @%s for %s. Audit export (%s, %s) sent.", actingUser.Username, requesterUsername(requester, req.RequesterID), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, count))
+		actingUser.Username, requesterUsername(requester, req.RequesterID), exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count), covers), detail)
+	outcome := fmt.Sprintf("✅ Approved by @%s for %s. Audit export (%s, %s) sent.", actingUser.Username, requesterUsername(requester, req.RequesterID), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count))
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: true, ApproverUsername: actingUser.Username,
@@ -427,23 +463,23 @@ func (p *Plugin) decideAuditExportRequest(actingUserID, requestID, clickedPostID
 
 // deliverAuditExport builds the export the request asks for and posts it
 // as a file in the requester's ticket thread, or a new DM when there is
-// none. It returns the file's ID and how many requests or bots it lists.
-func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, count int, err error) {
-	export, err := p.buildAuditExport(req.Filter)
+// none. It returns the file's ID and the export.
+func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, export *auditExport, err error) {
+	export, err = p.buildAuditExport(req.Filter)
 	if err != nil {
-		return "", 0, errors.Wrap(err, "failed to build the export")
+		return "", nil, errors.Wrap(err, "failed to build the export")
 	}
 	channelID, rootID := req.DMChannelID, req.DMRootPostID
 	if channelID == "" {
 		dm, appErr := p.API.GetDirectChannel(req.RequesterID, p.botUserID)
 		if appErr != nil {
-			return "", 0, errors.Wrap(appErr, "failed to open a direct message with the requester")
+			return "", nil, errors.Wrap(appErr, "failed to open a direct message with the requester")
 		}
 		channelID, rootID = dm.Id, ""
 	}
 	info, appErr := p.API.UploadFile(export.data, channelID, export.filename)
 	if appErr != nil {
-		return "", 0, errors.Wrap(appErr, "failed to upload the export")
+		return "", nil, errors.Wrap(appErr, "failed to upload the export")
 	}
 	if _, appErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
@@ -452,9 +488,9 @@ func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, cou
 		Message:   fmt.Sprintf("📎 **Audit export: %s** (%s, %s). %s. %s Keep it secure.", exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count), p.describeExportFilter(req.Filter), auditExportTypeAbout(req.Filter)),
 		FileIds:   []string{info.Id},
 	}); appErr != nil {
-		return "", 0, errors.Wrap(appErr, "failed to post the export")
+		return "", nil, errors.Wrap(appErr, "failed to post the export")
 	}
-	return info.Id, export.count, nil
+	return info.Id, export, nil
 }
 
 // auditExportTypeAbout says what f's export holds.
@@ -493,6 +529,7 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		Format    string `json:"format"`
 		Kind      string `json:"kind"`
 		Env       string `json:"env"`
+		Bot       string `json:"bot"`       // a bot username, for bot_forensic
 		Requester string `json:"requester"` // a username, optional
 		Since     int64  `json:"since"`
 		Until     int64  `json:"until"`
@@ -503,6 +540,12 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		return
 	}
 	f := auditExportFilter{Type: payload.Type, Format: payload.Format, Kind: payload.Kind, HostingEnv: strings.TrimSpace(payload.Env), Since: payload.Since, Until: payload.Until}
+	botID, botErr := p.resolveExportBot(payload.Bot)
+	if botErr != nil {
+		writeJSON(w, map[string]string{"error": botErr.Error()})
+		return
+	}
+	f.BotID = botID
 	if name := strings.TrimPrefix(strings.TrimSpace(payload.Requester), "@"); name != "" {
 		ids, err := p.resolveUsernameList([]string{name})
 		if err != nil || len(ids) != 1 {

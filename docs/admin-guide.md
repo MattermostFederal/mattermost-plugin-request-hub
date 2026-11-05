@@ -230,7 +230,7 @@ System Admins see an **Audit history** card in the Request Hub. It lists every r
 Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead. While **Allow direct audit export** is off, System Admins request exports too, from **Request an export** in Audit history or with the slash command, and a different System Admin must approve them. The slash command is:
 
 ```
-/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--env name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--env name] [--bot @name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
 ```
 
 The requester picks the export type and a format that type comes in:
@@ -239,6 +239,7 @@ The requester picks the export type and a format that type comes in:
 |------|-------------------------|-------------|
 | `full_histories` | CSV, JSON | Request, request type, requester, dates the request was active |
 | `bot_inventory` | PDF, CSV, JSON | Hosting environment (`--env`), requester, dates the bot was approved |
+| `bot_forensic` | JSON | One bot (`--bot`, required) and the dates it posted (`--since` and `--until`, both required, at most 90 days apart) |
 
 They must give a reason. The approval card shows the export type, format, what it covers and the reason. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Nobody can approve their own export request. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
 
@@ -248,13 +249,14 @@ While **Allow direct audit export** is on, System Admins can download exports fr
 
 | Parameter | Values |
 |-----------|--------|
-| `type` | `full_histories` (default) or `bot_inventory` |
-| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. |
+| `type` | `full_histories` (default), `bot_inventory` or `bot_forensic` |
+| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. For `bot_forensic`: `json` only. |
 | `request` | One request ID (`full_histories` only) |
 | `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` (`full_histories` only) |
 | `env` | One hosting environment (`bot_inventory` only) |
-| `requester` | A requester's user ID |
-| `since`, `until` | Unix time in milliseconds. For `bot_inventory`, the date the bot was approved. |
+| `bot` | The bot's user ID (`bot_forensic` only, and required there) |
+| `requester` | A requester's user ID (not for `bot_forensic`) |
+| `since`, `until` | Unix time in milliseconds. For `bot_inventory`, the date the bot was approved. For `bot_forensic`, when the bot posted: both are required and at most 90 days apart. |
 
 Each export is itself recorded in the server audit log as `requesthub_audit_exported`.
 
@@ -276,6 +278,30 @@ The `bot_inventory` export lists every bot Request Hub created, oldest first, fo
 The PDF is for reading: a title, what it covers and one block per bot. The CSV and JSON have the same fields for tooling, and the CSV guards against formulas as above.
 
 The inventory is built from the bot index Request Hub writes when it creates a bot, so it lists only bots created after the index was added. Bots created outside Request Hub are not listed. The declared fields are the requester's word: they do not limit what the bot's token can do.
+
+### Bot forensics
+
+The `bot_forensic` export traces one bot over at most 90 days, for Security to answer "what did this bot do". It is one JSON document with:
+
+- `rh_managed`, and when Request Hub created the bot, its bot index entry (`index`) and the full history of the request that created it (`history`)
+- the bot record and its status (`active`, `deactivated` or `deleted`)
+- `teams`: the teams the bot is in now, each with the channels it is in now (direct and group messages left out)
+- `scanned_channels`: every channel searched, and why: `member`, `home` or `webhook`. The home channel and the channels its webhooks post to are searched even when the bot has left them.
+- `posts`: every post the bot made in those channels in the date range, oldest first, with its message, props and file IDs. This includes system posts made as the bot, such as joining a channel.
+- `files`: the name, size and type of each file attached to those posts
+- `post_count`, `truncated` and, when it is cut short, `truncated_reason`
+- `limitations`: what the export can't show
+
+It stops at 5,000 posts or 20 MB of posts, whichever comes first, or after reading 200,000 posts in the scanned channels without reaching the start date. It then sets `truncated: true`; ask for a shorter date range to see the rest.
+
+It does not show:
+
+- posts in channels the bot has left, other than its home and webhook channels
+- direct and group messages, which follow the server's own compliance export
+- deleted posts
+- the API calls made with the bot's tokens. Plugins can't see them; look in the server audit log or your SIEM.
+
+The export can trace a bot Request Hub didn't create (`rh_managed: false`), as long as the bot still exists. The audit event for the export records the filter, the post count, whether it was truncated and how many channels were scanned, never the posts themselves.
 
 A request's history keeps relayed messages in full until it reaches 2 MB. After that, each new message is kept to its first 2 KB in the history (marked `message_truncated`), so a very long ticket thread can't stop the history being saved. The server audit log always gets the full text.
 

@@ -561,6 +561,9 @@ export type AuditExportRequestPayload = {
     format: AuditExportFormat;
     kind?: string;
     env?: string;
+
+    // bot is a bot's username, for bot_forensic.
+    bot?: string;
     requester?: string;
     since?: number;
     until?: number;

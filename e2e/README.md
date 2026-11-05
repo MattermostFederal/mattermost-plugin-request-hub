@@ -81,6 +81,7 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` |✅ |
 | Audit trail: history for every event, refusals, messages, audit channel detail, slash timeline, export, Audit history window, security approver export requests | `audit` | ✅ |
 | Bot inventory export: direct JSON download and a PDF delivered on request | `audit` | ✅ |
+| Bot forensic export: the bot's posts and channels, direct JSON download and delivered on request, with the window and bot checks | `audit` | ✅ |
 | Settings toggles and the admin console | `settings` | ⬜ |
 | Webapp modals and menus | `webapp-modals` | ⬜ |
 | Exercise mode | `exercise` | ⬜ |
