@@ -201,14 +201,18 @@ func argumentFormCases() map[string]argumentFormCase {
 			},
 		},
 		"bot": {
-			command: "bot svcbot Service Bot --description Posts build results --owner @owner",
+			command: "bot svcbot Service Bot --description Posts build results --owner @owner --purpose Posts CI results --privilege post --ingestion Jenkins payloads --env mattermost-prod",
 			stub: func(api *plugintest.API) {
+				api.On("GetChannel", "chX").Return(&model.Channel{Id: "chX", Name: "builds", TeamId: "team1", Type: model.ChannelTypeOpen}, nil).Maybe()
+				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Maybe()
 				api.On("GetUserByUsername", "owner").Return(&model.User{Id: testOwnerID}, nil)
 				api.On("GetUser", testOwnerID).Return(&model.User{Id: testOwnerID, Username: "owner"}, nil)
 			},
 			kvPrefix: kvBotRequestPrefix,
 			want: map[string]any{
 				"username": "svcbot", "display_name": "Service Bot", "description": "Posts build results", "owner_user_id": testOwnerID,
+				"purpose": "Posts CI results", "privilege_level": "post", "data_ingestion": "Jenkins payloads", "hosting_env": "mattermost-prod",
+				"home_team_id": "team1", "home_channel_id": "chX",
 			},
 		},
 		"incoming webhook": {

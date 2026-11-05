@@ -42,6 +42,12 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
             description: 'e2e',
             request_token: true,
             compliance_accepted: true,
+            purpose: 'e2e',
+            privilege_level: 'read',
+            data_ingestion: 'None',
+            hosting_env: 'mattermost-dev',
+            home_team_id: hub.teamId,
+            home_channel_id: await hub.channelId('town-square'),
         });
         expect(res.error, JSON.stringify(res)).toBeUndefined();
 

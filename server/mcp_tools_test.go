@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -273,12 +274,12 @@ func TestMCPTools_HonorRequestTypeSettings(t *testing.T) {
 		{"request_team_guest", map[string]any{
 			"team_id": "team1", "email": "guest@example.com", "channel_ids": []string{testChannelID},
 		}, func(c *configuration) { c.AllowTeamGuestRequests = false }, teamGuestRequestsDisabledMsg},
-		{"request_bot", map[string]any{
+		{"request_bot", withBotDecl(map[string]any{
 			"username": "svcbot", "display_name": "Service Bot", "owner": "owner",
-		}, func(c *configuration) { c.AllowBotTokenRequests = false }, botRequestsDisabledMsg},
-		{"request_bot", map[string]any{
+		}), func(c *configuration) { c.AllowBotTokenRequests = false }, botRequestsDisabledMsg},
+		{"request_bot", withBotDecl(map[string]any{
 			"username": "svcbot", "display_name": "Service Bot", "owner": "owner",
-		}, func(c *configuration) { c.BotComplianceEnabled = true }, botComplianceMCPMsg},
+		}), func(c *configuration) { c.BotComplianceEnabled = true }, botComplianceMCPMsg},
 		{"request_webhook", map[string]any{
 			"webhook_type": "incoming", "channel_id": "ch1", "display_name": "Alerts",
 		}, func(c *configuration) { c.AllowWebhookRequests = false }, webhookRequestsDisabledMsg},
@@ -394,10 +395,11 @@ func mcpRequestCases() map[string]mcpRequestCase {
 		},
 		"request_bot": {
 			tool: "request_bot",
-			args: map[string]any{
+			args: withBotDecl(map[string]any{
 				"username": "svcbot", "display_name": "Service Bot", "description": "Posts build results", "owner": "@owner",
-			},
+			}),
 			stub: func(api *plugintest.API) {
+				stubBotHome(api)
 				api.On("GetUserByUsername", "owner").Return(&model.User{Id: testOwnerID}, nil)
 				api.On("GetUser", testOwnerID).Return(&model.User{Id: testOwnerID, Username: "owner"}, nil)
 			},
@@ -408,9 +410,13 @@ func mcpRequestCases() map[string]mcpRequestCase {
 		},
 		"request_bot no owner": {
 			tool:     "request_bot",
-			args:     map[string]any{"username": "svcbot", "display_name": "Service Bot"},
+			args:     withBotDecl(map[string]any{"username": "svcbot", "display_name": "Service Bot"}),
+			stub:     stubBotHome,
 			kvPrefix: kvBotRequestPrefix,
-			want:     map[string]any{"username": "svcbot", "owner_user_id": nil},
+			want: map[string]any{
+				"username": "svcbot", "owner_user_id": nil, "purpose": "Posts CI results", "privilege_level": "post",
+				"data_ingestion": "Jenkins webhook payloads", "hosting_env": "mattermost-dev", "home_team_id": "team1", "home_channel_id": testHomeChannelID,
+			},
 		},
 		"request_webhook incoming": {
 			tool: "request_webhook",
@@ -531,17 +537,17 @@ func TestMCPRequestTools_ReturnValidationErrors(t *testing.T) {
 	}{
 		"unknown team admin nominee": {"request_team_admin", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: `ghost`"},
 		"unknown team member":        {"request_team_member", map[string]any{"team_id": "team1", "nominees": []string{"ghost"}}, "unknown user: `ghost`"},
-		"unknown bot owner":          {"request_bot", map[string]any{"username": "svcbot", "display_name": "Svc", "owner": "ghost"}, "unknown user: `ghost`"},
+		"unknown bot owner":          {"request_bot", withBotDecl(map[string]any{"username": "svcbot", "display_name": "Svc", "owner": "ghost"}), "unknown user: `ghost`"},
 		"no team admin nominees":     {"request_team_admin", map[string]any{"team_id": "team1", "nominees": []string{}}, "pick at least one person to make a Team Admin"},
 		"reserved team name":         {"request_team", map[string]any{"display_name": "Ops", "name": "signup-team"}, "reserved by Mattermost"},
 		"bad guest email":            {"request_team_guest", map[string]any{"team_id": "team1", "email": "not-an-email", "channel_ids": []string{testChannelID}}, "valid guest email"},
-		"bad bot username":           {"request_bot", map[string]any{"username": "ab", "display_name": "Svc"}, "3-22 characters"},
+		"bad bot username":           {"request_bot", withBotDecl(map[string]any{"username": "ab", "display_name": "Svc"}), "3-22 characters"},
 		"unknown webhook type":       {"request_webhook", map[string]any{"webhook_type": "slash", "channel_id": "ch1", "display_name": "A"}, `unknown webhook type "slash"`},
 		"outgoing without callback":  {"request_webhook", map[string]any{"webhook_type": "outgoing", "channel_id": "ch1", "display_name": "A"}, "callback URL is required"},
 		"incoming with callback": {"request_webhook", map[string]any{
 			"webhook_type": "incoming", "channel_id": "ch1", "display_name": "A", "callback_url": "https://hooks.example.com",
 		}, "a callback URL is only for outgoing webhooks"},
-		"blank bot owner": {"request_bot", map[string]any{"username": "svcbot", "display_name": "Svc", "owner": " @ "}, "name the owner by username"},
+		"blank bot owner": {"request_bot", withBotDecl(map[string]any{"username": "svcbot", "display_name": "Svc", "owner": " @ "}), "name the owner by username"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubMCP(t)
@@ -612,4 +618,14 @@ func TestMCPRequestTools_NonMemberIsRefused(t *testing.T) {
 			api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// withBotDecl adds a valid declaration and home to request_bot arguments.
+func withBotDecl(args map[string]any) map[string]any {
+	out := map[string]any{
+		"purpose": "Posts CI results", "privilege_level": "post", "data_ingestion": "Jenkins webhook payloads",
+		"hosting_env": "mattermost-dev", "team_id": "team1", "channel_id": testHomeChannelID,
+	}
+	maps.Copy(out, args)
+	return out
 }

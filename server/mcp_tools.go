@@ -78,10 +78,16 @@ type RequestTeamGuestArgs struct {
 }
 
 type RequestBotArgs struct {
-	Username    string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
-	DisplayName string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
-	Description string `json:"description,omitempty" jsonschema:"What the bot is for, at most 500 characters"`
-	Owner       string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
+	Username       string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
+	DisplayName    string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
+	Description    string `json:"description,omitempty" jsonschema:"What the bot is for, at most 500 characters"`
+	Owner          string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
+	Purpose        string `json:"purpose" jsonschema:"Why the bot is needed and what it will do, at most 500 characters"`
+	PrivilegeLevel string `json:"privilege_level" jsonschema:"The access the bot needs: read, post or elevated"`
+	DataIngestion  string `json:"data_ingestion" jsonschema:"What data the bot reads or receives and from where, at most 500 characters"`
+	HostingEnv     string `json:"hosting_env" jsonschema:"Where the bot runs; one of the environments the server lists"`
+	TeamID         string `json:"team_id" jsonschema:"The ID of the bot's home team, a team the user is a member of"`
+	ChannelID      string `json:"channel_id" jsonschema:"The ID of the bot's home channel, a public or private channel of that team the user is a member of; the bot joins it on approval"`
 }
 
 type RequestWebhookArgs struct {
@@ -375,6 +381,13 @@ func (p *Plugin) requestBotTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 		DisplayName: in.DisplayName,
 		Description: in.Description,
 		OwnerUserID: ownerID,
+
+		Purpose:        in.Purpose,
+		PrivilegeLevel: in.PrivilegeLevel,
+		DataIngestion:  in.DataIngestion,
+		HostingEnv:     in.HostingEnv,
+		HomeTeamID:     in.TeamID,
+		HomeChannelID:  in.ChannelID,
 	}))
 }
 

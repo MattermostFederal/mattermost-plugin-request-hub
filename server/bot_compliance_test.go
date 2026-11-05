@@ -65,6 +65,7 @@ func stubBotSubmit(t *testing.T, api *plugintest.API) *botRequest {
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "bots-ch"}, nil)
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "post-1"}, nil)
+	stubBotHome(api)
 	return stored
 }
 
@@ -75,10 +76,10 @@ func TestSubmitBotRequest_StoresAndAuditsTheAcceptance(t *testing.T) {
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
 	events := captureAudit(p)
 
-	_, err := p.submitBotRequest("u_req", botRequestInput{
+	_, err := p.submitBotRequest("u_req", declared(botRequestInput{
 		Username: "svcbot", DisplayName: "Service Bot",
 		ComplianceAccepted: true, ComplianceTextHash: complianceHash(defaultBotComplianceText),
-	})
+	}))
 	require.NoError(t, err)
 
 	require.NotNil(t, stored.Compliance)
@@ -107,7 +108,7 @@ func TestSubmitBotRequest_RefusesWithoutAcceptance(t *testing.T) {
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true, BotComplianceEnabled: true})
 	events := captureAudit(p)
 
-	_, err := p.submitBotRequest("u_req", botRequestInput{Username: "svcbot", DisplayName: "Service Bot"})
+	_, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "svcbot", DisplayName: "Service Bot"}))
 
 	require.EqualError(t, err, botComplianceRequiredMsg)
 	require.Equal(t, 1, countEvents(*events, eventSubmitRefused))
@@ -127,14 +128,14 @@ func TestBotRequestDialog_AddsTheStatementWhenRequired(t *testing.T) {
 	p := newTestPlugin(&plugintest.API{})
 
 	p.setConfiguration(&configuration{})
-	off := p.botRequestDialog()
+	off := p.botRequestDialog("~town-square")
 	require.Empty(t, off.State)
 	for _, el := range off.Elements {
 		require.NotEqual(t, fieldBotCompliance, el.Name)
 	}
 
 	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Line one.\nLine two."})
-	on := p.botRequestDialog()
+	on := p.botRequestDialog("~town-square")
 	require.Equal(t, complianceHash("Line one.\nLine two."), on.State)
 	require.Contains(t, on.IntroductionText, "> Line one.\n> Line two.")
 	last := on.Elements[len(on.Elements)-1]
@@ -175,11 +176,15 @@ func TestHandleBotForm(t *testing.T) {
 	p.setConfiguration(&configuration{})
 	w := serve(p, http.MethodGet, routeBotForm, "u1", "")
 	require.Equal(t, http.StatusOK, w.Code)
-	require.JSONEq(t, `{"compliance":{"enabled":false}}`, w.Body.String())
+	require.JSONEq(t, `{"compliance":{"enabled":false},"hosting_envs":["mattermost-dev","mattermost-prod"],`+
+		`"privilege_levels":[{"value":"read","label":"Read only"},{"value":"post","label":"Read and post"},{"value":"elevated","label":"Elevated (admin-level APIs)"}]}`, w.Body.String())
 
-	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Be good."})
+	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Be good.", BotHostingEnvironments: "lab\n\n prod \nlab"})
 	w = serve(p, http.MethodGet, routeBotForm, "u1", "")
-	require.JSONEq(t, `{"compliance":{"enabled":true,"text":"Be good.","sha256":"`+complianceHash("Be good.")+`"}}`, w.Body.String())
+	var form botFormDTO
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &form))
+	require.Equal(t, botComplianceDTO{Enabled: true, Text: "Be good.", SHA256: complianceHash("Be good.")}, form.Compliance)
+	require.Equal(t, []string{"lab", "prod"}, form.HostingEnvs)
 
 	w = serve(p, http.MethodGet, routeBotForm, "", "")
 	require.Equal(t, http.StatusUnauthorized, w.Code)

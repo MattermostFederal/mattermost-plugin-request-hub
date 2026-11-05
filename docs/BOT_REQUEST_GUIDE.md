@@ -34,8 +34,9 @@ Same **Request a Bot Account** form from every entry point.
 - **Dropdown:** channel More actions → **Request a Bot**
 - **Hub:** right App Bar **plug** → Requests → **Request a Bot**
 - **Slash:** `/mattermost-request-hub bot` (or skip the form with
-  `/mattermost-request-hub bot <username> <Display name> [--description <text>] [--owner @user]`;
-  access tokens and webhooks for the bot are only in the form)
+  `/mattermost-request-hub bot <username> <Display name> --purpose <text> --privilege read|post|elevated --ingestion <text> --env <environment> [--description <text>] [--owner @user] [--accept-compliance]`,
+  run in the channel that will be the bot's home; access tokens and webhooks
+  for the bot are only in the form)
 - **Agent:** when **Offer tools to Agents** is on, ask an agent from the
   Mattermost Agents plugin to file it for you (the `request_bot` tool, which like the
   slash command covers the account only; see the
@@ -59,6 +60,24 @@ Same **Request a Bot Account** form from every entry point.
 | **Bot username** | Username the bot posts as. Lowercase letters, numbers, periods, underscores, and hyphens. 3–22 characters. Example: `deploy_bot` or `deploy-notifier`. |
 | **Display name** | Friendly name shown in messages. Example: `Deploy Notifier`. |
 | **Description** | Optional. What the bot does and which systems it connects to. |
+| **Purpose** | Why the bot is needed and what it will do. Up to 500 characters. |
+| **Privilege level** | The access the bot needs: **Read only**, **Read and post**, or **Elevated (admin-level APIs)**. This is declared for the reviewers; it doesn't limit the token. |
+| **Data ingestion** | What data the bot reads or receives, and from where. Up to 500 characters. |
+| **Hosting environment** | Where the bot runs, picked from a list a System Admin sets (by default `mattermost-dev` and `mattermost-prod`). |
+| **Home channel** | The channel you're in when you open the form (read-only), in its team. Switch channels before opening the form to change it. It must be a public or private channel you're a member of. |
+
+#### Home team and channel
+
+When the request is approved, the bot is added to its home team and home
+channel, even if you asked for no webhook. The home says where the bot belongs
+and who answers for it. It is not a sandbox: an access token can still reach
+anything the bot account can, in any channel the bot is added to. Before either
+approval step, Approve checks that the home team and channel still exist and
+that you are still in them; if not, the request can only be denied.
+
+Security can later list the bots Request Hub created by their user ID, with
+what was declared for each. Bots approved before these fields existed have no
+declaration.
 
 #### Compliance statement
 

@@ -274,6 +274,12 @@ export type BotRequestPayload = {
     username: string;
     display_name: string;
     description?: string;
+    purpose?: string;
+    privilege_level?: string;
+    data_ingestion?: string;
+    hosting_env?: string;
+    home_team_id?: string;
+    home_channel_id?: string;
     request_token?: boolean;
     incoming_webhook_channel_id?: string;
     incoming_webhook_display_name?: string;
@@ -284,12 +290,16 @@ export type BotRequestPayload = {
     compliance_text_hash?: string;
 };
 
+export type BotFormOption = {value: string; label: string};
+
 export type BotForm = {
     compliance: {
         enabled: boolean;
         text?: string;
         sha256?: string;
     };
+    hosting_envs: string[];
+    privilege_levels: BotFormOption[];
 };
 
 // fetchBotForm returns the bot form's settings, or null when they can't be
@@ -312,6 +322,10 @@ export async function fetchBotForm(): Promise<BotForm | null> {
                 text: typeof body?.compliance?.text === 'string' ? body.compliance.text : undefined,
                 sha256: typeof body?.compliance?.sha256 === 'string' ? body.compliance.sha256 : undefined,
             },
+            hosting_envs: Array.isArray(body?.hosting_envs) ? body.hosting_envs.filter((env: unknown): env is string => typeof env === 'string') : [],
+            privilege_levels: Array.isArray(body?.privilege_levels) ? body.privilege_levels.filter(
+                (level: unknown): level is BotFormOption => typeof (level as BotFormOption)?.value === 'string' && typeof (level as BotFormOption)?.label === 'string',
+            ) : [],
         };
     } catch {
         return null;

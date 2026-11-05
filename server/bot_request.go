@@ -18,6 +18,10 @@ const (
 	fieldBotDescription = "bot_description"
 	fieldBotOwner       = "bot_owner"
 	fieldBotCompliance  = "bot_compliance"
+	fieldBotPurpose     = "bot_purpose"
+	fieldBotPrivilege   = "bot_privilege"
+	fieldBotIngestion   = "bot_ingestion"
+	fieldBotHostingEnv  = "bot_hosting_env"
 
 	// Bounds on a requested bot username.
 	minBotUsernameLen = 3
@@ -37,6 +41,16 @@ type botRequest struct {
 	// Compliance is the requester's acceptance of the compliance
 	// statement; nil when none was required.
 	Compliance *botCompliance `json:"compliance,omitempty"`
+
+	// What the requester declared about the bot (see bot_declaration.go),
+	// and its home team and channel, which the bot joins on approval.
+	// Requests saved by older versions have none of them.
+	Purpose        string `json:"purpose,omitempty"`
+	PrivilegeLevel string `json:"privilege_level,omitempty"`
+	DataIngestion  string `json:"data_ingestion,omitempty"`
+	HostingEnv     string `json:"hosting_env,omitempty"`
+	HomeTeamID     string `json:"home_team_id,omitempty"`
+	HomeChannelID  string `json:"home_channel_id,omitempty"`
 
 	// Optional extras — requested alongside the bot account in the same ticket.
 	// All three are created at approve-time using the approver's session token.
@@ -67,13 +81,19 @@ type botRequest struct {
 }
 
 // botRequestInput carries the caller-supplied fields for a new bot request.
-// The slash-command dialog path populates only the base fields; the webapp
-// path additionally sets the optional token/webhook fields.
+// Every path sets the account fields, the declaration and the home team and
+// channel; only the webapp path sets the token/webhook extras.
 type botRequestInput struct {
 	Username                   string
 	DisplayName                string
 	Description                string
 	OwnerUserID                string
+	Purpose                    string
+	PrivilegeLevel             string
+	DataIngestion              string
+	HostingEnv                 string
+	HomeTeamID                 string
+	HomeChannelID              string
 	RequestToken               bool
 	IncomingWebhookChannelID   string
 	IncomingWebhookDisplayName string
@@ -128,6 +148,13 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 			return "", err
 		}
 	}
+	declared, declErr := checkBotDeclaration(p.getConfiguration(), botDeclaration{
+		Purpose: input.Purpose, PrivilegeLevel: input.PrivilegeLevel,
+		DataIngestion: input.DataIngestion, HostingEnv: input.HostingEnv,
+	})
+	if declErr != nil {
+		return "", declErr
+	}
 	compliance, complianceErr := checkBotCompliance(p.getConfiguration(), input.ComplianceAccepted, input.ComplianceTextHash)
 	if complianceErr != nil {
 		return "", complianceErr
@@ -154,6 +181,11 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 			return "", errors.Wrap(err, "outgoing webhook channel")
 		}
 	}
+	homeTeamID := strings.TrimSpace(input.HomeTeamID)
+	homeChannelID := strings.TrimSpace(input.HomeChannelID)
+	if err := p.requireBotHome(requester, homeTeamID, homeChannelID); err != nil {
+		return "", err
+	}
 
 	req := &botRequest{
 		ID:                         model.NewId(),
@@ -163,6 +195,12 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 		Description:                strings.TrimSpace(input.Description),
 		OwnerUserID:                strings.TrimSpace(input.OwnerUserID),
 		Compliance:                 compliance,
+		Purpose:                    declared.Purpose,
+		PrivilegeLevel:             declared.PrivilegeLevel,
+		DataIngestion:              declared.DataIngestion,
+		HostingEnv:                 declared.HostingEnv,
+		HomeTeamID:                 homeTeamID,
+		HomeChannelID:              homeChannelID,
 		RequestToken:               input.RequestToken,
 		IncomingWebhookChannelID:   incomingChID,
 		IncomingWebhookDisplayName: strings.TrimSpace(input.IncomingWebhookDisplayName),
@@ -290,6 +328,21 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 	}
 	if req.OwnerUserID != "" {
 		details = append(details, fmt.Sprintf("**Owner:** %s", p.mentionList([]string{req.OwnerUserID})))
+	}
+	if req.Purpose != "" {
+		details = append(details, fmt.Sprintf("**Purpose:** %s", escapeMarkdown(req.Purpose)))
+	}
+	if req.PrivilegeLevel != "" {
+		details = append(details, fmt.Sprintf("**Privilege:** %s", escapeMarkdown(privilegeLabel(req.PrivilegeLevel))))
+	}
+	if req.DataIngestion != "" {
+		details = append(details, fmt.Sprintf("**Data ingestion:** %s", escapeMarkdown(req.DataIngestion)))
+	}
+	if req.HostingEnv != "" {
+		details = append(details, fmt.Sprintf("**Environment:** %s", escapeMarkdown(req.HostingEnv)))
+	}
+	if req.HomeChannelID != "" {
+		details = append(details, fmt.Sprintf("**Home:** %s", p.channelDisplayRef(req.HomeChannelID)))
 	}
 	if req.Compliance != nil {
 		details = append(details, fmt.Sprintf("**Compliance:** accepted (sha256 %s)", shortHash(req.Compliance.TextSHA256)))
@@ -442,9 +495,9 @@ func (p *Plugin) loadBotRequest(id string) (*botRequest, []byte, error) {
 }
 
 // openBotRequestDialog opens the interactive dialog for submitting a bot
-// account request.
-func (p *Plugin) openBotRequestDialog(triggerID string) error {
-	dialog := p.botRequestDialog()
+// account request. The channel it is opened from becomes the bot's home.
+func (p *Plugin) openBotRequestDialog(triggerID string, home *model.Channel) error {
+	dialog := p.botRequestDialog(p.channelDisplayRef(home.Id))
 	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
 		TriggerId: triggerID,
 		URL:       fmt.Sprintf("/plugins/%s%s", manifest.Id, routeBotDialog),
@@ -455,16 +508,28 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 	return nil
 }
 
-// botRequestDialog is the bot request form. While the compliance statement
-// is required it is shown in the introduction with a box to accept it, and
-// its hash rides in the dialog state so a statement changed meanwhile is
-// caught on submit.
-func (p *Plugin) botRequestDialog() model.Dialog {
+// botRequestDialog is the bot request form. homeRef names the channel it
+// was opened from, the bot's home. While the compliance statement is
+// required it is shown in the introduction with a box to accept it, and its
+// hash rides in the dialog state so a statement changed meanwhile is caught
+// on submit.
+func (p *Plugin) botRequestDialog(homeRef string) model.Dialog {
+	c := p.getConfiguration()
+	privileges := make([]*model.PostActionOptions, 0, len(botPrivilegeLevels))
+	for _, level := range botPrivilegeLevels {
+		privileges = append(privileges, &model.PostActionOptions{Text: level.Label, Value: level.Value})
+	}
+	envs := make([]*model.PostActionOptions, 0)
+	for _, env := range c.HostingEnvs() {
+		envs = append(envs, &model.PostActionOptions{Text: env, Value: env})
+	}
 	dialog := model.Dialog{
-		CallbackId:       botDialogCallbackID,
-		Title:            "Request a Bot Account",
-		IntroductionText: "Bot account requests need a security approval and a system approval.",
-		SubmitLabel:      "Submit request",
+		CallbackId: botDialogCallbackID,
+		Title:      "Request a Bot Account",
+		IntroductionText: "Bot account requests need a security approval and a system approval.\n\n" +
+			"**Home:** " + homeRef + ". The bot joins this channel when it is approved. " +
+			"Open the form from another channel to change it. A home doesn't limit what the bot's token can reach.",
+		SubmitLabel: "Submit request",
 		Elements: []model.DialogElement{
 			{
 				DisplayName: "Bot username",
@@ -490,6 +555,35 @@ func (p *Plugin) botRequestDialog() model.Dialog {
 				MaxLength:   maxDescriptionLen,
 			},
 			{
+				DisplayName: "Purpose",
+				Name:        fieldBotPurpose,
+				Type:        "textarea",
+				Placeholder: "e.g. Posts CI build results; answers questions from the on-call runbook",
+				HelpText:    "Why the bot is needed and what it will do.",
+				MaxLength:   maxDescriptionLen,
+			},
+			{
+				DisplayName: "Privilege level",
+				Name:        fieldBotPrivilege,
+				Type:        "select",
+				Options:     privileges,
+				HelpText:    "The access the bot needs. This is declared for review; it doesn't limit the token.",
+			},
+			{
+				DisplayName: "Data ingestion",
+				Name:        fieldBotIngestion,
+				Type:        "textarea",
+				Placeholder: "e.g. Reads posts in its home channel; receives webhook payloads from Jenkins",
+				HelpText:    "What data the bot reads or receives, and from where.",
+				MaxLength:   maxDescriptionLen,
+			},
+			{
+				DisplayName: "Hosting environment",
+				Name:        fieldBotHostingEnv,
+				Type:        "select",
+				Options:     envs,
+			},
+			{
 				DisplayName: "Bot owner",
 				Name:        fieldBotOwner,
 				Type:        "select",
@@ -499,7 +593,7 @@ func (p *Plugin) botRequestDialog() model.Dialog {
 			},
 		},
 	}
-	if c := p.getConfiguration(); c.BotComplianceRequired() {
+	if c.BotComplianceRequired() {
 		text := c.BotComplianceText()
 		dialog.IntroductionText += "\n\n**Compliance statement**\n\n> " + strings.ReplaceAll(text, "\n", "\n> ")
 		dialog.Elements = append(dialog.Elements, model.DialogElement{

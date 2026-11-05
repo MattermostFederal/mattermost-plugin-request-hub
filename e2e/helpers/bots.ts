@@ -21,6 +21,12 @@ export type BotRequestBody = {
     outgoing_webhook_callback_url?: string;
     compliance_accepted?: boolean;
     compliance_text_hash?: string;
+    purpose?: string;
+    privilege_level?: string;
+    data_ingestion?: string;
+    hosting_env?: string;
+    home_team_id?: string;
+    home_channel_id?: string;
 };
 
 export type SubmitReply = {message?: string; error?: string};
@@ -34,17 +40,44 @@ export type StoredBotRequest = {
     owner_user_id?: string;
     request_token?: boolean;
     compliance?: {accepted_at: number; text_sha256: string; text: string};
+    purpose?: string;
+    privilege_level?: string;
+    data_ingestion?: string;
+    hosting_env?: string;
+    home_team_id?: string;
+    home_channel_id?: string;
     security_approver_id?: string;
     system_approver_id?: string;
 };
 
+// DECLARED is what submitBot declares about the bot unless body says
+// otherwise; its home is town-square, which every team member is in.
+export const DECLARED = {
+    purpose: 'E2E test bot',
+    privilege_level: 'post',
+    data_ingestion: 'None',
+    hosting_env: 'mattermost-dev',
+};
+
 // submitBot accepts the compliance statement, which is required by default,
-// unless body says otherwise.
-export const submitBot = (hub: RequestHub, username: string, body: BotRequestBody) =>
-    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {display_name: 'E2E Bot', compliance_accepted: true, ...body});
+// and declares DECLARED with a home of town-square, unless body says
+// otherwise.
+export const submitBot = async (hub: RequestHub, username: string, body: BotRequestBody) =>
+    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {
+        display_name: 'E2E Bot',
+        compliance_accepted: true,
+        ...DECLARED,
+        home_team_id: hub.teamId,
+        home_channel_id: await hub.channelId('town-square'),
+        ...body,
+    });
 
 // The slash flag that accepts the compliance statement.
 export const ACCEPT = '--accept-compliance';
+
+// The slash flags that declare DECLARED. A slash request's home is the
+// channel it is run in.
+export const DECLARE = `--purpose ${DECLARED.purpose} --privilege ${DECLARED.privilege_level} --ingestion ${DECLARED.data_ingestion} --env ${DECLARED.hosting_env}`;
 
 // A valid bot username that is unique on the server (3-22 characters).
 export const botName = () => uid('b').slice(0, 22);

@@ -86,12 +86,25 @@
             it again. With the slash command, add <code>--accept-compliance</code>; without it, the reply shows the
             statement. Agents can't submit bot requests while the statement is required.
         </p>
+        <p>
+            Every bot request also declares the bot's <em>Purpose</em>, its <em>Privilege level</em> (read only,
+            read and post, or elevated), its <em>Data ingestion</em> (what data it reads or receives, and from where)
+            and its <em>Hosting environment</em>, picked from a list a System Admin sets. The privilege level is
+            declared for the reviewers; it doesn't limit the token.
+        </p>
+        <p>
+            The channel you open the form from (or run the slash command in) is the bot's <strong>home
+            channel</strong>, in its team. It must be a public or private channel you're a member of. On approval the
+            bot joins its home team and channel, even without a webhook. A home says where the bot belongs; it is not
+            a sandbox, and a token can still reach anything the bot account can.
+        </p>
         <p>Tokens in the approval DM auto-delete after <strong>72 hours</strong>. Save them securely.</p>
         <p>A token expires after <em>Bot token lifetime</em>, one year by default, and the DM gives the date. From a month before, you get a weekly reminder, then a daily one in the last week. Ask for a new token before then.</p>
         <p>Token expiry needs Mattermost 11.9 or later. On older servers a token never expires, and the DM gives no date.</p>
         <p>
             Before either approval step, Approve checks that the requester and any chosen owner are still active,
-            and that any webhook channels still exist, the requester is still in them, and an outgoing webhook's
+            that the home team and channel still exist and the requester is still in them, and that any webhook
+            channels still exist, the requester is still in them, and an outgoing webhook's
             channel is still public. If not, the approver gets a private message and the
             request stays as it was, so it can be denied (see <a href="approving.html#rechecks">Requests that can't be approved as they stand</a>).
         </p>

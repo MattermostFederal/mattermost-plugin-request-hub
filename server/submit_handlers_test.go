@@ -153,9 +153,17 @@ func dialogRoutes() map[string]dialogRoute {
 		"bot": {
 			route:    routeBotDialog,
 			kvPrefix: kvBotRequestPrefix,
-			ok:       model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "svcbot", fieldBotDisplayName: "Service Bot"}},
-			bad:      model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "@ab"}},
-			wantErr:  "3-22 characters",
+			// The dialog is submitted from channel "here", the bot's home.
+			stub: func(api *plugintest.API) {
+				api.On("GetChannel", "here").Return(&model.Channel{Id: "here", Name: "builds", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
+			},
+			ok: model.SubmitDialogRequest{TeamId: "team1", Submission: map[string]any{
+				fieldBotUsername: "svcbot", fieldBotDisplayName: "Service Bot", fieldBotPurpose: "Posts CI results",
+				fieldBotPrivilege: "read", fieldBotIngestion: "Build logs", fieldBotHostingEnv: "mattermost-prod",
+			}},
+			bad:     model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "@ab"}},
+			wantErr: "3-22 characters",
 		},
 		"incoming webhook": {
 			route:    routeIncomingWebhookDialog,
@@ -347,9 +355,13 @@ func webappRoutes() map[string]webappRoute {
 		"bot": {
 			route:    routeSubmitBotWebapp,
 			kvPrefix: kvBotRequestPrefix,
-			ok:       `{"username":"svcbot","display_name":"Service Bot","description":"Posts alerts","request_token":true}`,
+			stub:     stubBotHome,
+			ok: `{"username":"svcbot","display_name":"Service Bot","description":"Posts alerts","request_token":true,` +
+				`"purpose":"Posts CI results","privilege_level":"elevated","data_ingestion":"Build logs","hosting_env":"mattermost-dev",` +
+				`"home_team_id":"team1","home_channel_id":"` + testHomeChannelID + `"}`,
 			refusals: map[string]webappRefusal{
 				"username too short": {body: `{"username":"ab"}`, wantErr: "3-22 characters"},
+				"no purpose":         {body: `{"username":"svcbot","display_name":"Service Bot"}`, stub: stubNamesFree, wantErr: "Describe the bot's purpose."},
 			},
 		},
 		"incoming webhook": {

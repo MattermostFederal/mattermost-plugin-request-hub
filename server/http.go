@@ -1078,6 +1078,13 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 		Description: submissionString(submission.Submission, fieldBotDescription),
 		OwnerUserID: submissionString(submission.Submission, fieldBotOwner),
 
+		Purpose:        submissionString(submission.Submission, fieldBotPurpose),
+		PrivilegeLevel: submissionString(submission.Submission, fieldBotPrivilege),
+		DataIngestion:  submissionString(submission.Submission, fieldBotIngestion),
+		HostingEnv:     submissionString(submission.Submission, fieldBotHostingEnv),
+		HomeTeamID:     submission.TeamId,
+		HomeChannelID:  submission.ChannelId,
+
 		ComplianceAccepted: submissionBool(submission.Submission, fieldBotCompliance),
 		ComplianceTextHash: submission.State,
 	})
@@ -1813,8 +1820,8 @@ func (p *Plugin) handleSubmitTeamGuestWebapp(w http.ResponseWriter, r *http.Requ
 
 // handleSubmitBotWebapp handles bot account creation requests from the plugin's
 // React modal. Fields match the slash-command dialog: username, display_name,
-// description, and an optional bot_owner (defaults to the requester when
-// empty). Every request, a System Admin's included, goes to the approvers.
+// description, an optional bot_owner (defaults to the requester when
+// empty), the declaration and the home team and channel. Every request, a System Admin's included, goes to the approvers.
 func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -1830,6 +1837,12 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 		DisplayName                string `json:"display_name"`
 		Description                string `json:"description"`
 		BotOwner                   string `json:"bot_owner"`
+		Purpose                    string `json:"purpose"`
+		PrivilegeLevel             string `json:"privilege_level"`
+		DataIngestion              string `json:"data_ingestion"`
+		HostingEnv                 string `json:"hosting_env"`
+		HomeTeamID                 string `json:"home_team_id"`
+		HomeChannelID              string `json:"home_channel_id"`
 		RequestToken               bool   `json:"request_token"`
 		IncomingWebhookChannelID   string `json:"incoming_webhook_channel_id"`
 		IncomingWebhookDisplayName string `json:"incoming_webhook_display_name"`
@@ -1851,6 +1864,12 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 		DisplayName:                payload.DisplayName,
 		Description:                payload.Description,
 		OwnerUserID:                payload.BotOwner,
+		Purpose:                    payload.Purpose,
+		PrivilegeLevel:             payload.PrivilegeLevel,
+		DataIngestion:              payload.DataIngestion,
+		HostingEnv:                 payload.HostingEnv,
+		HomeTeamID:                 payload.HomeTeamID,
+		HomeChannelID:              payload.HomeChannelID,
 		RequestToken:               payload.RequestToken,
 		IncomingWebhookChannelID:   payload.IncomingWebhookChannelID,
 		IncomingWebhookDisplayName: payload.IncomingWebhookDisplayName,

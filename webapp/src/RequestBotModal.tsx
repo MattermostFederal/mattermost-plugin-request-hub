@@ -8,6 +8,7 @@ import {
     closeBotRequestModal,
     getCurrentChannelId,
     getCurrentTeamDisplayName,
+    getCurrentTeamId,
     getChannelDisplayName,
     isBotRequestModalOpen,
 } from './store';
@@ -68,10 +69,15 @@ export const RequestBotModal = () => {
     const channelId = useSelector((state: GlobalState) => getCurrentChannelId(state));
     const channelName = useSelector((state: GlobalState) => getChannelDisplayName(state, channelId));
     const teamName = useSelector((state: GlobalState) => getCurrentTeamDisplayName(state));
+    const teamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
 
     const [username, setUsername] = useState('');
     const [displayName, setDisplayName] = useState('');
     const [description, setDescription] = useState('');
+    const [purpose, setPurpose] = useState('');
+    const [privilegeLevel, setPrivilegeLevel] = useState('');
+    const [dataIngestion, setDataIngestion] = useState('');
+    const [hostingEnv, setHostingEnv] = useState('');
 
     const [requestToken, setRequestToken] = useState(true);
 
@@ -111,6 +117,10 @@ export const RequestBotModal = () => {
         setUsername('');
         setDisplayName('');
         setDescription('');
+        setPurpose('');
+        setPrivilegeLevel('');
+        setDataIngestion('');
+        setHostingEnv('');
         setRequestToken(true);
         setRequestIncomingWebhook(false);
         setIncomingWebhookName('');
@@ -171,6 +181,26 @@ export const RequestBotModal = () => {
             setError('Could not load the compliance statement. Close the form and try again.');
             return;
         }
+        if (!purpose.trim()) {
+            setError("Describe the bot's purpose.");
+            return;
+        }
+        if (!privilegeLevel) {
+            setError('Pick a privilege level.');
+            return;
+        }
+        if (!dataIngestion.trim()) {
+            setError('Describe the data the bot takes in.');
+            return;
+        }
+        if (!hostingEnv) {
+            setError('Pick a hosting environment.');
+            return;
+        }
+        if (!teamId || !channelId) {
+            setError('Open this form from a channel of a team: that channel becomes the bot\'s home.');
+            return;
+        }
         if (botForm.compliance.enabled && !complianceAccepted) {
             setError('Accept the bot compliance statement to submit this request.');
             return;
@@ -193,6 +223,12 @@ export const RequestBotModal = () => {
                 username: username.trim(),
                 display_name: displayName.trim(),
                 description: description.trim() || undefined,
+                purpose: purpose.trim(),
+                privilege_level: privilegeLevel,
+                data_ingestion: dataIngestion.trim(),
+                hosting_env: hostingEnv,
+                home_team_id: teamId,
+                home_channel_id: channelId,
                 request_token: requestToken,
                 incoming_webhook_channel_id: requestIncomingWebhook ? channelId : undefined,
                 incoming_webhook_display_name: requestIncomingWebhook ? incomingWebhookName.trim() : undefined,
@@ -283,6 +319,77 @@ export const RequestBotModal = () => {
                                 placeholder='What does this bot do? What systems will it integrate with?'
                                 onChange={(e) => setDescription(e.target.value)}
                             />
+                        </div>
+
+                        <div style={fieldStyle}>
+                            <label htmlFor='bot-purpose'>{'Purpose'}</label>
+                            <textarea
+                                id='bot-purpose'
+                                className='form-control'
+                                value={purpose}
+                                maxLength={500}
+                                rows={2}
+                                placeholder='e.g. Posts CI build results; answers questions from the on-call runbook'
+                                onChange={(e) => setPurpose(e.target.value)}
+                            />
+                        </div>
+                        <div style={fieldStyle}>
+                            <label htmlFor='bot-privilege'>{'Privilege level'}</label>
+                            <select
+                                id='bot-privilege'
+                                className='form-control'
+                                value={privilegeLevel}
+                                onChange={(e) => setPrivilegeLevel(e.target.value)}
+                            >
+                                <option value=''>{'Choose a level'}</option>
+                                {(botForm !== botFormLoading && botForm ? botForm.privilege_levels : []).map((level) => (
+                                    <option
+                                        key={level.value}
+                                        value={level.value}
+                                    >{level.label}</option>
+                                ))}
+                            </select>
+                            <small style={{opacity: 0.6}}>{'The access the bot needs. This is declared for review; it does not limit the token.'}</small>
+                        </div>
+                        <div style={fieldStyle}>
+                            <label htmlFor='bot-ingestion'>{'Data ingestion'}</label>
+                            <textarea
+                                id='bot-ingestion'
+                                className='form-control'
+                                value={dataIngestion}
+                                maxLength={500}
+                                rows={2}
+                                placeholder='e.g. Reads posts in its home channel; receives webhook payloads from Jenkins'
+                                onChange={(e) => setDataIngestion(e.target.value)}
+                            />
+                        </div>
+                        <div style={fieldStyle}>
+                            <label htmlFor='bot-env'>{'Hosting environment'}</label>
+                            <select
+                                id='bot-env'
+                                className='form-control'
+                                value={hostingEnv}
+                                onChange={(e) => setHostingEnv(e.target.value)}
+                            >
+                                <option value=''>{'Choose an environment'}</option>
+                                {(botForm !== botFormLoading && botForm ? botForm.hosting_envs : []).map((env) => (
+                                    <option
+                                        key={env}
+                                        value={env}
+                                    >{env}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div style={fieldStyle}>
+                            <label>{'Home channel'}</label>
+                            <div
+                                style={readOnlyFieldStyle}
+                                data-testid='bot-home'
+                            >
+                                {channelName || channelId}
+                                {teamName ? <span style={{opacity: 0.6, marginLeft: 6}}>{`(Team: ${teamName})`}</span> : null}
+                            </div>
+                            <small style={{opacity: 0.6}}>{'The bot joins this channel when approved. Switch channels before opening this form to change it. A home does not limit what the bot\'s token can reach.'}</small>
                         </div>
 
                         {/* Access token section */}

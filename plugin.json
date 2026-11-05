@@ -85,6 +85,13 @@
                 "help_text": "The statement bot requesters accept. Leave blank for the built-in statement: the requester won't misuse the bot and is responsible for everything done with it, its tokens and its webhooks. Changing it doesn't change what earlier requesters accepted."
             },
             {
+                "key": "BotHostingEnvironments",
+                "display_name": "Bot hosting environments",
+                "type": "longtext",
+                "default": "mattermost-dev\nmattermost-prod",
+                "help_text": "The hosting environments a bot requester picks from, one per line. The choice is kept with the request and the bot inventory. Leave blank for mattermost-dev and mattermost-prod."
+            },
+            {
                 "key": "AllowWebhookRequests",
                 "display_name": "Allow webhook requests",
                 "type": "bool",

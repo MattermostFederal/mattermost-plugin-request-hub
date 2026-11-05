@@ -37,10 +37,10 @@ func (p *Plugin) createBotToken(botUserID, description string) (*model.UserAcces
 	return token, nil
 }
 
-// addBotToWebhookChannel puts the new bot on the channel's team and in the
-// channel. An incoming webhook's owner has to be able to read its channel,
-// and a new bot starts on no team.
-func (p *Plugin) addBotToWebhookChannel(botUserID, channelID string) error {
+// addBotToChannel puts the new bot on the channel's team and in the
+// channel: its home channel, or an incoming webhook's channel, which the
+// hook's owner has to be able to read. A new bot starts on no team.
+func (p *Plugin) addBotToChannel(botUserID, channelID string) error {
 	channel, appErr := p.API.GetChannel(channelID)
 	if appErr != nil {
 		return fmt.Errorf("load channel: %s", appErr.Error())

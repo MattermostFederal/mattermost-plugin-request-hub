@@ -180,14 +180,18 @@ test.describe('fetchSidebarCategories', () => {
 
 test.describe('fetchBotForm', () => {
     test('maps the compliance statement', async () => {
-        mockFetch(200, {compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}});
-        expect(await fetchBotForm()).toEqual({compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}});
+        mockFetch(200, {compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}, hosting_envs: ['lab', 7], privilege_levels: [{value: 'read', label: 'Read only'}, {value: 1}]});
+        expect(await fetchBotForm()).toEqual({
+            compliance: {enabled: true, text: 'Be good.', sha256: 'abc'},
+            hosting_envs: ['lab'],
+            privilege_levels: [{value: 'read', label: 'Read only'}],
+        });
         expect(calls[0].url).toBe(`/plugins/${manifest.id}/api/v1/bot_form`);
     });
 
     test('a statement that is off has no text', async () => {
         mockFetch(200, {compliance: {enabled: false}});
-        expect(await fetchBotForm()).toEqual({compliance: {enabled: false, text: undefined, sha256: undefined}});
+        expect(await fetchBotForm()).toEqual({compliance: {enabled: false, text: undefined, sha256: undefined}, hosting_envs: [], privilege_levels: []});
     });
 
     test('returns null on a non-OK status or a network failure', async () => {

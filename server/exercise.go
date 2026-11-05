@@ -882,6 +882,32 @@ func exercisePassword() string {
 	return "Ex1!" + base64.RawURLEncoding.EncodeToString(b)
 }
 
+// seedExerciseBotDeclaration fills in what a real requester declares, so
+// exercise bot cards look like real ones. The home is the bot's webhook
+// channel, which the scenario requires the requester to be in; a bot with
+// no webhook has no home, as requests from before homes existed.
+func (p *Plugin) seedExerciseBotDeclaration(req *botRequest, teamID string, spec exerciseBotRequest) {
+	c := p.getConfiguration()
+	req.Purpose = spec.Description
+	if req.Purpose == "" {
+		req.Purpose = spec.DisplayName
+	}
+	req.PrivilegeLevel = privilegePost
+	req.DataIngestion = "Exercise data only."
+	req.HostingEnv = c.HostingEnvs()[0]
+	home := req.IncomingWebhookChannelID
+	if home == "" {
+		home = req.OutgoingWebhookChannelID
+	}
+	if home != "" {
+		req.HomeTeamID, req.HomeChannelID = teamID, home
+	}
+	if c.BotComplianceRequired() {
+		text := c.BotComplianceText()
+		req.Compliance = &botCompliance{AcceptedAt: spec.CreatedAt, TextSHA256: complianceHash(text), Text: text}
+	}
+}
+
 func isNotFound(appErr *model.AppError) bool {
 	return appErr != nil && appErr.StatusCode == http.StatusNotFound
 }
@@ -1319,6 +1345,7 @@ func (p *Plugin) seedExercise(plan *exercisePlan) error {
 			OutgoingWebhookChannelID: channelID(spec.OutgoingChannelOpKey),
 			CreatedAt:                spec.CreatedAt, Exercise: true, ExerciseTeamID: teamID,
 		}
+		p.seedExerciseBotDeclaration(req, teamID, spec)
 		if spec.Owner != "" {
 			req.OwnerUserID = users[spec.Owner].Id
 		}

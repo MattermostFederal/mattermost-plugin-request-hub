@@ -16,8 +16,37 @@ const STATEMENT_HASH = 'abc123';
 // stubBotForm answers the form's settings request; compliance is off
 // unless asked for.
 async function stubBotForm(page: import('@playwright/test').Page, compliance: {enabled: boolean; text?: string; sha256?: string} = {enabled: false}) {
-    await page.route(`${API}/bot_form`, (route) => route.fulfill({contentType: 'application/json', body: JSON.stringify({compliance})}));
+    const body = JSON.stringify({
+        compliance,
+        hosting_envs: ['mattermost-dev', 'mattermost-prod'],
+        privilege_levels: [
+            {value: 'read', label: 'Read only'},
+            {value: 'post', label: 'Read and post'},
+            {value: 'elevated', label: 'Elevated (admin-level APIs)'},
+        ],
+    });
+    await page.route(`${API}/bot_form`, (route) => route.fulfill({contentType: 'application/json', body}));
 }
+
+// fillDeclaration fills the purpose, privilege, data ingestion and hosting
+// environment fields.
+async function fillDeclaration(page: import('@playwright/test').Page) {
+    await page.getByLabel('Purpose').fill(' Posts build results ');
+    await page.getByLabel('Privilege level').selectOption('post');
+    await page.getByLabel('Data ingestion').fill(' Jenkins payloads ');
+    await page.getByLabel('Hosting environment').selectOption('mattermost-prod');
+}
+
+// DECLARED is what fillDeclaration sends, with the harness's current team
+// and channel as the home.
+const DECLARED = {
+    purpose: 'Posts build results',
+    privilege_level: 'post',
+    data_ingestion: 'Jenkins payloads',
+    hosting_env: 'mattermost-prod',
+    home_team_id: 'team1',
+    home_channel_id: 'chan1',
+};
 
 test.describe('RequestBotModal', () => {
     test.beforeEach(async ({page}) => {
@@ -53,6 +82,7 @@ test.describe('RequestBotModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
         await page.getByLabel('Bot username').fill('helper-bot');
         await page.getByLabel('Display name').fill('Helper Bot');
+        await fillDeclaration(page);
         await page.getByLabel('Request an outgoing webhook').check();
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('A callback URL is required for the outgoing webhook.');
@@ -74,10 +104,11 @@ test.describe('RequestBotModal', () => {
         await expect(page.getByText('An access token lets external systems authenticate as this bot.', {exact: false})).toBeHidden();
         await page.getByLabel('Bot username').fill(' helper-bot ');
         await page.getByLabel('Display name').fill(' Helper Bot ');
+        await fillDeclaration(page);
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('Sent for approval.')).toBeVisible();
-        expect(sent).toEqual({username: 'helper-bot', display_name: 'Helper Bot', request_token: false});
+        expect(sent).toEqual({username: 'helper-bot', display_name: 'Helper Bot', request_token: false, ...DECLARED});
 
         await page.getByRole('button', {name: 'Close'}).click();
         await expect(page.getByText(TITLE)).toBeHidden();
@@ -93,6 +124,7 @@ test.describe('RequestBotModal', () => {
         await page.getByLabel('Bot username').fill('helper-bot');
         await page.getByLabel('Display name').fill('Helper Bot');
         await page.getByLabel('Description (optional)').fill('Posts build results.');
+        await fillDeclaration(page);
 
         await page.getByLabel('Request an incoming webhook').check();
         await expect(page.locator('#iwh-name')).toHaveValue('helper-bot incoming');
@@ -108,6 +140,7 @@ test.describe('RequestBotModal', () => {
             username: 'helper-bot',
             display_name: 'Helper Bot',
             description: 'Posts build results.',
+            ...DECLARED,
             request_token: true,
             incoming_webhook_channel_id: 'chan1',
             incoming_webhook_display_name: 'helper-bot incoming',
@@ -146,7 +179,7 @@ test.describe('RequestBotModal', () => {
             ><RequestBotModal/></StoreHarness>,
         );
         await page.getByLabel('Request an incoming webhook').check();
-        await expect(page.getByText('chan9', {exact: true})).toBeVisible();
+        await expect(page.getByText('chan9', {exact: true})).toHaveCount(2);
         await expect(page.getByText('(Team:', {exact: false})).toBeHidden();
     });
 
@@ -155,6 +188,7 @@ test.describe('RequestBotModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
         await page.getByLabel('Bot username').fill('helper-bot');
         await page.getByLabel('Display name').fill('Helper Bot');
+        await fillDeclaration(page);
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('That username is taken.');
         await expect(page.getByRole('button', {name: 'Submit request'})).toBeEnabled();
@@ -165,6 +199,7 @@ test.describe('RequestBotModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
         await page.getByLabel('Bot username').fill('helper-bot');
         await page.getByLabel('Display name').fill('Helper Bot');
+        await fillDeclaration(page);
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('Request failed (502). Please try again.');
     });
@@ -174,6 +209,7 @@ test.describe('RequestBotModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
         await page.getByLabel('Bot username').fill('helper-bot');
         await page.getByLabel('Display name').fill('Helper Bot');
+        await fillDeclaration(page);
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByRole('alert')).toHaveText('Could not reach the server. Please check your connection and try again.');
     });
@@ -204,10 +240,66 @@ test.describe('RequestBotModal', () => {
         await expect(page.getByText(TITLE)).toBeHidden();
     });
 
+    test('requires each declared field in turn', async ({mount, page}) => {
+        await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+        await page.getByLabel('Bot username').fill('helper-bot');
+        await page.getByLabel('Display name').fill('Helper Bot');
+        const submit = page.getByRole('button', {name: 'Submit request'});
+        await expect(page.getByLabel('Hosting environment').locator('option')).toHaveCount(3);
+
+        await submit.click();
+        await expect(page.getByRole('alert')).toHaveText("Describe the bot's purpose.");
+        await page.getByLabel('Purpose').fill('Posts results');
+        await submit.click();
+        await expect(page.getByRole('alert')).toHaveText('Pick a privilege level.');
+        await page.getByLabel('Privilege level').selectOption('read');
+        await submit.click();
+        await expect(page.getByRole('alert')).toHaveText('Describe the data the bot takes in.');
+        await page.getByLabel('Data ingestion').fill('Build logs');
+        await submit.click();
+        await expect(page.getByRole('alert')).toHaveText('Pick a hosting environment.');
+    });
+
+    test('shows the current channel as the home, and needs a team channel', async ({mount, page}) => {
+        let calls = 0;
+        await page.route(`${API}/submit_bot_request`, async (route) => {
+            calls++;
+            await route.fulfill({contentType: 'application/json', body: '{}'});
+        });
+        await mount(
+            <StoreHarness
+                pluginState={open}
+                entities={{
+                    teams: {currentTeamId: '', teams: {}, myMembers: {}},
+                    channels: {currentChannelId: 'chan9', channels: {}},
+                }}
+            ><RequestBotModal/></StoreHarness>,
+        );
+        await expect(page.getByTestId('bot-home')).toHaveText('chan9');
+        await page.getByLabel('Bot username').fill('helper-bot');
+        await page.getByLabel('Display name').fill('Helper Bot');
+        await fillDeclaration(page);
+        await page.getByRole('button', {name: 'Submit request'}).click();
+        await expect(page.getByRole('alert')).toHaveText("Open this form from a channel of a team: that channel becomes the bot's home.");
+        expect(calls).toBe(0);
+    });
+
+    test('a reopened form clears the declaration', async ({mount, page}) => {
+        await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+        await fillDeclaration(page);
+        await page.getByRole('button', {name: 'Cancel'}).click();
+        await page.getByRole('button', {name: 'harness: open bot'}).click();
+        await expect(page.getByLabel('Purpose')).toHaveValue('');
+        await expect(page.getByLabel('Privilege level')).toHaveValue('');
+        await expect(page.getByLabel('Data ingestion')).toHaveValue('');
+        await expect(page.getByLabel('Hosting environment')).toHaveValue('');
+    });
+
     test.describe('compliance statement', () => {
         const fillBot = async (page: import('@playwright/test').Page) => {
             await page.getByLabel('Bot username').fill('helper-bot');
             await page.getByLabel('Display name').fill('Helper Bot');
+            await fillDeclaration(page);
         };
 
         test('is shown, must be accepted, and its hash is sent', async ({mount, page}) => {
@@ -253,7 +345,8 @@ test.describe('RequestBotModal', () => {
                 await route.fulfill({contentType: 'application/json', body: '{}'});
             });
             await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
-            await fillBot(page);
+            await page.getByLabel('Bot username').fill('helper-bot');
+            await page.getByLabel('Display name').fill('Helper Bot');
             await expect(async () => {
                 await page.getByRole('button', {name: 'Submit request'}).click();
                 await expect(page.getByRole('alert')).toHaveText('Could not load the compliance statement. Close the form and try again.', {timeout: 500});

@@ -75,6 +75,7 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Channel Admin requests | `channel-admin` |✅ |
 | Team, Team Admin, team member and team guest requests | `team-requests` |✅ |
 | Bot requests: two-step approval in each approver mode | `bot-requests` |✅ |
+| Bot requests: declared purpose, privilege, ingestion and environment; home channel joined on approval; bot index entry | `bot-requests` | ✅ |
 | Incoming and outgoing webhook requests | `webhook-requests` |✅ |
 | Pending limit, duplicates, double submit, expiry, pruning | `limits-expiry` |✅ |
 | Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` |✅ |

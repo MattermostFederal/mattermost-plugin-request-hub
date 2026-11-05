@@ -52,9 +52,10 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil)
 	api.On("GetDirectChannel", "u_admin", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 
-	msg, err := p.submitBotRequest("u_admin", botRequestInput{
+	stubBotHome(api)
+	msg, err := p.submitBotRequest("u_admin", declared(botRequestInput{
 		Username: "tokbot", DisplayName: "Token Bot", RequestToken: true,
-	})
+	}))
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")
 	api.AssertNotCalled(t, "CreateBot", mock.Anything)
@@ -88,7 +89,8 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "dm-1"}, nil)
 
-	msg, err := p.submitBotRequest("u_req", botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot", Description: "watches things"})
+	stubBotHome(api)
+	msg, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot", Description: "watches things"}))
 
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")

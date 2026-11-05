@@ -121,9 +121,12 @@ func typedSubmits() []typedSubmit {
 	return append(out,
 		typedSubmit{
 			name: "bot", kind: pendingKindBot, prefix: kvBotRequestPrefix, requesterID: "u_req", key: "ci-bot",
-			setup: stubRequester,
+			setup: func(api *plugintest.API) {
+				stubRequester(api)
+				stubBotHome(api)
+			},
 			submit: func(p *Plugin) (string, error) {
-				return p.submitBotRequest("u_req", botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"})
+				return p.submitBotRequest("u_req", declared(botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"}))
 			},
 		},
 		typedSubmit{

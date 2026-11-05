@@ -430,10 +430,13 @@
         <p>Asks for a guest invite to those channels of the current team. See <a href="team-guest.html">Guest invites</a>.</p>
 
         <h3 id="bot"><code>/mattermost-request-hub bot</code></h3>
-<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; [--description &lt;text&gt;] [--owner @user] [--accept-compliance]</code></pre>
+<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; --purpose &lt;text&gt; --privilege read|post|elevated --ingestion &lt;text&gt; --env &lt;environment&gt; [--description &lt;text&gt;] [--owner @user] [--accept-compliance]</code></pre>
         <p>
-            The username is one word; the display name can be several. Access tokens and webhooks for the bot are
-            only in the form. While bot requesters must accept the compliance statement, the command without
+            The username is one word; the display name can be several. <code>--purpose</code>,
+            <code>--privilege</code>, <code>--ingestion</code> and <code>--env</code> are required, and
+            <code>--env</code> must be one of the hosting environments a System Admin has listed. The channel you run
+            the command in is the bot's home, so run it in a public or private channel of a team. Access tokens and
+            webhooks for the bot are only in the form. While bot requesters must accept the compliance statement, the command without
             <code>--accept-compliance</code> replies with the statement and submits nothing; run it again with the
             flag to accept it. See <a href="bot.html">Bots</a>.
         </p>
@@ -450,7 +453,7 @@
 <pre><code>/mattermost-request-hub team Field Support --description Support for field teams --invite-only
 /mattermost-request-hub team-member @alice,@bob --reason Joining the ops rotation
 /mattermost-request-hub team-guest guest@example.com --channels ~town-square ~vendor-chat
-/mattermost-request-hub bot build-bot Build Bot --description Posts build results --owner @carol --accept-compliance
+/mattermost-request-hub bot build-bot Build Bot --owner @carol --purpose Posts build results --privilege post --ingestion Jenkins webhooks --env mattermost-prod --accept-compliance
 /mattermost-request-hub webhook-outgoing ~deploys Deploy Hook --callback https://ci.example.com/hook</code></pre>
         <p>
             If something is wrong, the reply starts <em>Could not read the request:</em>, says what, and repeats

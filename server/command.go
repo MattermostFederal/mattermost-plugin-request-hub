@@ -38,7 +38,7 @@ const (
 	teamArgsHint            = "<Team name> [--name <url name>] [--description <text>] [--invite-only] [--team-admin]"
 	teamMemberArgsHint      = "@user [@user ...] [--reason <text>]"
 	teamGuestArgsHint       = "<email> --channels ~channel [~channel ...] [--reason <text>]"
-	botArgsHint             = "<username> <Display name> [--description <text>] [--owner @user] [--accept-compliance]"
+	botArgsHint             = "<username> <Display name> --purpose <text> --privilege read|post|elevated --ingestion <text> --env <environment> [--description <text>] [--owner @user] [--accept-compliance]"
 	incomingWebhookArgsHint = "~channel <Display name> [--description <text>]"
 	outgoingWebhookArgsHint = "~channel <Display name> --callback <url> [--description <text>]"
 	subcommandPrefixes      = "prefixes"
@@ -327,7 +327,13 @@ func (p *Plugin) executeBotRequestCommand(args *model.CommandArgs) (*model.Comma
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return ephemeralResponse(botRequestsDisabledMsg), nil
 	}
-	if err := p.openBotRequestDialog(args.TriggerId); err != nil {
+	// The channel the form is opened from is the bot's home, so it must be
+	// a team's public or private channel.
+	home, appErr := p.API.GetChannel(args.ChannelId)
+	if appErr != nil || home == nil || (home.Type != model.ChannelTypeOpen && home.Type != model.ChannelTypePrivate) {
+		return ephemeralResponse(botHomeMissingMsg), nil
+	}
+	if err := p.openBotRequestDialog(args.TriggerId, home); err != nil {
 		p.API.LogError("failed to open bot request dialog", "error", err.Error())
 		return ephemeralResponse("Could not open the bot request form. Please try again."), nil
 	}
@@ -833,15 +839,17 @@ func (p *Plugin) executeTeamGuestInviteCommand(args *model.CommandArgs, params [
 }
 
 // executeBotCreateCommand submits a bot account request without the form.
-// Like the form it takes the account fields only; the token and webhook
-// extras are offered in the webapp.
+// Like the form it takes the account fields and the declaration, and the
+// channel it is run in is the bot's home; the token and webhook extras are
+// offered in the webapp.
 func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return ephemeralResponse(botRequestsDisabledMsg)
 	}
 
 	usage := func(err error) *model.CommandResponse { return usageReply(err, "bot", botArgsHint) }
-	positional, flags, err := readArgs(params, "--description", "--owner", "--accept-compliance")
+	positional, flags, err := readArgs(params, "--description", "--owner", "--accept-compliance",
+		"--purpose", "--privilege", "--ingestion", "--env")
 	if err != nil {
 		return usage(err)
 	}
@@ -857,6 +865,22 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		return usage(err)
 	}
 	owner, err := flagOne(flags, "--owner")
+	if err != nil {
+		return usage(err)
+	}
+	purpose, err := flagText(flags, "--purpose", "some text")
+	if err != nil {
+		return usage(err)
+	}
+	privilege, err := flagOne(flags, "--privilege")
+	if err != nil {
+		return usage(err)
+	}
+	ingestion, err := flagText(flags, "--ingestion", "some text")
+	if err != nil {
+		return usage(err)
+	}
+	env, err := flagOne(flags, "--env")
 	if err != nil {
 		return usage(err)
 	}
@@ -885,6 +909,13 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		DisplayName: strings.Join(positional[1:], " "),
 		Description: description,
 		OwnerUserID: ownerID,
+
+		Purpose:        purpose,
+		PrivilegeLevel: privilege,
+		DataIngestion:  ingestion,
+		HostingEnv:     env,
+		HomeTeamID:     args.TeamId,
+		HomeChannelID:  args.ChannelId,
 
 		ComplianceAccepted: accepted,
 	}))

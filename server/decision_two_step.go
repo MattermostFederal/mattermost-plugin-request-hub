@@ -323,6 +323,19 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	var outgoingWebhookCreated bool
 	var partialErrors []string
 
+	p.writeBotIndex(req, bot, actingUser.Id)
+	// The bot joins its home channel even without a webhook, so it is
+	// visible where its requester said it belongs.
+	homeJoined := false
+	if req.HomeChannelID != "" {
+		if joinErr := p.addBotToChannel(bot.UserId, req.HomeChannelID); joinErr != nil {
+			partialErrors = append(partialErrors, fmt.Sprintf("adding the bot to its home channel failed: %s", joinErr.Error()))
+			p.API.LogError("failed to add bot to its home channel", "bot_user_id", bot.UserId, "channel_id", req.HomeChannelID, "error", joinErr.Error())
+		} else {
+			homeJoined = true
+		}
+	}
+
 	wantsToken := req.RequestToken
 	wantsIncoming := req.IncomingWebhookChannelID != ""
 	wantsOutgoing := req.OutgoingWebhookChannelID != ""
@@ -347,7 +360,7 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 
 	if wantsIncoming && authToken != "" && siteURL != "" {
 		// The hook's owner is the bot, which must be able to read the channel.
-		if joinErr := p.addBotToWebhookChannel(bot.UserId, req.IncomingWebhookChannelID); joinErr != nil {
+		if joinErr := p.addBotToChannel(bot.UserId, req.IncomingWebhookChannelID); joinErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("incoming webhook creation failed: %s", joinErr.Error()))
 			p.API.LogError("failed to add bot to incoming webhook channel", "bot_user_id", bot.UserId, "error", joinErr.Error())
 		} else {
@@ -426,6 +439,9 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		"token_created":            tokenValue != "",
 		"incoming_webhook_created": incomingWebhookURL != "",
 		"outgoing_webhook_id":      outgoingHookID,
+		"home_team_id":             req.HomeTeamID,
+		"home_channel_id":          req.HomeChannelID,
+		"home_channel_joined":      homeJoined,
 		"problems":                 partialErrors,
 	})
 	result := p.finish(cards, "", outcome, ticketClose{

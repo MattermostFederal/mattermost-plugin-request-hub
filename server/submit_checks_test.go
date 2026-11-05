@@ -161,7 +161,8 @@ func TestSystemAdminBotRequestQueues(t *testing.T) {
 	p, api := newQueuePlugin(t)
 	stubSystemAdminQueue(api)
 
-	msg, err := p.submitBotRequest(testSysAdminID, botRequestInput{Username: "tokbot", DisplayName: "Token Bot", RequestToken: true})
+	stubBotHome(api)
+	msg, err := p.submitBotRequest(testSysAdminID, declared(botRequestInput{Username: "tokbot", DisplayName: "Token Bot", RequestToken: true}))
 
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")
@@ -635,7 +636,7 @@ func TestSubmitTeamGuestRequest_Refusals(t *testing.T) {
 }
 
 func TestSubmitBotRequest_Refusals(t *testing.T) {
-	ok := botRequestInput{Username: "svcbot", DisplayName: "Service Bot"}
+	ok := declared(botRequestInput{Username: "svcbot", DisplayName: "Service Bot"})
 	with := func(edit func(in *botRequestInput)) botRequestInput {
 		in := ok
 		edit(&in)
@@ -681,6 +682,49 @@ func TestSubmitBotRequest_Refusals(t *testing.T) {
 			stubRequester(api)
 			api.On("GetChannel", "ch-in").Return(&model.Channel{Id: "ch-in", Type: model.ChannelTypeOpen, DeleteAt: 1}, nil)
 		}, wantErr: "incoming webhook channel: webhooks can't target an archived channel"}, with(func(in *botRequestInput) { in.IncomingWebhookChannelID = "ch-in" })},
+		{submitCase{name: "no purpose", wantErr: "Describe the bot's purpose."}, with(func(in *botRequestInput) { in.Purpose = "  " })},
+		{submitCase{name: "purpose too long", wantErr: "Purpose must be"}, with(func(in *botRequestInput) { in.Purpose = strings.Repeat("p", maxDescriptionLen+1) })},
+		{submitCase{name: "no privilege level", wantErr: "Pick a privilege level: read, post, elevated."}, with(func(in *botRequestInput) { in.PrivilegeLevel = "" })},
+		{submitCase{name: "unknown privilege level", wantErr: "Pick a privilege level"}, with(func(in *botRequestInput) { in.PrivilegeLevel = "root" })},
+		{submitCase{name: "no data ingestion", wantErr: "Describe the data the bot takes in."}, with(func(in *botRequestInput) { in.DataIngestion = "" })},
+		{submitCase{name: "data ingestion too long", wantErr: "Data ingestion must be"}, with(func(in *botRequestInput) { in.DataIngestion = strings.Repeat("d", maxDescriptionLen+1) })},
+		{submitCase{name: "unknown hosting environment", wantErr: "Pick a hosting environment: mattermost-dev, mattermost-prod."}, with(func(in *botRequestInput) { in.HostingEnv = "staging" })},
+		{submitCase{name: "environment not in the configured list", cfg: &configuration{AllowBotTokenRequests: true, BotHostingEnvironments: "lab"}, wantErr: "Pick a hosting environment: lab."}, ok},
+		{submitCase{name: "no home", setup: stubRequester, wantErr: botHomeMissingMsg}, with(func(in *botRequestInput) { in.HomeChannelID = "" })},
+		{submitCase{name: "requester not on the home team", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(nil, testAppErr("not a member"))
+		}, wantErr: "home team must be a team you're a member of"}, ok},
+		{submitCase{name: "home channel in another team", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetChannel", testHomeChannelID).Return(&model.Channel{Id: testHomeChannelID, TeamId: "team2", Type: model.ChannelTypeOpen}, nil)
+		}, wantErr: botHomeMissingMsg}, ok},
+		{submitCase{name: "requester not in the home channel", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetChannel", testHomeChannelID).Return(&model.Channel{Id: testHomeChannelID, TeamId: "team1", Type: model.ChannelTypePrivate, DeleteAt: 1}, nil)
+			api.On("GetChannelMember", testHomeChannelID, "u_req").Return(nil, testAppErr("not a member"))
+		}, wantErr: "home channel must be a channel you're a member of"}, ok},
+		{submitCase{name: "home channel is a group message", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetChannel", testHomeChannelID).Return(&model.Channel{Id: testHomeChannelID, TeamId: "team1", Type: model.ChannelTypeGroup}, nil)
+			api.On("GetChannelMember", testHomeChannelID, "u_req").Return(&model.ChannelMember{}, nil)
+		}, wantErr: botHomeMissingMsg}, ok},
+		{submitCase{name: "home channel archived", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetChannel", testHomeChannelID).Return(&model.Channel{Id: testHomeChannelID, Name: "old", TeamId: "team1", Type: model.ChannelTypeOpen, DeleteAt: 1}, nil)
+			api.On("GetChannelMember", testHomeChannelID, "u_req").Return(&model.ChannelMember{}, nil)
+		}, wantErr: "~old is archived, so it can't be the bot's home channel."}, ok},
+		{submitCase{name: "home team archived", setup: func(api *plugintest.API) {
+			stubRequester(api)
+			api.On("GetTeamMember", "team1", "u_req").Return(&model.TeamMember{}, nil)
+			api.On("GetChannel", testHomeChannelID).Return(&model.Channel{Id: testHomeChannelID, TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+			api.On("GetChannelMember", testHomeChannelID, "u_req").Return(&model.ChannelMember{}, nil)
+			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DeleteAt: 1}, nil)
+		}, wantErr: "home team is archived"}, ok},
 		{submitCase{name: "outgoing channel not found", setup: func(api *plugintest.API) {
 			stubRequester(api)
 			api.On("GetChannel", "ch-out").Return(nil, testAppErr("no channel"))

@@ -110,7 +110,14 @@ func slashComplianceText(c *configuration) string {
 
 // botFormDTO is what the webapp's bot form needs from the server.
 type botFormDTO struct {
-	Compliance botComplianceDTO `json:"compliance"`
+	Compliance      botComplianceDTO `json:"compliance"`
+	HostingEnvs     []string         `json:"hosting_envs"`
+	PrivilegeLevels []botOptionDTO   `json:"privilege_levels"`
+}
+
+type botOptionDTO struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 type botComplianceDTO struct {
@@ -120,13 +127,17 @@ type botComplianceDTO struct {
 }
 
 // handleBotForm serves the bot form's settings: whether the compliance
-// statement is required, its text and its hash.
+// statement is required, its text and its hash, and the hosting
+// environments and privilege levels to pick from.
 func (p *Plugin) handleBotForm(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
 	c := p.getConfiguration()
-	out := botFormDTO{}
+	out := botFormDTO{HostingEnvs: c.HostingEnvs()}
+	for _, level := range botPrivilegeLevels {
+		out.PrivilegeLevels = append(out.PrivilegeLevels, botOptionDTO{Value: level.Value, Label: level.Label})
+	}
 	if c.BotComplianceRequired() {
 		text := c.BotComplianceText()
 		out.Compliance = botComplianceDTO{Enabled: true, Text: text, SHA256: complianceHash(text)}

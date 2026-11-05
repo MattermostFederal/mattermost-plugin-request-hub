@@ -120,6 +120,9 @@ type configuration struct {
 	// (see BotComplianceText).
 	BotComplianceEnabled   bool
 	BotComplianceStatement string
+	// BotHostingEnvironments lists, one per line, the hosting environments
+	// a bot requester picks from (see HostingEnvs).
+	BotHostingEnvironments string
 	AllowWebhookRequests   bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---

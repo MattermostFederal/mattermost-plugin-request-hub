@@ -95,6 +95,7 @@ func TestTwoStepActionHandlers_FinalClaimErrorChangesNothing(t *testing.T) {
 		{
 			name: "bot", handler: botActionHandler, kvPrefix: kvBotRequestPrefix, record: pendingBotRequest(securityStepDone()),
 			guard: func(_ *testing.T, api *plugintest.API, _ *Plugin) {
+				stubBotIndexWrite(api)
 				api.On("CreateBot", mock.Anything).Return(&model.Bot{UserId: "new-bot-id"}, nil).Maybe()
 			},
 			check: func(t *testing.T, api *plugintest.API) { api.AssertNotCalled(t, "CreateBot", mock.Anything) },
@@ -403,6 +404,7 @@ func finalBot(t *testing.T, api *plugintest.API, req *botRequest) {
 	raw := mustMarshal(t, req)
 	stubSystemAdmin(api)
 	stubRequester(api)
+	stubBotIndexWrite(api)
 	api.On("KVGet", kvBotRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvBotRequestPrefix+"r1", raw).Return(true, nil).Once()
 	api.On("CreateBot", mock.MatchedBy(func(bot *model.Bot) bool {

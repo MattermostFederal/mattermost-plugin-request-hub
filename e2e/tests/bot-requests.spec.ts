@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import type {Post} from '@mattermost/types/posts';
 import type {IncomingWebhook} from '@mattermost/types/integrations';
 
-import {ACCEPT, actionIds, attachmentOf, botCardsMentioning, botName, botRecordsOf, createAttribute, createGroup, dmsMentioning, fieldValue, joinBotChannel, listenForEphemerals, pendingBotIds, setAttribute, storedBotRequest, submitBot, userNamed, type BotRequestBody} from '../helpers/bots';
+import {ACCEPT, DECLARE, DECLARED, actionIds, attachmentOf, botCardsMentioning, botName, botRecordsOf, createAttribute, createGroup, dmsMentioning, fieldValue, joinBotChannel, listenForEphemerals, pendingBotIds, setAttribute, storedBotRequest, submitBot, userNamed, type BotRequestBody} from '../helpers/bots';
 import {expect, test} from '../helpers/fixtures';
 import {ADMIN, HUB_BOT, PASSWORD, PLUGIN_ID, REQUEST_CHANNELS, cardRequestId, uid, type RequestHub, type TestUser} from '../helpers/requesthub';
 
@@ -101,6 +101,13 @@ async function expectApproved(hub: RequestHub, requester: TestUser, s: Submitted
 
     expect(await storedBotRequest(hub, s.requestId)).toBeUndefined();
     expect(await pendingBotIds(hub, requester.id)).not.toContain(s.requestId);
+
+    // The bot joined its home, town-square, and is indexed by its user ID.
+    await admin.getChannelMember(await hub.channelId('town-square'), botUser!.id);
+    expect(await hub.kv(`bot_index_${botUser!.id}`)).toMatchObject({
+        bot_user_id: botUser!.id, request_id: s.requestId, username, requester_id: requester.id, ...DECLARED,
+        home_team_id: hub.teamId, home_channel_id: await hub.channelId('town-square'),
+    });
     return botUser!.id;
 }
 
@@ -144,13 +151,18 @@ test.describe('submit', () => {
         const requester = await hub.createUser();
         const owner = await hub.createUser();
         const username = botName();
-        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --description from slash --owner @${owner.username} ${ACCEPT}`);
+        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --description from slash --owner @${owner.username} ${DECLARE} ${ACCEPT}`);
         expect(reply).toBe(SUBMITTED);
 
         const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
         expect(attachmentOf(card)?.text).toContain('**Display name:** Slash Bot');
         expect(attachmentOf(card)?.text).toContain('**Description:** from slash');
         expect(attachmentOf(card)?.text).toContain(`**Owner:** @${owner.username}`);
+        expect(attachmentOf(card)?.text).toContain('**Purpose:** E2E test bot');
+        expect(attachmentOf(card)?.text).toContain('**Privilege:** Read and post');
+        expect(attachmentOf(card)?.text).toContain('**Data ingestion:** None');
+        expect(attachmentOf(card)?.text).toContain('**Environment:** mattermost\\-dev');
+        expect(attachmentOf(card)?.text).toContain('**Home:** #town-square (Team: Test)');
         const s = {card, requestId: cardRequestId(card)};
         const stored = await storedBotRequest(hub, s.requestId);
         expect(stored).toMatchObject({requester_id: requester.id, owner_user_id: owner.id});
@@ -170,7 +182,7 @@ test.describe('submit', () => {
         const username = botName();
         const s = await submitOK(hub, requester, {username});
         expect(await submitBot(hub, requester.username, {username})).toEqual({error: `you already have a pending request for bot @${username}`});
-        expect(await hub.slash(requester.username, `bot ${username} Again ${ACCEPT}`)).toBe(`you already have a pending request for bot @${username}`);
+        expect(await hub.slash(requester.username, `bot ${username} Again ${DECLARE} ${ACCEPT}`)).toBe(`you already have a pending request for bot @${username}`);
         expect(await botRecordsOf(hub, requester.id)).toEqual([`bot_request_${s.requestId}`]);
         expect(await pendingBotIds(hub, requester.id)).toEqual([s.requestId]);
         expect(await botCardsMentioning(hub, `@${username}"`)).toHaveLength(1);
@@ -281,6 +293,23 @@ test.describe('submit', () => {
             error: 'the callback URL must be an http or https address',
             body: async (h, _r, u) => ({username: u, outgoing_webhook_channel_id: await townSquare(h), outgoing_webhook_callback_url: 'ftp://example.com/hook'}),
         },
+        {title: 'no purpose', error: "Describe the bot's purpose.", body: async (_h, _r, u) => ({username: u, purpose: ' '})},
+        {title: 'unknown privilege level', error: 'Pick a privilege level: read, post, elevated.', body: async (_h, _r, u) => ({username: u, privilege_level: 'root'})},
+        {title: 'no data ingestion', error: 'Describe the data the bot takes in.', body: async (_h, _r, u) => ({username: u, data_ingestion: ''})},
+        {title: 'unknown hosting environment', error: 'Pick a hosting environment: mattermost-dev, mattermost-prod.', body: async (_h, _r, u) => ({username: u, hosting_env: 'staging'})},
+        {
+            title: 'home channel the requester is not in',
+            error: "The bot's home channel must be a channel you're a member of.",
+            body: async (h, _r, u) => ({username: u, home_channel_id: await newChannel(h, 'P')}),
+        },
+        {
+            title: 'direct message as home channel',
+            error: 'A bot request needs a home channel: submit it from a public or private channel of a team you\'re in.',
+            body: async (h, r, u) => {
+                const dm = await (await h.client(r.username)).createDirectChannel([r.id, h.userIds.bob]);
+                return {username: u, home_channel_id: dm.id};
+            },
+        },
         {title: 'owner that is not an ID', error: 'The bot owner must be picked from the list.', body: async (_h, _r, u) => ({username: u, bot_owner: 'not-an-id'})},
         {
             title: 'deactivated owner',
@@ -389,7 +418,7 @@ test.describe('compliance statement', () => {
                 `Bot requests need you to accept this statement:\n\n> ${statement}\n\nTo accept it, run the command again with \`--accept-compliance\`.`);
             await expectNothingSubmitted(hub, requester, username);
 
-            expect(await hub.slash(requester.username, `bot ${username} Custom Bot ${ACCEPT}`)).toBe(SUBMITTED);
+            expect(await hub.slash(requester.username, `bot ${username} Custom Bot ${DECLARE} ${ACCEPT}`)).toBe(SUBMITTED);
             const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
             expect((await storedBotRequest(hub, cardRequestId(card)))?.compliance).toMatchObject({text: statement, text_sha256: sha256(statement)});
         });
@@ -398,7 +427,15 @@ test.describe('compliance statement', () => {
     test('when it is off nothing is asked or stored', async ({hub}) => {
         const requester = await hub.createUser();
         await hub.withPluginConfig({botcomplianceenabled: false}, async () => {
-            expect(await hub.pluginFetch(requester.username, '/api/v1/bot_form')).toEqual({compliance: {enabled: false}});
+            expect(await hub.pluginFetch(requester.username, '/api/v1/bot_form')).toEqual({
+                compliance: {enabled: false},
+                hosting_envs: ['mattermost-dev', 'mattermost-prod'],
+                privilege_levels: [
+                    {value: 'read', label: 'Read only'},
+                    {value: 'post', label: 'Read and post'},
+                    {value: 'elevated', label: 'Elevated (admin-level APIs)'},
+                ],
+            });
             const username = botName();
             const s = await submitOK(hub, requester, {username, compliance_accepted: false});
             expect((await storedBotRequest(hub, s.requestId))?.compliance).toBeUndefined();
@@ -658,7 +695,7 @@ test.describe('attribute mode', () => {
             await pools.security(security);
             await pools.system(system);
             await joinBotChannel(hub, security, system);
-            const reply = await hub.slash(requester.username, `bot ${username} Attr Bot ${ACCEPT}`);
+            const reply = await hub.slash(requester.username, `bot ${username} Attr Bot ${DECLARE} ${ACCEPT}`);
             expect(reply).toBe(SUBMITTED);
             const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
             const s = {card, requestId: cardRequestId(card)};
