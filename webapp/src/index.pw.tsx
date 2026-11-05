@@ -137,7 +137,7 @@ test.describe('plugin entry point', () => {
         const r = await recorded(page);
         expect(r.errors).toEqual(['[channel-requests] channel-header button failed to initialize']);
         expect(r.menus).toHaveLength(9);
-        expect(r.adminSettings).toHaveLength(2);
+        expect(r.adminSettings).toHaveLength(5);
     });
 
     test('skips the admin console settings on servers without them', async ({mount, page}) => {

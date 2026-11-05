@@ -212,13 +212,33 @@ func TestCanApproveStep(t *testing.T) {
 		require.True(t, ok)
 	})
 
-	t.Run("usergroup mode: a custom group with the configured name qualifies its members", func(t *testing.T) {
+	t.Run("usergroup mode: a custom group with the configured name does not qualify", func(t *testing.T) {
 		api := &plugintest.API{}
 		stubLogs(api)
 		p := newTestPlugin(api)
 		p.setConfiguration(&configuration{
 			TwoStepApproverMode:   twoStepModeUserGroup,
 			SecurityApproverGroup: "security-approvers",
+		})
+		name := "security-approvers"
+		custom := &model.Group{Id: "g-custom", Name: &name, Source: model.GroupSourceCustom}
+		api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+		api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{custom}, nil)
+		api.On("GetGroupsBySource", model.GroupSourceLdap).Return([]*model.Group{}, nil)
+		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
+		require.NoError(t, err)
+		require.False(t, ok)
+		api.AssertNotCalled(t, "GetGroupsForUser", mock.Anything)
+	})
+
+	t.Run("usergroup mode: a custom group qualifies its members when custom groups are allowed", func(t *testing.T) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		p := newTestPlugin(api)
+		p.setConfiguration(&configuration{
+			TwoStepApproverMode:       twoStepModeUserGroup,
+			SecurityApproverGroup:     "security-approvers",
+			AllowCustomApproverGroups: true,
 		})
 		name := "security-approvers"
 		custom := &model.Group{Id: "g-custom", Name: &name, Source: model.GroupSourceCustom}

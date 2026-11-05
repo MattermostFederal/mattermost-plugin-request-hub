@@ -84,7 +84,7 @@ func (c *configuration) approverGroupName(step approverStep) string {
 //
 //   - attribute: security = holders of the configured CPA attribute.
 //   - usergroup: security = members of the configured Mattermost group
-//     (custom or LDAP/plugin-synced).
+//     (LDAP/plugin-synced, or custom when AllowCustomApproverGroups is on).
 //   - system_admin: security = System Admins (setup backup).
 //
 // The system step is always System Admins — never a second group/attribute.
@@ -153,7 +153,7 @@ func (p *Plugin) canApproveStepViaGroup(user *model.User, step approverStep) (bo
 }
 
 // userInApproverGroup reports whether userID belongs to the configured
-// Mattermost group (custom or LDAP/plugin-synced). It returns an error when
+// Mattermost group (LDAP/plugin-synced, or custom when allowed). It returns an error when
 // that group can't be found, so callers don't treat a failed lookup as "not a
 // member".
 func (p *Plugin) userInApproverGroup(userID, groupName string) (bool, error) {

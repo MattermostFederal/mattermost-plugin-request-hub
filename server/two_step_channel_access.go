@@ -96,6 +96,9 @@ func (p *Plugin) syncTwoStepApproverChannels() {
 	ids := p.listTwoStepApproverUserIDs()
 	p.API.LogInfo("two-step channel access: reseeding approvers into bot/webhook channels",
 		"count", len(ids))
+	if len(ids) == 0 {
+		p.warnNoSecurityApprovers()
+	}
 	for _, userID := range ids {
 		if userID == "" || userID == p.botUserID {
 			continue
@@ -109,6 +112,24 @@ func (p *Plugin) syncTwoStepApproverChannels() {
 // group to the channel with AutoAdd. Custom user groups are skipped —
 // Mattermost only syncs LDAP/plugin group sources (custom members are
 // added individually via listTwoStepApproverUserIDs).
+// warnNoSecurityApprovers logs, once per sync (activation and each change
+// to the pool settings), that the security pool has nobody in it. Bot and
+// webhook requests then wait at the security step: System Admins don't
+// cover it in attribute or usergroup mode.
+func (p *Plugin) warnNoSecurityApprovers() {
+	cfg := p.getConfiguration()
+	switch cfg.twoStepMode() {
+	case twoStepModeUserGroup:
+		p.API.LogWarn("two-step approvals: the security approver group has no usable members, so bot and webhook requests can't get a security approval. "+
+			"Create the group and add members, or, for a custom group, turn on Allow custom approver groups.",
+			"group", cfg.approverGroupName(stepSecurity))
+	case twoStepModeAttribute:
+		p.API.LogWarn("two-step approvals: nobody holds the security approver attribute, so bot and webhook requests can't get a security approval. "+
+			"Create the attribute (admin-managed or synced) and set it on the security reviewers.",
+			"attribute", cfg.approverAttributeName(stepSecurity))
+	}
+}
+
 func (p *Plugin) linkTwoStepGroupsToChannel(ch *model.Channel) {
 	if ch == nil || p.getConfiguration().twoStepMode() != twoStepModeUserGroup {
 		return
@@ -360,9 +381,10 @@ func normalizeApproverGroupName(groupName string) string {
 }
 
 // resolveApproverGroup finds the group configured as the security approver
-// pool, by name or display name. Custom, LDAP, and plugin-synced groups are
-// all accepted. Returns an error when no such group can be found; it never
-// returns (nil, nil).
+// pool, by name or display name. LDAP and plugin-synced groups are accepted;
+// a custom group is accepted only when AllowCustomApproverGroups is on,
+// because a custom group's managers choose its members. Returns an error
+// when no usable group can be found; it never returns (nil, nil).
 func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	groupName = normalizeApproverGroupName(groupName)
 	if groupName == "" {
@@ -370,11 +392,17 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	}
 
 	want := strings.ToLower(groupName)
+	allowCustom := p.getConfiguration().AllowCustomApproverGroups
+	customMatch := false
 	match := func(g *model.Group) bool {
 		if g == nil || g.DeleteAt != 0 {
 			return false
 		}
 		if (g.Name == nil || strings.ToLower(*g.Name) != want) && strings.ToLower(g.DisplayName) != want {
+			return false
+		}
+		if g.Source == model.GroupSourceCustom && !allowCustom {
+			customMatch = true
 			return false
 		}
 		return true
@@ -404,7 +432,12 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 		}
 	}
 
-	p.API.LogWarn("two-step channel access: could not resolve approver group", "group", groupName)
+	if customMatch {
+		p.API.LogWarn("two-step channel access: the approver group is a custom group; turn on Allow custom approver groups to use it, or name an LDAP or plugin-synced group",
+			"group", groupName)
+	} else {
+		p.API.LogWarn("two-step channel access: could not resolve approver group", "group", groupName)
+	}
 	return nil, errors.Errorf("approver group %q not found", groupName)
 }
 

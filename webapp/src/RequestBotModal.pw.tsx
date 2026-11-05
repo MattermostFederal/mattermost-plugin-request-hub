@@ -28,7 +28,7 @@ async function stubBotForm(page: import('@playwright/test').Page, compliance: {e
 
 async function mockHomeLists(page: import('@playwright/test').Page) {
     await page.route(`${API}/teams`, (route) => route.fulfill({contentType: 'application/json', body: JSON.stringify(TEAMS)}));
-    await page.route(new RegExp(`${API}/channels\\?team_id=`), async (route) => {
+    await page.route((url) => url.pathname.endsWith('/api/v1/channels') && url.searchParams.has('team_id'), async (route) => {
         const url = new URL(route.request().url());
         const teamId = url.searchParams.get('team_id');
         const list = teamId === 'team2' ? CHANNELS_T2 : CHANNELS_T1;
@@ -69,11 +69,12 @@ test.describe('RequestBotModal', () => {
         await page.getByLabel('Display name').fill('Helper Bot');
         await page.getByLabel('Purpose').fill('CI notifier');
         await page.getByRole('button', {name: 'Submit request'}).click();
+        await expect(page.getByRole('alert')).toHaveText('An integration endpoint is required (https URL).');
+        await page.getByLabel('Integration endpoint').fill('https://ci.example/hooks/mm');
+        await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByTestId('bot-arch-confirm')).toBeVisible();
         await page.getByRole('button', {name: 'Go back'}).click();
-        await page.getByLabel('Architecture link (optional)').fill('https://docs.example/arch');
-        await page.getByRole('button', {name: 'Submit request'}).click();
-        await expect(page.getByRole('alert')).toHaveText('An integration endpoint is required (https URL).');
+        await expect(page.getByTestId('bot-arch-confirm')).toHaveCount(0);
     });
 
     test('Other hosting requires a specify field', async ({mount, page}) => {
@@ -89,7 +90,7 @@ test.describe('RequestBotModal', () => {
             await route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'ok'})});
         });
         await page.getByRole('button', {name: 'Submit request'}).click();
-        await expect(page.getByText('ok')).toBeVisible();
+        await expect(page.getByText('ok', {exact: true})).toBeVisible();
         expect(sent).toMatchObject({
             hosting_env: 'other',
             hosting_other_detail: 'air-gapped rack',

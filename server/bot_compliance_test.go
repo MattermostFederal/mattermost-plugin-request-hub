@@ -176,7 +176,10 @@ func TestHandleBotForm(t *testing.T) {
 	p.setConfiguration(&configuration{})
 	w := serve(p, http.MethodGet, routeBotForm, "u1", "")
 	require.Equal(t, http.StatusOK, w.Code)
-	require.JSONEq(t, `{"compliance":{"enabled":false}}`, w.Body.String())
+	require.JSONEq(t, `{"compliance":{"enabled":false},"hosting_envs":[`+
+		`{"value":"ci_cd","label":"CI/CD pipeline"},{"value":"on_prem_server","label":"On-prem server / VM"},`+
+		`{"value":"cloud_or_k8s","label":"Cloud VM / Kubernetes"},{"value":"workstation","label":"Developer workstation"},`+
+		`{"value":"external_saas","label":"External SaaS / vendor"},{"value":"other","label":"Other"}]}`, w.Body.String())
 
 	p.setConfiguration(&configuration{BotComplianceEnabled: true, BotComplianceStatement: "Be good."})
 	w = serve(p, http.MethodGet, routeBotForm, "u1", "")

@@ -67,7 +67,6 @@ func TestCheckBotDeclaration_Required(t *testing.T) {
 	require.Equal(t, privilegeUserEquivalent, got.PrivilegeLevel)
 	require.Equal(t, mmPrivilegeMemberUserOnly, got.MMPrivilege)
 	require.Equal(t, defaultChannelAccessNote, got.DataIngestion)
-	require.True(t, got.TransitSecurity)
 
 	_, err = checkBotDeclaration(nil, botDeclaration{Purpose: "Posts", HostingEnv: hostingCICD})
 	require.ErrorContains(t, err, "integration endpoint is required")
@@ -94,6 +93,26 @@ func TestCheckBotDeclaration_Required(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "air-gapped", got.HostingOtherDetail)
+}
+
+func TestCheckSecureHTTPSURL_SchemeOnly(t *testing.T) {
+	for _, ok := range []string{
+		"https://ci.example/hook",
+		"HTTPS://ci.example/hook",
+		"https://ci.example/hook?next=data:x&from=file:y",
+	} {
+		require.NoError(t, checkSecureHTTPSURL("URL", ok, maxBotURLLen), ok)
+	}
+	for _, bad := range []string{
+		"javascript:alert(1)",
+		"data:text/html,x",
+		"file:///etc/passwd",
+		"http://ci.example/hook",
+		"https://",
+		"ci.example/hook",
+	} {
+		require.Error(t, checkSecureHTTPSURL("URL", bad, maxBotURLLen), bad)
+	}
 }
 
 func TestBotApprovalAttachment_ShowsTheDeclarationAndHome(t *testing.T) {

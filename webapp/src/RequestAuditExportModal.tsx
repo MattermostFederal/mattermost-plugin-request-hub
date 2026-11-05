@@ -91,7 +91,7 @@ export const RequestAuditExportModal = () => {
     const [kind, setKind] = useState('');
     const [env, setEnv] = useState('');
     const [bot, setBot] = useState('');
-    const [envs, setEnvs] = useState<string[]>([]);
+    const [envs, setEnvs] = useState<Array<{value: string; label: string}>>([]);
     const [requester, setRequester] = useState('');
     const [since, setSince] = useState('');
     const [until, setUntil] = useState('');
@@ -117,8 +117,8 @@ export const RequestAuditExportModal = () => {
     };
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
-    // The bot inventory is narrowed by the hosting environments bot
-    // requesters pick from. Without them the field is a free text box.
+    // The bot inventory is narrowed by the fixed hosting codes the server
+    // lists. Without them the field is a free text box.
     useEffect(() => {
         if (!isOpen) {
             return undefined;
@@ -284,11 +284,11 @@ export const RequestAuditExportModal = () => {
                                         disabled={submitting}
                                     >
                                         <option value=''>{'All environments'}</option>
-                                        {envs.map((value) => (
+                                        {envs.map((opt) => (
                                             <option
-                                                key={value}
-                                                value={value}
-                                            >{value}</option>
+                                                key={opt.value}
+                                                value={opt.value}
+                                            >{opt.label}</option>
                                         ))}
                                     </select>
                                 ) : (

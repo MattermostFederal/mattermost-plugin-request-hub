@@ -79,22 +79,25 @@
         <img src="images/bot-request/mattermost-bot-approval-card.png" alt="Bot approval card">
         <img src="images/bot-request/mattermost-bot-token-dm.png" alt="Bot token DM">
         <p>
-            Unless a System Admin has turned it off (<em>Require bot compliance acceptance</em>), the form shows a
-            compliance statement and you must tick <em>I accept the compliance statement above</em> to submit. The
+            Unless a System Admin has turned it off (<em>Require bot compliance acceptance</em>), <em>Submit request</em>
+            opens the Terms and Conditions: tick <em>I have read and agree to the Terms and Conditions above.</em> and
+            click <em>Agree and submit</em>. The
             request keeps the exact text you accepted and when, the approval card shows it was accepted, and the
             audit history records it. If the statement changes while the form is open, submitting asks you to read
             it again. With the slash command, add <code>--accept-compliance</code>; without it, the reply shows the
             statement. Agents can't submit bot requests while the statement is required.
         </p>
         <p>
-            Every bot request also declares the bot's <em>Purpose</em>, its <em>Privilege level</em> (read only,
-            read and post, or elevated), its <em>Data ingestion</em> (what data it reads or receives, and from where)
-            and its <em>Hosting environment</em>, picked from a list a System Admin sets. The privilege level is
-            declared for the reviewers; it doesn't limit the token.
+            Every bot request also declares the bot's <em>Purpose</em> (which becomes its profile description), its
+            <em>Integration endpoint</em> (an <code>https://</code> address), where the script or service runs (CI/CD
+            pipeline, on-prem server or VM, cloud VM or Kubernetes, developer workstation, external SaaS or vendor, or
+            other, with a detail) and, optionally, an <code>https://</code> architecture link. The bot is always a
+            regular Mattermost user, never a Team Admin or System Admin; there is no privilege level to pick.
         </p>
         <p>
-            The channel you open the form from (or run the slash command in) is the bot's <strong>home
-            channel</strong>, in its team. It must be a public or private channel you're a member of. On approval the
+            The form asks for the bot's <strong>home team and channel</strong>, from the teams and channels you belong
+            to; it starts on the ones you're in. With the slash command, the channel you run it in is the home. It must
+            be a public or private channel you're a member of. On approval the
             bot joins its home team and channel, even without a webhook. A home says where the bot belongs; it is not
             a sandbox, and a token can still reach anything the bot account can.
         </p>

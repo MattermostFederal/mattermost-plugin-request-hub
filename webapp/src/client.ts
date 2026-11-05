@@ -309,6 +309,7 @@ export type BotForm = {
         text?: string;
         sha256?: string;
     };
+    hosting_envs?: Array<{value: string; label: string}>;
 };
 
 // fetchBotHomeTeams lists teams the current user belongs to for the bot home picker.
@@ -358,6 +359,9 @@ export async function fetchBotForm(): Promise<BotForm | null> {
                 text: typeof body?.compliance?.text === 'string' ? body.compliance.text : undefined,
                 sha256: typeof body?.compliance?.sha256 === 'string' ? body.compliance.sha256 : undefined,
             },
+            hosting_envs: Array.isArray(body?.hosting_envs) ? body.hosting_envs.filter((e: unknown): e is {value: string; label: string} => (
+                typeof (e as {value?: unknown})?.value === 'string' && typeof (e as {label?: unknown})?.label === 'string'
+            )) : [],
         };
     } catch {
         return null;

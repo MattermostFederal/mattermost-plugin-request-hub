@@ -57,7 +57,7 @@ Each request area has its own helper file next to its spec: `channel.ts`, `bots.
 ## Server versions and licensing
 
 - The Enterprise image without a license file runs as **Mattermost Entry**, which includes guest accounts, LDAP groups and custom profile attributes. No license secret is needed.
-- Custom user groups can't be created (Entry), and the plugin refuses them as approver groups anyway. `usergroup` mode tests need a plugin-synced group, inserted with `mm.psql`.
+- Custom user groups can't be created through the API (Entry), and the plugin refuses them as approver groups unless Allow custom approver groups is on. `usergroup` mode tests insert their groups (plugin-synced, or custom for that setting) with `mm.psql`.
 - Bot token expiry needs Mattermost 11.9 or later (MM-68419). On older servers the token has no expiry and the token DM doesn't give a date.
 
 ## Coverage
@@ -75,7 +75,7 @@ Feature checklist for the suite. A feature is ticked once a spec covers it end t
 | Channel Admin requests | `channel-admin` |✅ |
 | Team, Team Admin, team member and team guest requests | `team-requests` |✅ |
 | Bot requests: two-step approval in each approver mode | `bot-requests` |✅ |
-| Bot requests: declared purpose, privilege, ingestion and environment; home channel joined on approval; bot index entry | `bot-requests` | ✅ |
+| Bot requests: declared purpose, integration endpoint, architecture link and hosting; home channel joined on approval; bot index entry | `bot-requests` | ✅ |
 | Incoming and outgoing webhook requests | `webhook-requests` |✅ |
 | Pending limit, duplicates, double submit, expiry, pruning | `limits-expiry` |✅ |
 | Slash utilities: help, docs, prefixes, list, approve and deny by ID, parsing | `slash-command` |✅ |

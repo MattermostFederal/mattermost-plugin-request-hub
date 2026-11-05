@@ -33,12 +33,10 @@ test.describe('audit trail', () => {
         const outsider = await hub.createUser();
         const username = botName();
         const securityAttr = uid('sec');
-        const systemAttr = uid('sys');
         const securityField = await createAttribute(hub, securityAttr);
-        const systemField = await createAttribute(hub, systemAttr);
         const admin = await hub.client(ADMIN);
         try {
-            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, systemapproverattribute: systemAttr, auditchanneldetail: 'all', allowdirectauditexport: true}, async () => {
+            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, auditchanneldetail: 'all', allowdirectauditexport: true}, async () => {
                 await setAttribute(hub, security.id, securityField, 'yes');
                 const res = await submitBot(hub, requester.username, {username});
                 expect(res.error, JSON.stringify(res)).toBeUndefined();
@@ -53,7 +51,7 @@ test.describe('audit trail', () => {
                 expect(submitted.request?.username).toBe(username);
                 await hub.findAudit(`@${requester.username} submitted a bot account request`);
 
-                // Someone outside both pools is refused, and that is recorded.
+                // Someone outside the security pool is refused, and that is recorded.
                 await hub.slash(outsider.username, `approve ${requestId}`);
                 await expect.poll(() => eventsOf(hub, requestId)).toEqual(['submitted', 'decision_refused']);
                 const refused = (await history(hub, requestId))!.events[1];
@@ -104,7 +102,6 @@ test.describe('audit trail', () => {
             });
         } finally {
             await admin.deleteCustomProfileAttributeField(securityField);
-            await admin.deleteCustomProfileAttributeField(systemField);
         }
     });
 
@@ -186,7 +183,7 @@ test.describe('audit trail', () => {
         const requester = await hub.createUser();
         const security = await hub.createUser();
         const username = botName();
-        const env = 'mattermost-prod';
+        const env = 'cloud_or_k8s';
 
         await hub.withPluginConfig({twostepapprovermode: 'system_admin'}, async () => {
             const res = await submitBot(hub, requester.username, {username, hosting_env: env});
@@ -206,7 +203,8 @@ test.describe('audit trail', () => {
             expect(rows).toHaveLength(1);
             expect(rows[0]).toMatchObject({
                 bot_id: bot.id, bot_username: username, bot_status: 'active', bot_active: true,
-                hosting_env: env, purpose: DECLARED.purpose, privilege_level: DECLARED.privilege_level, data_ingestion: DECLARED.data_ingestion,
+                hosting_env: env, purpose: DECLARED.purpose, privilege_level: 'user_equivalent',
+                data_ingestion: 'member permissions in channels the bot is added to (Mattermost user role)',
                 home_team_id: hub.teamId, home_channel_name: 'Town Square',
                 requester_id: requester.id, requester_username: requester.username, approved_by_username: ADMIN,
                 compliance_accepted: true, rh_managed: true,

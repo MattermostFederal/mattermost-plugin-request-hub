@@ -33,22 +33,25 @@ Disabled types are hidden from the Request Hub and slash commands, and the serve
 
 ### Two-step approvers (bot + webhook)
 
-Bot and webhook requests require **two distinct approvals**: one security step and one system step. **Bot/webhook two-step approver mode** picks where the approvers come from:
+Bot and webhook requests require **two distinct approvals**: a security step, then a system step. The system step is always a System Admin. **Bot/webhook two-step approver mode** picks who does the security step:
 
 | Mode | Security step | System step |
 |------|---------------|-------------|
-| **User Attributes** (default) | Holders of the **Security approver attribute** | System Admins and holders of the **System approver attribute** |
-| **User Groups** | Members of the **Security approver user group** | System Admins and members of the **System approver user group** |
+| **User Attributes** (default) | Holders of the **Security approver attribute** | A System Admin other than the security approver |
+| **User Groups** | Members of the **Security approver user group** | A System Admin other than the security approver |
 | **System Admins only** | System Admins | System Admins (one System Admin can complete both steps) |
+
+The System Console shows only the setting for the selected mode.
 
 | Setting | Purpose |
 |---------|---------|
-| **Security approver attribute** | User Attribute name (access_control group) that marks security-step approvers. System Admins do **not** auto-qualify for this step while it is set. |
-| **System approver attribute** | User Attribute name for system-step approvers. System Admins always qualify for this step. |
-| **Security approver user group** / **System approver user group** | Used in User Groups mode. LDAP and plugin-synced groups always count. Custom groups count only when **Allow custom approver groups** is on. |
-| **Allow custom approver groups** | Off by default. Turn it on for servers without LDAP, where the approver groups are custom groups. Anyone who can manage a custom group's members can make themselves an approver, so restrict who manages custom groups first (System Console > User Management > Permissions > Custom Groups). |
+| **Security approver attribute** | Used in User Attributes mode. User Attribute name (access_control group) that marks security approvers. Default `security_approver`; blank uses the default. System Admins do **not** cover this step. |
+| **Security approver user group** | Used in User Groups mode. Default `security-approvers`; blank uses the default. LDAP and plugin-synced groups always count. A custom group counts only when **Allow custom approver groups** is on. System Admins do **not** cover this step. |
+| **Allow custom approver groups** | Off by default. Turn it on for servers without LDAP, where the security approver group is a custom group. Anyone who can manage a custom group's members can make themselves a security approver, so restrict who manages custom groups first (System Console > User Management > Permissions > Custom Groups). |
 
-Create and assign attributes in **System Console → User Management → Attributes**. If an attribute or group name is left blank, System Admins cover that step. If a security attribute or group is named but doesn't exist or has no members, nobody can fill the security step and bot/webhook cards stay pending.
+Create and assign attributes in **System Console → User Management → Attributes**. If the security attribute or group doesn't exist or has no members, nobody can fill the security step and bot and webhook cards stay pending. The server log then says so (`the security approver group has no usable members` or `nobody holds the security approver attribute`) on activation and whenever the approver settings change.
+
+Earlier versions had a system approver attribute and group. They are no longer read: the system step now always needs a System Admin.
 
 ### Required for channel creation
 
@@ -66,9 +69,8 @@ Create and assign attributes in **System Console → User Management → Attribu
 | **Offer tools to Agents** | Default **off**. Lets the Mattermost Agents plugin list prefixes, file requests of every type on a user's behalf and look up pending ones (see [Agents tools](#agents-tools)). Takes effect on save. |
 | **Pending requests per user** | Default **5**, up to 1000; 0 means no limit. How many requests of each type one user can have waiting for review; each type is counted separately. A second pending request for the same thing is refused: the same channel name in a team, the same nominees in the same channel or team (Channel Admin, Team Admin, team members), the same team URL, the same guest email in a team, the same bot username, or a webhook of the same type and name in the same channel. |
 | **Request expiry (days)** | Default **30**, at most 3650; 0 means requests never expire. Pending requests of any type older than this can no longer be approved: clicking Approve or Deny marks the card expired and closes the requester's ticket. Bot and webhook requests count from submission, even after one approval step. Applies to requests already pending too. |
-| **Require bot compliance acceptance** | On by default. Bot requesters must tick a box accepting the **Bot compliance statement** before submitting. The request keeps the exact text, its SHA-256 and the time of acceptance; the approval card shows it was accepted and the audit history records it. The slash command needs `--accept-compliance`, and the Agents `request_bot` tool is refused while this is on. A refused submission (box not ticked, or a statement changed while the form was open) is recorded in the server audit log. The acceptance is an acknowledgement, not an approval: both approval steps are still required. |
-| **Bot compliance statement** | The text bot requesters accept. Blank uses the built-in statement (the requester won't misuse the bot and is responsible for everything done with it, its tokens and its webhooks). Changing it doesn't change what earlier requesters accepted. |
-| **Bot hosting environments** | The hosting environments a bot requester picks from, one per line. Default `mattermost-dev` and `mattermost-prod`; blank uses those. Each bot request also declares a purpose, a privilege level (read only, read and post, or elevated) and its data ingestion, and names a home team and channel the bot joins on approval. A home is an accountability anchor, not a sandbox: the bot's token can still reach anything the bot account can. Approved bots are indexed by bot user ID with what was declared for them; bots approved before this have no entry. |
+| **Require bot compliance acceptance** | On by default. Bot requesters must accept the **Bot compliance statement**: the form shows it as Terms and Conditions when they submit, and they agree there. The request keeps the exact text, its SHA-256 and the time of acceptance; the approval card shows it was accepted and the audit history records it. The slash command needs `--accept-compliance`, and the Agents `request_bot` tool is refused while this is on. A refused submission (box not ticked, or a statement changed while the form was open) is recorded in the server audit log. The acceptance is an acknowledgement, not an approval: both approval steps are still required. |
+| **Bot compliance statement** | The Terms and Conditions bot requesters accept. Blank uses the built-in Terms and Conditions (authorized use only; the requester is responsible for everything done with the bot, its tokens and its webhooks; protecting credentials; the bot stays a regular user; activity may be audited; what they declared is accurate). Changing it doesn't change what earlier requesters accepted. |
 | **Bot token lifetime** | **1 to 12 months**, default **12**. How long an access token issued with an approved bot request lasts. The token DM gives the expiry date, and the requester gets reminders before it (see [Token expiry reminders](#token-expiry-reminders)). Only affects tokens issued after the change. Not the same as Request expiry. Needs Mattermost 11.9 or later (see [Token expiry reminders](#token-expiry-reminders)). |
 | **Audit channel detail** | Default **Every lifecycle event**. What is posted to `mattermost-audit-requests`: **Decisions only** (approved, denied, expired), **Every lifecycle event** (also submissions, approval steps, failures, token reminders), or **Everything** (also refused approvals and every relayed message). It changes only the channel. The request history and the server audit log always get every event (see [Audit trail](#audit-trail)). |
 | **Allow direct audit export** | Default off. Off: every audit export is a request with a reason that a System Admin approves (see [Audit export requests](#audit-export-requests)), and the export API refuses downloads. On: System Admins can also download exports directly from Audit history, `audit export` and the export API. |
@@ -127,7 +129,7 @@ If one of these channels is archived, the plugin doesn't recreate it: the archiv
 ### Who is in each channel
 
 - **Approval team channels** (root `mattermost-channel-requests`, `mattermost-team-requests`, `mattermost-bot-requests`, `mattermost-webhook-requests`, `mattermost-audit-requests`): private channels created by the plugin's bot. System Admins on the approval team are added when a channel is created and on every activation.
-- **Two-step approvers:** in User Attributes or User Groups mode, members of the security and system pools are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team.
+- **Two-step approvers:** in User Attributes or User Groups mode, members of the security pool are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team.
 - **Per-team channels** (`mattermost-channel-requests` in other teams, when **Per-team approval channels** is on): created in each team that has a Team Admin or a System Admin member, and seeded with those people. A user who joins the team later as an admin is added when they join; someone promoted to Team Admin in Mattermost itself (not through a Request Hub request) is added the next time they join the team. Existing per-team channels aren't reseeded on activation. In the approval team, the per-team channel and the root channel are the same channel.
 
 People who aren't members of a channel can't see its cards. The requester gets their own copy of the card, without buttons, as the root of a DM thread with the bot.
@@ -253,7 +255,7 @@ While **Allow direct audit export** is on, System Admins can download exports fr
 | `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. For `bot_forensic`: `json` only. |
 | `request` | One request ID (`full_histories` only) |
 | `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` (`full_histories` only) |
-| `env` | One hosting environment (`bot_inventory` only) |
+| `env` | One hosting code: `ci_cd`, `on_prem_server`, `cloud_or_k8s`, `workstation`, `external_saas` or `other`. A bot requested before these codes keeps the environment it was requested with (such as `mattermost-prod`), which also works here. (`bot_inventory` only) |
 | `bot` | The bot's user ID (`bot_forensic` only, and required there) |
 | `requester` | A requester's user ID (not for `bot_forensic`) |
 | `since`, `until` | Unix time in milliseconds. For `bot_inventory`, the date the bot was approved. For `bot_forensic`, when the bot posted: both are required and at most 90 days apart. |
@@ -270,7 +272,8 @@ The `bot_inventory` export lists every bot Request Hub created, oldest first, fo
 
 - its user ID, username and display name, and its status as of the export: `active`, `deactivated`, `deleted`, or `unknown` when the server could not be asked
 - its home team and channel, by ID and by their current display names
-- what the requester declared: purpose, privilege level, data ingestion and hosting environment
+- what the requester declared: purpose, where the integration runs, the integration endpoint and the architecture link. Privilege level and data ingestion are the plugin's fixed policy for new bots (a regular user, with member permissions in the channels it is added to); bots requested before then show what was declared
+- the owner. A bot requested without one is owned by its requester; the export shows the bot's owner in Mattermost when it has one
 - the requester, the owner (when another user owns it), the request ID, when it was requested, and who approved it and when
 - whether the requester accepted the bot compliance statement, when, and the SHA-256 of the statement's text
 - `rh_managed: true` and the time of the export (`as_of`)
@@ -360,7 +363,7 @@ If a token is suspected compromised, revoke it in **System Console → User Mana
 
 Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call and is never stored, so the final approver must be allowed to manage other people's webhooks in the channel's team (Team Admins and System Admins are, by default). Anyone else gets a private reply asking for someone who is, and the request stays pending.
 
-**Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different system approver (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
+**Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different System Admin (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
 
 ---
 

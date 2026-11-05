@@ -141,9 +141,9 @@ export const TwoStepApproverModeSetting: React.FC<Props> = (props) => {
                 onChange={(e) => commit(props, e.target.value)}
                 aria-label='Bot/webhook two-step approver mode'
             >
-                <option value='attribute'>User Attributes (ABAC / CPA)</option>
-                <option value='usergroup'>User Groups</option>
-                <option value='system_admin'>System Admins only</option>
+                <option value='attribute'>{'User Attributes (ABAC / CPA)'}</option>
+                <option value='usergroup'>{'User Groups'}</option>
+                <option value='system_admin'>{'System Admins only'}</option>
             </select>
             <p className='help-text'>
                 {'Second approval is always a System Admin (a different person than the security reviewer), except in System Admins only mode where one admin can complete both steps.'}
@@ -161,7 +161,7 @@ export const SecurityApproverGroupSetting: React.FC<Props> = (props) => {
     useEffect(() => {
         if (mode !== 'usergroup') {
             setLoading(false);
-            return;
+            return undefined;
         }
         let cancelled = false;
         fetchGroups().then((list) => {
@@ -225,7 +225,7 @@ export const SecurityApproverAttributeSetting: React.FC<Props> = (props) => {
     useEffect(() => {
         if (mode !== 'attribute') {
             setLoading(false);
-            return;
+            return undefined;
         }
         let cancelled = false;
         fetchAttributeFields().then((list) => {

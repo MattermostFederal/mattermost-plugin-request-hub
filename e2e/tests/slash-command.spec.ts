@@ -288,10 +288,12 @@ test.describe('inline request forms refuse what they cannot submit', () => {
             ['bot bad!name Some Bot --accept-compliance', 'Bot username must be lowercase letters, numbers, and . - _ (3-22 characters).'],
             ['bot goodbot Some Bot --owner @nosuchuser', 'unknown user: `nosuchuser`'],
             ['bot goodbot Some Bot --owner @carol @bob', usage('`--owner` takes exactly one value', 'bot')],
-            ['bot goodbot Some Bot --description', usage('`--description` needs some text', 'bot')],
+            ['bot goodbot Some Bot --purpose', usage('`--purpose` needs some text', 'bot')],
+            ['bot goodbot Some Bot --integration', usage('`--integration` needs an https URL', 'bot')],
+            ['bot goodbot Some Bot --description made by hand', usage('unknown option `--description`', 'bot')],
             ['bot goodbot Some Bot --token', usage('unknown option `--token`', 'bot')],
             ['bot goodbot Some Bot --accept-compliance yes', usage('`--accept-compliance` takes no value', 'bot')],
-            ['bot goodbot Some Bot', /^Bot requests need you to accept this statement:\n\n> By submitting this request I confirm .+\n\nTo accept it, run the command again with `--accept-compliance`\.$/s],
+            ['bot goodbot Some Bot', /^Bot requests need you to accept this statement:\n\n> MATTERMOST REQUEST HUB .+\n\nTo accept it, run the command again with `--accept-compliance`\.$/s],
         ]);
         await expectNoRequest(hub, user);
     });

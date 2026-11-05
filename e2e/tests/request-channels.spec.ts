@@ -39,13 +39,11 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
         const res = await hub.pluginFetch<{message?: string; error?: string}>(requester.username, '/api/v1/submit_bot_request', {
             username,
             display_name: 'E2E Bot',
-            description: 'e2e',
             request_token: true,
             compliance_accepted: true,
             purpose: 'e2e',
-            privilege_level: 'read',
-            data_ingestion: 'None',
-            hosting_env: 'mattermost-dev',
+            integration_endpoint: 'https://ci.example/hooks/e2e',
+            hosting_env: 'ci_cd',
             home_team_id: hub.teamId,
             home_channel_id: await hub.channelId('town-square'),
         });

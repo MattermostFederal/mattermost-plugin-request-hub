@@ -11,7 +11,6 @@ export const SUBMIT_BOT_ROUTE = '/api/v1/submit_bot_request';
 export type BotRequestBody = {
     username?: string;
     display_name?: string;
-    description?: string;
     bot_owner?: string;
     request_token?: boolean;
     incoming_webhook_channel_id?: string;
@@ -22,9 +21,10 @@ export type BotRequestBody = {
     compliance_accepted?: boolean;
     compliance_text_hash?: string;
     purpose?: string;
-    privilege_level?: string;
-    data_ingestion?: string;
+    architecture_url?: string;
+    integration_endpoint?: string;
     hosting_env?: string;
+    hosting_other_detail?: string;
     home_team_id?: string;
     home_channel_id?: string;
 };
@@ -41,9 +41,13 @@ export type StoredBotRequest = {
     request_token?: boolean;
     compliance?: {accepted_at: number; text_sha256: string; text: string};
     purpose?: string;
+    architecture_url?: string;
+    integration_endpoint?: string;
     privilege_level?: string;
+    mm_privilege?: string;
     data_ingestion?: string;
     hosting_env?: string;
+    hosting_other_detail?: string;
     home_team_id?: string;
     home_channel_id?: string;
     security_approver_id?: string;

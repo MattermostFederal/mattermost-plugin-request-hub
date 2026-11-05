@@ -103,16 +103,11 @@ const channelLabel = (ch: BotHomeChannel) => {
 
 const botFormLoading = 'loading';
 
-// isSecureHTTPSURL mirrors the server's https-only checks.
+// isSecureHTTPSURL mirrors the server's https-only checks. Requiring the
+// https:// prefix already rules out javascript:, data: and file: links.
 export const isSecureHTTPSURL = (raw: string): boolean => {
     const trimmed = raw.trim();
-    const lower = trimmed.toLowerCase();
-    for (const bad of ['javascript:', 'data:', 'vbscript:', 'file:']) {
-        if (lower.startsWith(bad) || lower.includes(bad)) {
-            return false;
-        }
-    }
-    if (!lower.startsWith('https://')) {
+    if (!trimmed.toLowerCase().startsWith('https://')) {
         return false;
     }
     try {
@@ -215,7 +210,7 @@ export const RequestBotModal = () => {
 
     useEffect(() => {
         if (!isOpen) {
-            return;
+            return undefined;
         }
         let cancelled = false;
         setLoadingTeams(true);
@@ -248,7 +243,7 @@ export const RequestBotModal = () => {
         if (!isOpen || !homeTeamId) {
             setChannels([]);
             setHomeChannelId('');
-            return;
+            return undefined;
         }
         let cancelled = false;
         setLoadingChannels(true);
@@ -392,7 +387,7 @@ export const RequestBotModal = () => {
             setTermsOpen(true);
             return;
         }
-        void sendRequest();
+        sendRequest();
     };
 
     const beginSubmit = () => {
@@ -525,7 +520,7 @@ export const RequestBotModal = () => {
                                 {homeLoadError ? <div
                                     className='alert alert-danger'
                                     style={{marginTop: 8}}
-                                                   >{homeLoadError}</div> : null}
+                                                 >{homeLoadError}</div> : null}
                             </div>
                             <div style={fieldStyle}>
                                 <label>{'Mattermost role'}</label>
@@ -533,7 +528,7 @@ export const RequestBotModal = () => {
                             </div>
                             <div style={fieldStyle}>
                                 <label>{'Transit security'}</label>
-                                <div style={readOnlyFieldStyle}>{'Recorded from server policy (HTTPS / TLS for integrations)'}</div>
+                                <div style={readOnlyFieldStyle}>{'The integration endpoint must be an https address (checked on submit)'}</div>
                             </div>
                             <div style={fieldStyle}>
                                 <label>{'Activity logs'}</label>
@@ -808,7 +803,7 @@ export const RequestBotModal = () => {
                                         setError('Check the box to agree to the Terms and Conditions.');
                                         return;
                                     }
-                                    void sendRequest();
+                                    sendRequest();
                                 }}
                                 disabled={submitting || !termsAccepted}
                             >

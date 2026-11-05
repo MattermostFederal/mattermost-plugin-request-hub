@@ -225,7 +225,7 @@ func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time
 	doc.text(fmt.Sprintf("Generated %s. %s. %d %s.", formatAuditTime(now.UnixMilli()), strings.TrimSuffix(p.describeExportFilter(f), "."),
 		len(rows), plural(len(rows), "bot", "bots")), 10, false)
 	doc.space(4)
-	doc.text("Purpose, privilege level, data ingestion and environment are what the requester declared; they do not limit what the bot's token can do. "+
+	doc.text("Purpose and environment are what the requester declared. Privilege and data ingestion are the plugin's fixed policy for newer bots, and what the requester declared for older ones. None of them limit what the bot's token can do. "+
 		"Bot status and home names are as of this export. Bots made outside Request Hub, and bots it created before it kept a bot index, are not listed.", 9, false)
 	if len(rows) == 0 {
 		doc.space(12)
@@ -250,7 +250,7 @@ func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time
 		doc.space(2)
 		doc.field("Bot ID", r.BotID, 9)
 		doc.field("Status", r.BotStatus, 9)
-		doc.field("Environment", or(r.HostingEnv, "not declared"), 9)
+		doc.field("Environment", or(hostingEnvLabel(r.HostingEnv), "not declared"), 9)
 		doc.field("Privilege", or(privilegeLabel(r.PrivilegeLevel), "not declared"), 9)
 		doc.field("Home", inventoryHome(r), 9)
 		doc.field("Purpose", or(r.Purpose, "not declared"), 9)

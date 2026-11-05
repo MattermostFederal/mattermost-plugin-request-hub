@@ -123,10 +123,17 @@ func slashComplianceText(c *configuration) string {
 		"\n\nTo accept it, run the command again with `--accept-compliance`."
 }
 
-// botFormDTO is what the webapp's bot form needs from the server: the
-// Terms and Conditions statement shown in the submit popup.
+// botFormDTO is what the webapp needs from the server for bot forms: the
+// Terms and Conditions statement shown in the submit popup, and the hosting
+// codes the bot inventory export can be narrowed by.
 type botFormDTO struct {
-	Compliance botComplianceDTO `json:"compliance"`
+	Compliance  botComplianceDTO `json:"compliance"`
+	HostingEnvs []botOptionDTO   `json:"hosting_envs"`
+}
+
+type botOptionDTO struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 type botComplianceDTO struct {
@@ -143,6 +150,9 @@ func (p *Plugin) handleBotForm(w http.ResponseWriter, r *http.Request) {
 	}
 	c := p.getConfiguration()
 	out := botFormDTO{}
+	for _, code := range c.HostingEnvs() {
+		out.HostingEnvs = append(out.HostingEnvs, botOptionDTO{Value: code, Label: hostingEnvLabel(code)})
+	}
 	if c.BotComplianceRequired() {
 		text := c.BotComplianceText()
 		out.Compliance = botComplianceDTO{Enabled: true, Text: text, SHA256: complianceHash(text)}

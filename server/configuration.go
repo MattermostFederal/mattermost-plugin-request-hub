@@ -120,15 +120,12 @@ type configuration struct {
 	// (see BotComplianceText).
 	BotComplianceEnabled   bool
 	BotComplianceStatement string
-	// BotHostingEnvironments lists, one per line, the hosting environments
-	// a bot requester picks from (see HostingEnvs).
-	BotHostingEnvironments string
 	AllowWebhookRequests   bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how the security reviewer is identified:
 	//   "attribute"    — User Attributes / ABAC (CPA); default
-	//   "usergroup"    — Mattermost user groups (custom or LDAP/synced) by name
+	//   "usergroup"    — Mattermost user groups (LDAP/synced, or custom when allowed) by name
 	//   "system_admin" — System Admins only (setup backup; one admin can do both steps)
 	// The system step is always System Admins — there is no system pool setting.
 	TwoStepApproverMode string
@@ -139,8 +136,14 @@ type configuration struct {
 
 	// SecurityApproverGroup: Mattermost group name when mode is "usergroup".
 	// Required in that mode; blank falls back to defaultSecurityApproverGroup.
-	// Custom and LDAP/plugin-synced groups are both accepted.
+	// LDAP and plugin-synced groups are accepted; a custom group only when
+	// AllowCustomApproverGroups is on.
 	SecurityApproverGroup string
+
+	// AllowCustomApproverGroups lets a custom (not LDAP or plugin-synced)
+	// group be the security approver group. Off by default: a custom group's
+	// managers choose its members.
+	AllowCustomApproverGroups bool
 
 	// --- 6. Agents ---
 	// EnableMCP offers the request tools to the Mattermost Agents plugin.
@@ -185,14 +188,14 @@ type configuration struct {
 // The defaults match plugin.json. The maximums keep the settings in a
 // sensible range.
 const (
-	defaultMaxPendingRequests          = 5
-	defaultRequestExpiryDays           = 30
-	defaultBotTokenLifetime            = 12
-	defaultSecurityApproverGroup       = "security-approvers"
-	defaultSecurityApproverAttribute   = "security_approver"
-	maxPendingRequestsLimit            = 1000
-	maxRequestExpiryDays               = 3650
-	maxBotTokenLifetime                = 12
+	defaultMaxPendingRequests        = 5
+	defaultRequestExpiryDays         = 30
+	defaultBotTokenLifetime          = 12
+	defaultSecurityApproverGroup     = "security-approvers"
+	defaultSecurityApproverAttribute = "security_approver"
+	maxPendingRequestsLimit          = 1000
+	maxRequestExpiryDays             = 3650
+	maxBotTokenLifetime              = 12
 )
 
 // MaxPending returns how many requests of each kind one user may have
@@ -407,7 +410,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	// are added without a plugin restart.
 	if hadPrevConfig && twoStepPoolFingerprint(configuration) != prevTwoStep {
 		go func() {
-			defer func() { _ = recover() }()
+			defer p.logRecoveredPanic("two-step approver channel sync")
 			p.syncTwoStepApproverChannels()
 		}()
 	}
@@ -447,6 +450,7 @@ func twoStepPoolFingerprint(c *configuration) string {
 		c.twoStepMode(),
 		strings.TrimSpace(c.SecurityApproverGroup),
 		strings.TrimSpace(c.SecurityApproverAttribute),
+		strconv.FormatBool(c.AllowCustomApproverGroups),
 	}, "|")
 }
 

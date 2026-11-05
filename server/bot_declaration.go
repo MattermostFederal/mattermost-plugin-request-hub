@@ -12,8 +12,7 @@ import (
 
 // Security declaration on a bot request. Bots are always regular Mattermost
 // users (never Team Admin or System Admin). Privilege and channel-access
-// notes are policy defaults, not form choices. Transit security and activity
-// logs are recorded from server policy.
+// notes are policy defaults, not form choices.
 
 const (
 	// Fixed Mattermost role for every bot this plugin creates.
@@ -61,8 +60,11 @@ var validHostingEnvs = map[string]string{
 	hostingOther:        "Other",
 }
 
-// HostingEnvs returns hosting environment codes for inventory filters and
-// any remaining callers. Form radios use validHostingEnvs directly.
+// HostingEnvs returns the fixed hosting codes, in display order, for the
+// dialog's select and the inventory export's filter. They are not
+// configurable. Bots requested before these codes existed keep the
+// environment name they were requested with (mattermost-prod, say), which
+// hostingEnvLabel shows as is.
 func (c *configuration) HostingEnvs() []string {
 	return []string{
 		hostingCICD, hostingOnPrem, hostingCloudOrK8s,
@@ -110,8 +112,6 @@ type botDeclaration struct {
 	DataIngestion      string // policy note, not a form field
 	HostingEnv         string
 	HostingOtherDetail string
-	TransitSecurity    bool
-	ActivityLogsOK     bool
 }
 
 func (d botDeclaration) normalize() botDeclaration {
@@ -127,8 +127,6 @@ func (d botDeclaration) normalize() botDeclaration {
 	out.PrivilegeLevel = privilegeUserEquivalent
 	out.MMPrivilege = mmPrivilegeMemberUserOnly
 	out.DataIngestion = defaultChannelAccessNote
-	out.TransitSecurity = true
-	out.ActivityLogsOK = true
 	return out
 }
 
@@ -166,8 +164,9 @@ func checkBotDeclaration(_ *configuration, in botDeclaration) (botDeclaration, e
 	return out, nil
 }
 
-// checkSecureHTTPSURL requires a real https URL: https scheme only, a host,
-// and no javascript/data/file-style payloads that could be mistaken for a link.
+// checkSecureHTTPSURL requires a real https URL: https scheme only and a
+// host. The scheme check alone rules out javascript:, data: and file: links;
+// those words later in the URL (a query string, say) are fine.
 func checkSecureHTTPSURL(field, raw string, limit int) error {
 	if err := checkByteLen(field, raw, limit); err != nil {
 		return err
@@ -175,7 +174,7 @@ func checkSecureHTTPSURL(field, raw string, limit int) error {
 	trimmed := strings.TrimSpace(raw)
 	lower := strings.ToLower(trimmed)
 	for _, bad := range []string{"javascript:", "data:", "vbscript:", "file:"} {
-		if strings.HasPrefix(lower, bad) || strings.Contains(lower, bad) {
+		if strings.HasPrefix(lower, bad) {
 			return errors.Errorf("%s must be an https address, not a script or data URL", field)
 		}
 	}
@@ -185,7 +184,9 @@ func checkSecureHTTPSURL(field, raw string, limit int) error {
 	if !strings.HasPrefix(lower, "https://") {
 		return errors.Errorf("%s must start with https://", field)
 	}
-	if !model.IsValidHTTPURL(trimmed) {
+	// IsValidHTTPURL only knows a lowercase scheme; the browser accepts any
+	// case, so match it.
+	if !model.IsValidHTTPURL("https://" + trimmed[len("https://"):]) {
 		return errors.Errorf("%s must be a valid https address", field)
 	}
 	u, err := url.Parse(trimmed)
@@ -361,10 +362,4 @@ func (p *Plugin) listBotIndex() ([]botIndexEntry, error) {
 			return out, nil
 		}
 	}
-}
-
-// transitSecurityPolicyText describes what Mattermost already enforces.
-// Kept as a fixed policy line on the approval card (not a requester checkbox).
-func (p *Plugin) transitSecurityPolicyText() string {
-	return "TLS / HTTPS for integrations (Mattermost SiteURL policy)"
 }

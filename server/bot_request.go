@@ -13,10 +13,10 @@ const (
 	kvBotRequestPrefix  = "bot_request_"
 	botDialogCallbackID = "bot_request"
 
-	fieldBotUsername   = "bot_username"
+	fieldBotUsername    = "bot_username"
 	fieldBotDisplayName = "bot_display_name"
-	fieldBotOwner      = "bot_owner"
-	fieldBotCompliance = "bot_compliance"
+	fieldBotOwner       = "bot_owner"
+	fieldBotCompliance  = "bot_compliance"
 
 	// Bounds on a requested bot username.
 	minBotUsernameLen = 3
@@ -301,9 +301,7 @@ func (p *Plugin) postBotApprovalRequest(req *botRequest, requester *model.User) 
 	// Light reconcile (group member list only) so new/re-added security
 	// approvers see this card without waiting for the 2m ticker.
 	go func() {
-		// Isolate from the caller: unit tests tear down the mock API while
-		// this reseed may still be running.
-		defer func() { _ = recover() }()
+		defer p.logRecoveredPanic("two-step approver channel reconcile")
 		p.reconcileTwoStepApproverChannels()
 	}()
 	return p.postApprovalAttachment(
@@ -356,7 +354,9 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 		}
 		details = append(details, fmt.Sprintf("**Script / service runs from:** %s", hostLabel))
 	}
-	details = append(details, "**Transit security:** "+p.transitSecurityPolicyText())
+	if req.IntegrationURL != "" {
+		details = append(details, "**Transit security:** the integration endpoint uses https (checked on submit)")
+	}
 	details = append(details, "**Activity logs:** Request Hub audit history; forensic pull by bot user ID after approval")
 	if req.HomeChannelID != "" {
 		details = append(details, fmt.Sprintf("**Home:** %s", p.channelDisplayRef(req.HomeChannelID)))

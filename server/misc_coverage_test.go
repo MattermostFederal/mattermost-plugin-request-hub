@@ -225,7 +225,7 @@ func TestGetConfiguration_UnsetReturnsEmpty(t *testing.T) {
 
 func TestTwoStepPoolFingerprint_NilAndTrimmed(t *testing.T) {
 	require.Empty(t, twoStepPoolFingerprint(nil))
-	require.Equal(t, twoStepModeUserGroup+"|sec|",
+	require.Equal(t, twoStepModeUserGroup+"|sec||false",
 		twoStepPoolFingerprint(&configuration{TwoStepApproverMode: "groups", SecurityApproverGroup: " sec "}))
 }
 

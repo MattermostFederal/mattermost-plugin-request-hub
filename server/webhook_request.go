@@ -376,7 +376,7 @@ func (p *Plugin) internalBaseURL() string {
 func (p *Plugin) postWebhookApprovalRequest(req *webhookRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	webhookCh := p.ensureWebhookApprovalChannel()
 	go func() {
-		defer func() { _ = recover() }()
+		defer p.logRecoveredPanic("two-step approver channel reconcile")
 		p.reconcileTwoStepApproverChannels()
 	}()
 	return p.postApprovalAttachment(

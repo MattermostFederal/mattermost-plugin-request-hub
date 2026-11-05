@@ -85,13 +85,6 @@
                 "help_text": "The statement bot requesters accept. Leave blank for the built-in statement: the requester won't misuse the bot and is responsible for everything done with it, its tokens and its webhooks. Changing it doesn't change what earlier requesters accepted."
             },
             {
-                "key": "BotHostingEnvironments",
-                "display_name": "Bot hosting environments",
-                "type": "longtext",
-                "default": "mattermost-dev\nmattermost-prod",
-                "help_text": "The hosting environments a bot requester picks from, one per line. The choice is kept with the request and the bot inventory. Leave blank for mattermost-dev and mattermost-prod."
-            },
-            {
                 "key": "AllowWebhookRequests",
                 "display_name": "Allow webhook requests",
                 "type": "bool",
@@ -117,7 +110,14 @@
                 "display_name": "Security approver user group",
                 "type": "custom",
                 "default": "security-approvers",
-                "help_text": "Shown when mode is User Groups. Mattermost user group (custom or LDAP/synced) whose members must complete the security review. Required: System Admins do not cover this step. Default is security-approvers even if that group is not created yet."
+                "help_text": "Shown when mode is User Groups. LDAP or plugin-synced Mattermost user group whose members must complete the security review. A custom group is used only when Allow custom approver groups is on. Required: System Admins do not cover this step. Default is security-approvers even if that group is not created yet."
+            },
+            {
+                "key": "AllowCustomApproverGroups",
+                "display_name": "Allow custom approver groups",
+                "type": "bool",
+                "default": false,
+                "help_text": "Used when mode is User Groups. When on, the security approver group may be a custom group, for servers without LDAP. Anyone who can manage a custom group's members can make themselves a security approver, so turn this on only when you control who manages those groups (System Console > User Management > Permissions > Custom Groups). Off: only LDAP and plugin-synced groups are used."
             },
             {
                 "key": "ApprovalTeam",

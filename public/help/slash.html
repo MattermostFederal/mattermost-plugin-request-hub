@@ -233,7 +233,7 @@
                 <tr><td><em>This request was just updated. Please run the command again.</em></td><td>Someone acted on it at the same moment. Run the command again.</td></tr>
                 <tr><td><em>You don't have permission to approve or deny this channel request...</em>, <em>...this Channel Admin request...</em>, <em>Only System Admins can approve or deny ... requests.</em>, <em>You don't have permission to deny this request.</em>, <em>⚠️ You don't have permission to approve this request.</em></td><td>Only approvers can act on a request. See <a href="approving.html#who-sees-what">Who sees and approves what</a>.</td></tr>
                 <tr><td><em>You can't approve your own request. Another approver has to review it.</em>, <em>⚠️ You created this request...</em></td><td>Ask another approver. You can still deny your own request.</td></tr>
-                <tr><td><em>⚠️ Security review must happen first...</em>, <em>⚠️ Security already approved...</em>, <em>⚠️ You've already approved your step...</em></td><td>A bot or webhook request needs a security approver, then a different system approver. Ask the approver whose step is next.</td></tr>
+                <tr><td><em>⚠️ Security review must happen first...</em>, <em>⚠️ Security already approved...</em>, <em>⚠️ You've already approved your step...</em></td><td>A bot or webhook request needs a security approver, then a different System Admin. Ask the approver whose step is next.</td></tr>
                 <tr><td><em>This request has expired.</em></td><td>The request is closed and the requester is told. See <a href="troubleshooting.html#expired">Expired</a>.</td></tr>
                 <tr><td><em>The requester's account is no longer active...</em>, <em>...no longer a member...</em></td><td>See <a href="troubleshooting.html#requester-left">Requester left</a>.</td></tr>
                 <tr><td><em>The channel name no longer matches the configured prefixes...</em></td><td>The prefixes changed after the request was made. Deny it and ask for a new request.</td></tr>
@@ -430,11 +430,13 @@
         <p>Asks for a guest invite to those channels of the current team. See <a href="team-guest.html">Guest invites</a>.</p>
 
         <h3 id="bot"><code>/mattermost-request-hub bot</code></h3>
-<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; --purpose &lt;text&gt; --privilege read|post|elevated --ingestion &lt;text&gt; --env &lt;environment&gt; [--description &lt;text&gt;] [--owner @user] [--accept-compliance]</code></pre>
+<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; --purpose &lt;text&gt; --integration &lt;https-url&gt; --env ci_cd|on_prem_server|cloud_or_k8s|workstation|external_saas|other [--architecture &lt;https-url&gt;] [--hosting-other &lt;text&gt;] [--owner @user] [--accept-compliance]</code></pre>
         <p>
-            The username is one word; the display name can be several. <code>--purpose</code>,
-            <code>--privilege</code>, <code>--ingestion</code> and <code>--env</code> are required, and
-            <code>--env</code> must be one of the hosting environments a System Admin has listed. The channel you run
+            The username is one word; the display name can be several. <code>--purpose</code> (which becomes the
+            bot's profile description), <code>--integration</code> (an <code>https://</code> address) and
+            <code>--env</code> (where the integration runs) are required. With <code>--env other</code>, say where with
+            <code>--hosting-other</code>. <code>--architecture</code> is an optional <code>https://</code> link to the
+            design or architecture review. The channel you run
             the command in is the bot's home, so run it in a public or private channel of a team. Access tokens and
             webhooks for the bot are only in the form. While bot requesters must accept the compliance statement, the command without
             <code>--accept-compliance</code> replies with the statement and submits nothing; run it again with the
@@ -453,7 +455,7 @@
 <pre><code>/mattermost-request-hub team Field Support --description Support for field teams --invite-only
 /mattermost-request-hub team-member @alice,@bob --reason Joining the ops rotation
 /mattermost-request-hub team-guest guest@example.com --channels ~town-square ~vendor-chat
-/mattermost-request-hub bot build-bot Build Bot --owner @carol --purpose Posts build results --privilege post --ingestion Jenkins webhooks --env mattermost-prod --accept-compliance
+/mattermost-request-hub bot build-bot Build Bot --owner @carol --purpose Posts build results --integration https://ci.example.com/mm --env ci_cd --accept-compliance
 /mattermost-request-hub webhook-outgoing ~deploys Deploy Hook --callback https://ci.example.com/hook</code></pre>
         <p>
             If something is wrong, the reply starts <em>Could not read the request:</em>, says what, and repeats

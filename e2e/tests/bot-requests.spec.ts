@@ -57,24 +57,20 @@ async function expectStillPending(hub: RequestHub, requester: TestUser, s: Submi
     expect(await userNamed(hub, username)).toBeUndefined();
 }
 
-// Runs fn in attribute mode with two fresh admin-managed attributes as the
-// security and system pools, and deletes them afterwards: a server allows
-// only a few Custom Profile Attribute fields.
-type Pools = {security: (u: TestUser) => Promise<void>; system: (u: TestUser) => Promise<void>};
+// Runs fn in attribute mode with a fresh admin-managed attribute as the
+// security pool, and deletes it afterwards: a server allows only a few
+// Custom Profile Attribute fields. The system step is always a System Admin.
+type Pools = {security: (u: TestUser) => Promise<void>};
 async function withAttributePools(hub: RequestHub, fn: (pools: Pools) => Promise<void>, {extra = {}}: {extra?: Record<string, string>} = {}) {
     const securityAttr = uid('sec');
-    const systemAttr = uid('sys');
     const securityField = await createAttribute(hub, securityAttr);
-    const systemField = await createAttribute(hub, systemAttr);
     const admin = await hub.client(ADMIN);
     try {
-        await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, systemapproverattribute: systemAttr, ...extra}, () => fn({
+        await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: securityAttr, ...extra}, () => fn({
             security: (u) => setAttribute(hub, u.id, securityField, 'yes'),
-            system: (u) => setAttribute(hub, u.id, systemField, 'yes'),
         }));
     } finally {
         await admin.deleteCustomProfileAttributeField(securityField);
-        await admin.deleteCustomProfileAttributeField(systemField);
     }
 }
 
@@ -128,7 +124,7 @@ test.describe('submit', () => {
     test('REST submit posts a card in the bot channel and opens a ticket DM', async ({hub}) => {
         const requester = await hub.createUser();
         const username = botName();
-        const s = await submitOK(hub, requester, {username: username.toUpperCase(), display_name: 'Card Bot', description: 'posts things', request_token: true});
+        const s = await submitOK(hub, requester, {username: username.toUpperCase(), display_name: 'Card Bot', request_token: true});
 
         // The username is stored lowercased.
         expect(s.card.channel_id).toBe(await hub.channelId(REQUEST_CHANNELS.bot));
@@ -151,17 +147,19 @@ test.describe('submit', () => {
         const requester = await hub.createUser();
         const owner = await hub.createUser();
         const username = botName();
-        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --description from slash --owner @${owner.username} ${DECLARE} ${ACCEPT}`);
+        const reply = await hub.slash(requester.username, `bot ${username} Slash Bot --owner @${owner.username} ${DECLARE} ${ACCEPT}`);
         expect(reply).toBe(SUBMITTED);
 
         const card = await hub.findCardIn(REQUEST_CHANNELS.bot, `@${username}`);
         expect(attachmentOf(card)?.text).toContain('**Display name:** Slash Bot');
-        expect(attachmentOf(card)?.text).toContain('**Description:** from slash');
         expect(attachmentOf(card)?.text).toContain(`**Owner:** @${owner.username}`);
         expect(attachmentOf(card)?.text).toContain('**Purpose:** E2E test bot');
-        expect(attachmentOf(card)?.text).toContain('**Privilege:** Read and post');
-        expect(attachmentOf(card)?.text).toContain('**Data ingestion:** None');
-        expect(attachmentOf(card)?.text).toContain('**Environment:** mattermost\\-dev');
+        expect(attachmentOf(card)?.text).toContain('**Architecture link:** https:\u200b//docs\\.example/arch');
+        expect(attachmentOf(card)?.text).toContain('**Integration endpoint:** https:\u200b//ci\\.example/hooks/e2e');
+        expect(attachmentOf(card)?.text).toContain('**Mattermost role:** Regular user (member); never Team Admin or System Admin');
+        expect(attachmentOf(card)?.text).toContain('**Channel access:** member permissions in channels the bot is added to \\(Mattermost user role\\)');
+        expect(attachmentOf(card)?.text).toContain('**Script / service runs from:** CI/CD pipeline');
+        expect(attachmentOf(card)?.text).toContain('**Transit security:** the integration endpoint uses https (checked on submit)');
         expect(attachmentOf(card)?.text).toContain('**Home:** #town-square (Team: Test)');
         const s = {card, requestId: cardRequestId(card)};
         const stored = await storedBotRequest(hub, s.requestId);
@@ -173,7 +171,8 @@ test.describe('submit', () => {
         await hub.withPluginConfig(SYSTEM_ADMIN_MODE, async () => {
             await click(hub, ADMIN, card.id, 'approve');
             const botId = await expectApproved(hub, requester, s, username, ADMIN, owner.id);
-            expect((await (await hub.client(ADMIN)).getBot(botId)).description).toBe('from slash');
+            // The purpose is the bot's profile description.
+            expect((await (await hub.client(ADMIN)).getBot(botId)).description).toBe('E2E test bot');
         });
     });
 
@@ -272,7 +271,6 @@ test.describe('submit', () => {
         ...['all', 'channel', 'system', 'matterbot'].map((reserved): Case => ({title: `reserved username ${reserved}`, error: USERNAME_CHARS, body: async () => ({username: reserved})})),
         {title: 'blank display name', error: 'A display name is required.', body: async (_h, _r, u) => ({username: u, display_name: '   '})},
         {title: 'display name too long', error: 'Display name must be 64 characters or fewer', body: async (_h, _r, u) => ({username: u, display_name: 'd'.repeat(65)})},
-        {title: 'description too long', error: 'Description must be 500 characters or fewer', body: async (_h, _r, u) => ({username: u, description: 'd'.repeat(501)})},
         {
             title: 'incoming webhook name too long in bytes',
             error: 'Incoming webhook name must be 64 bytes or fewer (some characters count as more than one)',
@@ -293,10 +291,18 @@ test.describe('submit', () => {
             error: 'the callback URL must be an http or https address',
             body: async (h, _r, u) => ({username: u, outgoing_webhook_channel_id: await townSquare(h), outgoing_webhook_callback_url: 'ftp://example.com/hook'}),
         },
-        {title: 'no purpose', error: "Describe the bot's purpose.", body: async (_h, _r, u) => ({username: u, purpose: ' '})},
-        {title: 'unknown privilege level', error: 'Pick a privilege level: read, post, elevated.', body: async (_h, _r, u) => ({username: u, privilege_level: 'root'})},
-        {title: 'no data ingestion', error: 'Describe the data the bot takes in.', body: async (_h, _r, u) => ({username: u, data_ingestion: ''})},
-        {title: 'unknown hosting environment', error: 'Pick a hosting environment: mattermost-dev, mattermost-prod.', body: async (_h, _r, u) => ({username: u, hosting_env: 'staging'})},
+        {title: 'no purpose', error: "A purpose is required: describe what the bot does and why. This becomes the bot's profile description.", body: async (_h, _r, u) => ({username: u, purpose: ' '})},
+        {title: 'purpose too long', error: 'Purpose must be 500 characters or fewer', body: async (_h, _r, u) => ({username: u, purpose: 'p'.repeat(501)})},
+        {title: 'no integration endpoint', error: 'An integration endpoint is required (https URL).', body: async (_h, _r, u) => ({username: u, integration_endpoint: ' '})},
+        {title: 'http integration endpoint', error: 'Integration endpoint must use https:// (http is not allowed)', body: async (_h, _r, u) => ({username: u, integration_endpoint: 'http://ci.example/hook'})},
+        {title: 'script integration endpoint', error: 'Integration endpoint must be an https address, not a script or data URL', body: async (_h, _r, u) => ({username: u, integration_endpoint: 'javascript:alert(1)'})},
+        {title: 'http architecture link', error: 'Architecture link must use https:// (http is not allowed)', body: async (_h, _r, u) => ({username: u, architecture_url: 'http://docs.example/arch'})},
+        {
+            title: 'unknown hosting environment',
+            error: 'Pick where the integration script or service runs (CI/CD, on-prem, cloud, workstation, SaaS, or other).',
+            body: async (_h, _r, u) => ({username: u, hosting_env: 'mattermost-prod'}),
+        },
+        {title: 'other hosting without detail', error: 'Specify where the script or service runs when Hosting is Other.', body: async (_h, _r, u) => ({username: u, hosting_env: 'other'})},
         {
             title: 'home channel the requester is not in',
             error: "The bot's home channel must be a channel you're a member of.",
@@ -370,7 +376,7 @@ test.describe('submit', () => {
 });
 
 test.describe('compliance statement', () => {
-    const DEFAULT_START = 'By submitting this request I confirm that I will not use this bot';
+    const DEFAULT_START = 'MATTERMOST REQUEST HUB';
     const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
     type History = {events: Array<{event: string; note?: string; detail?: Record<string, unknown>}>};
 
@@ -429,11 +435,13 @@ test.describe('compliance statement', () => {
         await hub.withPluginConfig({botcomplianceenabled: false}, async () => {
             expect(await hub.pluginFetch(requester.username, '/api/v1/bot_form')).toEqual({
                 compliance: {enabled: false},
-                hosting_envs: ['mattermost-dev', 'mattermost-prod'],
-                privilege_levels: [
-                    {value: 'read', label: 'Read only'},
-                    {value: 'post', label: 'Read and post'},
-                    {value: 'elevated', label: 'Elevated (admin-level APIs)'},
+                hosting_envs: [
+                    {value: 'ci_cd', label: 'CI/CD pipeline'},
+                    {value: 'on_prem_server', label: 'On-prem server / VM'},
+                    {value: 'cloud_or_k8s', label: 'Cloud VM / Kubernetes'},
+                    {value: 'workstation', label: 'Developer workstation'},
+                    {value: 'external_saas', label: 'External SaaS / vendor'},
+                    {value: 'other', label: 'Other'},
                 ],
             });
             const username = botName();
@@ -686,14 +694,13 @@ test.describe('system_admin mode', () => {
 });
 
 test.describe('attribute mode', () => {
-    test('security then system approval by two attribute holders creates the bot', async ({hub}) => {
+    test('security approval by an attribute holder, then system approval by a System Admin, creates the bot', async ({hub}) => {
         const requester = await hub.createUser();
         const security = await hub.createUser();
-        const system = await hub.createUser();
+        const system = await hub.createUser({systemAdmin: true});
         const username = botName();
         await withAttributePools(hub, async (pools) => {
             await pools.security(security);
-            await pools.system(system);
             await joinBotChannel(hub, security, system);
             const reply = await hub.slash(requester.username, `bot ${username} Attr Bot ${DECLARE} ${ACCEPT}`);
             expect(reply).toBe(SUBMITTED);
@@ -715,25 +722,6 @@ test.describe('attribute mode', () => {
         });
     });
 
-    test('a token is delivered when the final approver is not a System Admin', async ({hub}) => {
-        const requester = await hub.createUser();
-        const security = await hub.createUser();
-        const system = await hub.createUser();
-        const username = botName();
-        await withAttributePools(hub, async (pools) => {
-            await pools.security(security);
-            await pools.system(system);
-            await joinBotChannel(hub, security, system);
-            const s = await submitOK(hub, requester, {username, request_token: true});
-            await click(hub, security.username, s.card.id, 'approve');
-            await click(hub, system.username, s.card.id, 'approve');
-            const botId = await expectApproved(hub, requester, s, username, system.username);
-            expect(await dmsMentioning(hub, requester.username, 'token generation failed')).toEqual([]);
-            expect(await (await hub.client(ADMIN)).getUserAccessTokensForUser(botId)).toHaveLength(1);
-            await hub.findDM(requester.username, '**Access Token**');
-        });
-    });
-
     test('the security step can be approved by ID with the slash command', async ({hub}) => {
         const requester = await hub.createUser();
         const security = await hub.createUser();
@@ -744,7 +732,7 @@ test.describe('attribute mode', () => {
             expect(await hub.slash(security.username, `approve ${s.requestId}`)).toBe('Approved the security step. The request now needs the other approval, from a different person.');
             expect(fieldValue(await getPost(hub, s.card.id), 'Approvals')).toContain(`Security: ✅ approved by @${security.username}`);
 
-            // A System Admin qualifies for the system step.
+            // The system step is a System Admin's.
             expect(await hub.slash(ADMIN, `approve ${s.requestId}`)).toBe(`✅ Fully approved (security + system) for @${requester.username}. Bot **@${username}** created.`);
             await expectApproved(hub, requester, s, username, ADMIN);
         });
@@ -770,34 +758,13 @@ test.describe('attribute mode', () => {
         });
     });
 
-    test('a system-pool member cannot approve before security has', async ({hub}) => {
+    test('a System Admin holding the security attribute cannot fill both steps', async ({hub}) => {
         const requester = await hub.createUser();
-        const system = await hub.createUser();
-        const username = botName();
-        await withAttributePools(hub, async (pools) => {
-            await pools.system(system);
-            await joinBotChannel(hub, system);
-            const s = await submitOK(hub, requester, {username});
-            const before = await storedBotRequest(hub, s.requestId);
-            const ephemerals = await listenForEphemerals(hub, system.username);
-            try {
-                await click(hub, system.username, s.card.id, 'approve');
-                await ephemerals.next(SECURITY_FIRST);
-            } finally {
-                ephemerals.close();
-            }
-            await expectStillPending(hub, requester, s, before, username);
-        });
-    });
-
-    test('one person holding both attributes cannot fill both steps', async ({hub}) => {
-        const requester = await hub.createUser();
-        const both = await hub.createUser();
+        const both = await hub.createUser({systemAdmin: true});
         const security = await hub.createUser();
         const username = botName();
         await withAttributePools(hub, async (pools) => {
             await pools.security(both);
-            await pools.system(both);
             await pools.security(security);
             await joinBotChannel(hub, both, security);
             const s = await submitOK(hub, requester, {username});
@@ -814,7 +781,8 @@ test.describe('attribute mode', () => {
                 await click(hub, both.username, s.card.id, 'approve');
                 await bothEph.next(`⚠️ ${ALREADY_APPROVED_STEP}`);
 
-                // Another security-only member can't take the system step.
+                // Another security member who isn't a System Admin can't
+                // take the system step.
                 await click(hub, security.username, s.card.id, 'approve');
                 await secEph.next(`⚠️ ${SYSTEM_ONLY_LEFT}`);
             } finally {
@@ -849,7 +817,7 @@ test.describe('attribute mode', () => {
         });
     });
 
-    test('a user outside both pools cannot approve or deny', async ({hub}) => {
+    test('a user outside the security pool who is not a System Admin cannot approve or deny', async ({hub}) => {
         const requester = await hub.createUser();
         const outsider = await hub.createUser({teamAdmin: true}); // a Team Admin keeps access to the channel
         const username = botName();
@@ -877,7 +845,7 @@ test.describe('attribute mode', () => {
         const attr = uid('self');
         const fieldId = await createAttribute(hub, attr, false);
         try {
-            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: attr, systemapproverattribute: attr}, async () => {
+            await hub.withPluginConfig({twostepapprovermode: 'attribute', securityapproverattribute: attr}, async () => {
                 // The user gives themselves the attribute.
                 await (await hub.client(self.username)).updateCustomProfileAttributeValues({[fieldId]: 'yes'});
                 await joinBotChannel(hub, self);
@@ -914,11 +882,10 @@ test.describe('attribute mode', () => {
     test('deny at the system step closes a half-approved request', async ({hub}) => {
         const requester = await hub.createUser();
         const security = await hub.createUser();
-        const system = await hub.createUser();
+        const system = await hub.createUser({systemAdmin: true});
         const username = botName();
         await withAttributePools(hub, async (pools) => {
             await pools.security(security);
-            await pools.system(system);
             await joinBotChannel(hub, security, system);
             const s = await submitOK(hub, requester, {username});
             await click(hub, security.username, s.card.id, 'approve');
@@ -928,43 +895,39 @@ test.describe('attribute mode', () => {
         });
     });
 
-    test('with no security attribute set, System Admins cover security but two are needed', async ({hub}) => {
+    test('with no security attribute set, the default attribute is required and System Admins do not cover security', async ({hub}) => {
         const requester = await hub.createUser();
-        const secondAdmin = await hub.createUser({systemAdmin: true});
         const username = botName();
         await withAttributePools(hub, async () => {
-            await joinBotChannel(hub, secondAdmin);
             const s = await submitOK(hub, requester, {username});
-            await click(hub, ADMIN, s.card.id, 'approve');
-            const afterFirst = await storedBotRequest(hub, s.requestId);
-            expect(afterFirst).toMatchObject({security_approver_id: hub.userIds[ADMIN]});
-            expect(afterFirst?.system_approver_id).toBeUndefined();
-
-            expect(await hub.slash(ADMIN, `approve ${s.requestId}`)).toBe(`⚠️ ${ALREADY_APPROVED_STEP}`);
-            await expectStillPending(hub, requester, s, afterFirst, username);
-
-            await click(hub, secondAdmin.username, s.card.id, 'approve');
-            await expectApproved(hub, requester, s, username, secondAdmin.username);
+            const before = await storedBotRequest(hub, s.requestId);
+            const ephemerals = await listenForEphemerals(hub, ADMIN);
+            try {
+                await click(hub, ADMIN, s.card.id, 'approve');
+                await ephemerals.next(SECURITY_FIRST);
+            } finally {
+                ephemerals.close();
+            }
+            await expectStillPending(hub, requester, s, before, username);
         }, {extra: {securityapproverattribute: ''}});
     });
 });
 
 test.describe('usergroup mode', () => {
-    test('synced groups are the pools; one member cannot fill both steps', async ({hub}) => {
+    test('a synced group is the security pool, a different System Admin approves the system step', async ({hub}) => {
         const requester = await hub.createUser();
-        const both = await hub.createUser();
-        const system = await hub.createUser();
+        const member = await hub.createUser();
+        const system = await hub.createUser({systemAdmin: true});
         const outsider = await hub.createUser({teamAdmin: true});
-        const securityGroup = await createGroup(hub, [both]);
-        const systemGroup = await createGroup(hub, [both, system]);
+        const securityGroup = await createGroup(hub, [member]);
         const username = botName();
-        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: securityGroup, systemapprovergroup: `@${systemGroup}`}, async () => {
-            await joinBotChannel(hub, both, system, outsider);
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: `@${securityGroup}`}, async () => {
+            await joinBotChannel(hub, member, system, outsider);
             const s = await submitOK(hub, requester, {username});
 
             const sysEph = await listenForEphemerals(hub, system.username);
             const outEph = await listenForEphemerals(hub, outsider.username);
-            const bothEph = await listenForEphemerals(hub, both.username);
+            const memberEph = await listenForEphemerals(hub, member.username);
             try {
                 const before = await storedBotRequest(hub, s.requestId);
                 await click(hub, system.username, s.card.id, 'approve');
@@ -973,17 +936,17 @@ test.describe('usergroup mode', () => {
                 await outEph.next(`⚠️ ${NO_PERMISSION}`);
                 await expectStillPending(hub, requester, s, before, username);
 
-                await click(hub, both.username, s.card.id, 'approve');
+                await click(hub, member.username, s.card.id, 'approve');
                 const afterFirst = await storedBotRequest(hub, s.requestId);
-                expect(afterFirst).toMatchObject({security_approver_id: both.id});
-            expect(afterFirst?.system_approver_id).toBeUndefined();
-                await click(hub, both.username, s.card.id, 'approve');
-                await bothEph.next(`⚠️ ${ALREADY_APPROVED_STEP}`);
+                expect(afterFirst).toMatchObject({security_approver_id: member.id});
+                expect(afterFirst?.system_approver_id).toBeUndefined();
+                await click(hub, member.username, s.card.id, 'approve');
+                await memberEph.next(`⚠️ ${ALREADY_APPROVED_STEP}`);
                 await expectStillPending(hub, requester, s, afterFirst, username);
             } finally {
                 sysEph.close();
                 outEph.close();
-                bothEph.close();
+                memberEph.close();
             }
 
             await click(hub, system.username, s.card.id, 'approve');
@@ -996,7 +959,7 @@ test.describe('usergroup mode', () => {
         const member = await hub.createUser({teamAdmin: true});
         const customGroup = await createGroup(hub, [member], 'custom');
         const username = botName();
-        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, systemapprovergroup: ''}, async () => {
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup}, async () => {
             await joinBotChannel(hub, member);
             const s = await submitOK(hub, requester, {username});
             const before = await storedBotRequest(hub, s.requestId);
@@ -1022,7 +985,7 @@ test.describe('usergroup mode', () => {
         const member = await hub.createUser({teamAdmin: true});
         const customGroup = await createGroup(hub, [member], 'custom');
         const username = botName();
-        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, systemapprovergroup: '', allowcustomapprovergroups: true}, async () => {
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, allowcustomapprovergroups: true}, async () => {
             await joinBotChannel(hub, member);
             const s = await submitOK(hub, requester, {username});
             await click(hub, member.username, s.card.id, 'approve');

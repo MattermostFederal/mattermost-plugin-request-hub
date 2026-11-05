@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,4 +159,17 @@ func (p *Plugin) readBundleAsset(name string) ([]byte, error) {
 	}
 	// name is validated as a basename above; not attacker-controlled path input.
 	return os.ReadFile(filepath.Join(bundlePath, "assets", name)) //nolint:gosec // G304: basename-only, fixed by caller
+}
+
+// logRecoveredPanic is deferred by background goroutines so a panic there
+// is logged instead of taking down the plugin process. Logging can itself
+// fail once the API is gone (a test's mock torn down mid-run), so that is
+// recovered too.
+func (p *Plugin) logRecoveredPanic(what string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	p.API.LogError("channel-requests: recovered from a panic in a background task", "task", what, "panic", fmt.Sprint(r))
 }

@@ -65,7 +65,7 @@ test.describe('RequestAuditExportModal', () => {
         let body: Record<string, unknown> = {};
         await page.route(`${API}/bot_form`, (route) => route.fulfill({
             contentType: 'application/json',
-            body: JSON.stringify({compliance: {enabled: false}, hosting_envs: ['mattermost-dev', 'mattermost-prod'], privilege_levels: []}),
+            body: JSON.stringify({compliance: {enabled: false}, hosting_envs: [{value: 'ci_cd', label: 'CI/CD pipeline'}, {value: 'cloud_or_k8s', label: 'Cloud VM / Kubernetes'}]}),
         }));
         await page.route(`${API}/submit_audit_export_request`, (route) => {
             body = route.request().postDataJSON();
@@ -79,12 +79,12 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByLabel('PDF (for reading)').check();
         await expect(page.getByLabel('Request type (optional)')).toHaveCount(0);
         await expect(page.getByLabel('Approved from (optional)')).toBeVisible();
-        await page.getByLabel('Hosting environment (optional)').selectOption('mattermost-prod');
+        await page.getByLabel('Hosting environment (optional)').selectOption('cloud_or_k8s');
         await page.getByLabel('Reason').fill('fleet review');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('ok')).toBeVisible();
-        expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'mattermost-prod', reason: 'fleet review'});
+        expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'cloud_or_k8s', reason: 'fleet review'});
     });
 
     test('asks for one bot\'s forensics, which needs the bot and both dates', async ({mount, page}) => {

@@ -23,11 +23,6 @@ import {RequestTeamAdminModal} from './RequestTeamAdminModal';
 import {RequestTeamGuestModal} from './RequestTeamGuestModal';
 import {RequestTeamMemberModal} from './RequestTeamMemberModal';
 import {RequestTeamModal} from './RequestTeamModal';
-import {
-    SecurityApproverAttributeSetting,
-    SecurityApproverGroupSetting,
-    TwoStepApproverModeSetting,
-} from './TwoStepApproverSettings';
 import reducer, {
     getCurrentTeamId,
     getChannelType,
@@ -46,6 +41,11 @@ import reducer, {
 } from './store';
 import type {GlobalState} from './store';
 import {installTeamMenuOverride, installTeamSidebarAddOverride} from './teamMenuOverride';
+import {
+    SecurityApproverAttributeSetting,
+    SecurityApproverGroupSetting,
+    TwoStepApproverModeSetting,
+} from './TwoStepApproverSettings';
 
 export default class Plugin {
     private disposers: Array<() => void> = [];
