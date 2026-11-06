@@ -75,6 +75,13 @@ func stubLogs(api *plugintest.API) {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvApprovalCardsPrefix)
 	})).Return(nil).Maybe()
+	// Open-request / token-expiry indexes updated on store/claim (best-effort).
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
 }
 
 // stubLogLines registers only the permissive log expectations, for tests
@@ -133,8 +140,8 @@ func stubNamesFree(api *plugintest.API) {
 	)
 }
 
-// stubLogLevels registers permissive log expectations and nothing else, for
-// tests that assert no other API call is made.
+// stubLogLevels registers permissive log expectations and the open-request /
+// token-expiry index CAS stubs (store/claim paths update those best-effort).
 func stubLogLevels(api *plugintest.API) {
 	for _, method := range []string{"LogDebug", "LogInfo", "LogWarn", "LogError"} {
 		for arity := 1; arity <= 16; arity++ {
@@ -146,13 +153,23 @@ func stubLogLevels(api *plugintest.API) {
 		}
 	}
 	api.On("LogAuditRec", mock.Anything).Maybe()
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
 }
 
 // stubApprovalTeamRecord lets approvalTeam read and write its record of the
-// Approval team; nothing is recorded yet.
+// Approval team; nothing is recorded yet. Also stubs the open-request index
+// CAS path used whenever a pending request is stored.
 func stubApprovalTeamRecord(api *plugintest.API) {
 	api.On("KVGet", kvApprovalTeamKey).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvApprovalTeamKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
 }
 
 // pluginChannel returns a private channel the plugin's bot created, the

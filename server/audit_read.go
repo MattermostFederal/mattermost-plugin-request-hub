@@ -568,18 +568,24 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 
 // buildHistoryExport builds the request histories export: JSON with one
 // object per request and its latest copy, or CSV with one row per event
-// and every detail.
+// and every detail. Caps histories/events so a full-store export cannot
+// load the whole node into memory.
 func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*auditExport, error) {
 	histories, err := p.listHistories()
 	if err != nil {
 		return nil, err
 	}
 	filtered := make([]requestHistory, 0, len(histories))
+	truncated := false
 	for _, h := range histories {
 		if (f.RequestID != "" && h.RequestID != f.RequestID) || (f.Kind != "" && h.Kind != f.Kind) ||
 			(f.Requester != "" && h.RequesterID != f.Requester) ||
 			(f.Since > 0 && h.UpdatedAt < f.Since) || (f.Until > 0 && h.CreatedAt > f.Until) {
 			continue
+		}
+		if len(filtered) >= historyExportMaxHistories {
+			truncated = true
+			break
 		}
 		filtered = append(filtered, h)
 	}
@@ -588,7 +594,15 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	out := &auditExport{count: len(filtered), filename: filename}
 	var buf bytes.Buffer
 	if f.Format == "json" {
-		if err := json.NewEncoder(&buf).Encode(filtered); err != nil {
+		payload := any(filtered)
+		if truncated {
+			payload = map[string]any{
+				"truncated": true,
+				"limit":     historyExportMaxHistories,
+				"histories": filtered,
+			}
+		}
+		if err := json.NewEncoder(&buf).Encode(payload); err != nil {
 			return nil, err
 		}
 		out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".json", "application/json"
@@ -596,10 +610,15 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	}
 	cw := csv.NewWriter(&buf)
 	_ = cw.Write(csvRecord("request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"))
+	events := 0
 	for _, h := range filtered {
 		for _, ev := range h.Events {
 			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
 				continue
+			}
+			if events >= historyExportMaxEvents {
+				truncated = true
+				break
 			}
 			message, details := csvDetail(ev.Detail)
 			_ = cw.Write(csvRecord(
@@ -607,7 +626,15 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 				time.UnixMilli(ev.At).UTC().Format(time.RFC3339),
 				ev.Event, ev.Outcome, ev.ActorID, ev.ActorName, ev.Note, message, details,
 			))
+			events++
 		}
+		if events >= historyExportMaxEvents {
+			break
+		}
+	}
+	if truncated {
+		_ = cw.Write(csvRecord("TRUNCATED", "", "", "", "", "", "", "", "",
+			fmt.Sprintf("export capped at %d histories / %d events", historyExportMaxHistories, historyExportMaxEvents), "", ""))
 	}
 	cw.Flush()
 	if err := cw.Error(); err != nil {

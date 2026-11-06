@@ -123,6 +123,10 @@ func (p *Plugin) OnActivate() error {
 		if p.getConfiguration().PerTeamApprovalChannels {
 			p.ensureAllTeamApprovalChannels()
 		}
+		// Rebuild the open-request index so list/approve paths avoid a full
+		// plugin KV scan (histories, anchors, bot index, …).
+		p.rebuildOpenRequestIndex()
+		p.rebuildTokenExpiryIndex()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

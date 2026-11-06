@@ -397,18 +397,19 @@ func TestEnsureAllTeamApprovalChannels_CountsEnsuredAndSkipped(t *testing.T) {
 		{Id: "ops", Name: "ops"},
 		{Id: "town", Name: "town"},
 	}, nil)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
 	admin := []*model.TeamMember{{UserId: "ta1", SchemeAdmin: true}}
+	// Fast path looks up the channel first for every team.
+	api.On("GetChannelByName", "quiet", "mattermost-channel-requests", true).Return(nil, testAppErr("not found"))
 	api.On("GetTeamMembers", "quiet", 0, 200).Return([]*model.TeamMember{}, nil)
-	api.On("GetTeamMembers", "ops", 0, 200).Return(admin, nil)
-	api.On("GetTeamMembers", "town", 0, 200).Return(admin, nil)
 	api.On("GetChannelByName", "ops", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("opsch", "mattermost-channel-requests", "ops"), nil)
 	api.On("GetChannelByName", "town", "mattermost-channel-requests", true).Return(takenChannel("townch"), nil)
+	api.On("GetTeamMembers", "town", 0, 200).Return(admin, nil)
 
 	p.ensureAllTeamApprovalChannels()
 
-	api.AssertNotCalled(t, "GetChannelByName", "quiet", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "GetTeamMembers", "ops", mock.Anything, mock.Anything)
 	api.AssertCalled(t, "LogWarn", "failed to ensure approval channel for team",
 		"team_id", "town", "team_name", "town", "error", mock.Anything)
 	api.AssertCalled(t, "LogInfo", "per-team approval channel sweep complete",

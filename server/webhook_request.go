@@ -152,14 +152,14 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvWebhookRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvWebhookRequestPrefix + req.ID)
 		p.releasePending(pendingKindWebhook, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot webhook request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postWebhookApprovalRequest(req, requester, channel)
 	if err != nil {
-		_ = p.API.KVDelete(kvWebhookRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvWebhookRequestPrefix + req.ID)
 		p.releasePending(pendingKindWebhook, req.RequesterID, req.ID)
 		p.API.LogError("failed to post webhook request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -471,8 +471,8 @@ func (p *Plugin) storeWebhookRequest(req *webhookRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal webhook request")
 	}
-	if appErr := p.API.KVSet(kvWebhookRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store webhook request")
+	if err := p.putPendingRequestKV(kvWebhookRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store webhook request")
 	}
 	return nil
 }

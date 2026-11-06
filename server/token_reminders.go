@@ -74,9 +74,11 @@ func (p *Plugin) saveBotTokenExpiry(rec botTokenExpiry) error {
 	if err != nil {
 		return err
 	}
-	if appErr := p.API.KVSet(botTokenExpiryKey(rec.TokenID), data); appErr != nil {
+	key := botTokenExpiryKey(rec.TokenID)
+	if appErr := p.API.KVSet(key, data); appErr != nil {
 		return appErr
 	}
+	p.trackTokenExpiryKey(key)
 	return nil
 }
 
@@ -104,24 +106,13 @@ func (p *Plugin) stopTokenReminderJob() {
 }
 
 // sendTokenExpiryReminders goes through every tracked token and sends the
-// reminders that are due at now.
+// reminders that are due at now. Uses the token-expiry index so it does not
+// scan histories/anchors/other plugin KV on every hourly run.
 func (p *Plugin) sendTokenExpiryReminders(now time.Time) {
-	const perPage = 200
-	var keys []string
-	for page := 0; ; page++ {
-		batch, appErr := p.API.KVList(page, perPage)
-		if appErr != nil {
-			p.API.LogError("failed to list bot token expiries", "error", appErr.Error())
-			return
-		}
-		for _, key := range batch {
-			if strings.HasPrefix(key, botTokenExpiryKeyPrefix) {
-				keys = append(keys, key)
-			}
-		}
-		if len(batch) < perPage {
-			break
-		}
+	keys, err := p.listTokenExpiryKeys()
+	if err != nil {
+		p.API.LogError("failed to list bot token expiries", "error", err.Error())
+		return
 	}
 	for _, key := range keys {
 		p.remindTokenExpiry(key, now)
@@ -228,6 +219,7 @@ func (p *Plugin) deleteBotTokenExpiry(key string) {
 	if appErr := p.API.KVDelete(key); appErr != nil {
 		p.API.LogWarn("failed to delete bot token expiry", "key", key, "error", appErr.Error())
 	}
+	p.untrackTokenExpiryKey(key)
 }
 
 // sendTokenReminder DMs the requester, or every active System Admin when

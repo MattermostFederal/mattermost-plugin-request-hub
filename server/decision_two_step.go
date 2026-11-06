@@ -271,7 +271,7 @@ func (p *Plugin) decideBotRequest(actingUserID, requestID, clickedPostID string,
 	bot, createErr := p.createBotForRequest(req)
 	if createErr != nil {
 		p.API.LogError("failed to create bot on approval", "error", createErr.Error())
-		if restoreErr := p.API.KVSet(key, rawReq); restoreErr != nil {
+		if restoreErr := p.putPendingRequestKV(key, rawReq); restoreErr != nil {
 			p.API.LogError("failed to restore bot request after create failure", "error", restoreErr.Error())
 			return p.lostRequest(cards, pendingKindBot, req.RequesterID, actingUser.Username,
 				fmt.Sprintf("Could not create the bot (%s), and the pending request could not be saved — ask the requester to resubmit.", createErr.Error()))
@@ -578,7 +578,7 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	dmMsg, hookID, createErr := p.createWebhookForRequest(req, actingUser.Id)
 	if createErr != nil {
 		p.API.LogError("failed to create webhook on approval", "error", createErr.Error())
-		if restoreErr := p.API.KVSet(key, rawReq); restoreErr != nil {
+		if restoreErr := p.putPendingRequestKV(key, rawReq); restoreErr != nil {
 			p.API.LogError("failed to restore webhook request after create failure", "error", restoreErr.Error())
 			return p.lostRequest(cards, pendingKindWebhook, req.RequesterID, actingUser.Username,
 				fmt.Sprintf("Could not create the webhook (%s), and the pending request could not be saved — ask the requester to resubmit.", createErr.Error()))

@@ -254,7 +254,7 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvAuditExportRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvAuditExportRequestPrefix + req.ID)
 		p.releasePending(pendingKindAuditExport, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot audit export request")
 	}
@@ -262,7 +262,7 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	approvalPostID, approvalChannelID, err := p.postApprovalAttachment(req.ID, p.auditExportApprovalAttachment(req, requester),
 		p.systemAdminMentions()+" — "+auditExportAsker(requester)+" asks for a copy of the audit history.", p.ensureAuditChannel())
 	if err != nil {
-		_ = p.API.KVDelete(kvAuditExportRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvAuditExportRequestPrefix + req.ID)
 		p.releasePending(pendingKindAuditExport, req.RequesterID, req.ID)
 		p.API.LogError("failed to post audit export request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -332,8 +332,8 @@ func (p *Plugin) storeAuditExportRequest(req *auditExportRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal audit export request")
 	}
-	if appErr := p.API.KVSet(kvAuditExportRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store audit export request")
+	if err := p.putPendingRequestKV(kvAuditExportRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store audit export request")
 	}
 	return nil
 }
@@ -437,7 +437,7 @@ func (p *Plugin) decideAuditExportRequest(actingUserID, requestID, clickedPostID
 	fileID, export, deliverErr := p.deliverAuditExport(req)
 	if deliverErr != nil {
 		p.API.LogError("failed to deliver audit export", "request_id", req.ID, "error", deliverErr.Error())
-		if restoreErr := p.API.KVSet(kvAuditExportRequestPrefix+req.ID, rawReq); restoreErr != nil {
+		if restoreErr := p.putPendingRequestKV(kvAuditExportRequestPrefix+req.ID, rawReq); restoreErr != nil {
 			p.API.LogError("failed to restore audit export request", "error", restoreErr.Error())
 			return p.lostRequest(cards, pendingKindAuditExport, req.RequesterID, actingUser.Username,
 				fmt.Sprintf("Could not send the export (%s), and the pending request could not be saved; ask the requester to submit it again.", deliverErr.Error()))

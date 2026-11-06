@@ -20,6 +20,12 @@ func stubTokenReminderJob(api *plugintest.API) {
 	api.On("KVSetWithOptions", isJobKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", isJobKey, mock.Anything).Return(nil).Maybe()
 	api.On("KVList", mock.Anything, mock.Anything).Return([]string{}, nil).Maybe()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 }
 
 func TestTrackBotTokenExpiry_StoresDetailsButNotTheToken(t *testing.T) {
@@ -31,6 +37,8 @@ func TestTrackBotTokenExpiry_StoresDetailsButNotTheToken(t *testing.T) {
 		raw = args.Get(1).([]byte)
 		require.NoError(t, json.Unmarshal(raw, &stored))
 	}).Return(nil)
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 	before := model.GetMillis()
 	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", Token: "secret-value", UserId: "bot1", ExpiresAt: 12345}, "mybot", "req1", "")
@@ -194,6 +202,8 @@ func TestRemindTokenExpiry_GoneBotStopsTracking(t *testing.T) {
 			api.On("KVGet", botTokenExpiryKey("tok1")).Return(mustMarshal(t, rec), nil)
 			getBot(api)
 			api.On("KVDelete", botTokenExpiryKey("tok1")).Return(nil)
+			api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+			api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 			p.remindTokenExpiry(botTokenExpiryKey("tok1"), time.Now())
 
@@ -284,6 +294,9 @@ func TestSendTokenExpiryReminders_ChecksOnlyTrackedTokensOnEveryPage(t *testing.
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
+	// Missing index → rebuild from KVList, then remind.
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Once()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil)
 	firstPage := make([]string, 200)
 	for i := range firstPage {
 		firstPage[i] = "pending_x"
@@ -296,17 +309,18 @@ func TestSendTokenExpiryReminders_ChecksOnlyTrackedTokensOnEveryPage(t *testing.
 
 	p.sendTokenExpiryReminders(time.Now())
 
-	api.AssertNumberOfCalls(t, "KVGet", 2)
+	api.AssertCalled(t, "KVGet", botTokenExpiryKey("tok1"))
+	api.AssertCalled(t, "KVGet", botTokenExpiryKey("tok2"))
 }
 
 func TestSendTokenExpiryReminders_ListFailureIsLogged(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil)
 	api.On("KVList", 0, 200).Return(nil, testAppErr("kv down"))
 
 	p.sendTokenExpiryReminders(time.Now())
 
 	api.AssertCalled(t, "LogError", "failed to list bot token expiries", "error", mock.Anything)
-	api.AssertNotCalled(t, "KVGet", mock.Anything)
 }

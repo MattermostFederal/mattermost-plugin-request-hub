@@ -520,9 +520,19 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 		return
 	}
 	approvalTeam := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
+	channelName := p.getConfiguration().TeamChannelName()
 	created := 0
 	skipped := 0
 	for _, team := range teams {
+		// Fast path: channel already exists — skip the Team Admin / SysAdmin
+		// membership scan for every other team. Only the Approval team reseeds.
+		if existing, _ := p.lookupApprovalChannel(team.Id, channelName); existing != nil {
+			if team.Name == approvalTeam {
+				p.addTeamApproversToChannel(team.Id, existing.Id)
+			}
+			created++
+			continue
+		}
 		if !p.hasActiveTeamApprovers(team.Id) {
 			skipped++
 			continue

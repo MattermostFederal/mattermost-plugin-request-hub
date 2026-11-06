@@ -160,15 +160,13 @@ func TestEnsureAllTeamApprovalChannels_LeavesOtherTeamsExistingChannels(t *testi
 	p.setConfiguration(&configuration{PerTeamApprovalChannels: true, ApprovalTeam: "hq"})
 
 	api.On("GetTeams").Return([]*model.Team{{Id: "team-eng", Name: "eng"}}, nil)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
-	api.On("GetTeamMembers", "team-eng", 0, 200).Return([]*model.TeamMember{
-		{TeamId: "team-eng", UserId: "u_tadmin", SchemeAdmin: true},
-	}, nil)
 	api.On("GetChannelByName", "team-eng", "mattermost-channel-requests", true).
-		Return(&model.Channel{Id: "ch-eng", TeamId: "team-eng"}, nil)
+		Return(&model.Channel{Id: "ch-eng", TeamId: "team-eng", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}, nil)
 
 	p.ensureAllTeamApprovalChannels()
 
+	// Existing non-approval-team channels skip membership scans and re-seeding.
+	api.AssertNotCalled(t, "GetTeamMembers", mock.Anything, mock.Anything, mock.Anything)
 	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }
 

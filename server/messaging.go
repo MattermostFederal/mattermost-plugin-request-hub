@@ -74,25 +74,37 @@ func (p *Plugin) storeTicketLookups(anchor threadAnchor) {
 //   - Forwards DM thread replies from requesters to their ticket's approval thread.
 //   - Forwards approval thread replies from reviewers to the requester's DM thread.
 //   - Prompts users who DM the bot outside of any ticket thread.
+//
+// Hot path: almost every post on the server hits this hook. Thread replies are
+// resolved with KV lookups first so busy channels do not pay GetChannel on every
+// message. GetChannel runs only for root-level posts (DM help nudge).
 func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
 	// Never react to our own posts — would create an infinite forwarding loop.
 	if post.UserId == p.botUserID {
 		return
 	}
 
+	// Known ticket threads: KV hit is enough — no channel type lookup.
+	if post.RootId != "" {
+		if raw, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId); appErr == nil && raw != nil {
+			p.forwardThreadReplyToRequesterDM(post, raw)
+			return
+		}
+		if raw, appErr := p.API.KVGet(kvDMRootPrefix + post.RootId); appErr == nil && raw != nil {
+			p.forwardDMReplyToTicketThread(post, raw)
+			return
+		}
+		// Unknown thread reply — not a Request Hub ticket. Done.
+		return
+	}
+
+	// Root-level posts: only DMs with the bot get a help nudge.
 	channel, appErr := p.API.GetChannel(post.ChannelId)
 	if appErr != nil {
 		return
 	}
-
 	if channel.Type == model.ChannelTypeDirect {
 		p.handleIncomingDMPost(post)
-		return
-	}
-
-	// Only care about thread replies in non-DM channels (reviewers commenting in ticket threads).
-	if post.RootId != "" {
-		p.handleIncomingThreadReply(post)
 	}
 }
 

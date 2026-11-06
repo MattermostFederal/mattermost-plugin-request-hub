@@ -459,8 +459,9 @@ func (p *Plugin) listApproverGroupMemberIDs(groupName string) []string {
 
 func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 	const perPage = 100
+	const maxPages = 50 // hard cap (~5k members) so a huge group cannot hang reconcile
 	var ids []string
-	for page := 0; ; page++ {
+	for page := 0; page < maxPages; page++ {
 		users, listErr := p.API.GetGroupMemberUsers(groupID, page, perPage)
 		if listErr != nil {
 			p.API.LogWarn("two-step channel access: GetGroupMemberUsers failed",
@@ -476,6 +477,9 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			return ids
 		}
 	}
+	p.API.LogWarn("two-step channel access: group member listing hit page cap",
+		"group", label, "members", len(ids), "max_pages", maxPages)
+	return ids
 }
 
 func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
@@ -501,9 +505,10 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 	}
 
 	const perPage = 100
+	const maxPages = 50 // hard cap (~5k attribute holders) for reconcile safety
 	var ids []string
 	var cursor model.PropertyValueSearchCursor
-	for {
+	for page := 0; page < maxPages; page++ {
 		values, searchErr := p.API.SearchPropertyValues(groupID, model.PropertyValueSearchOpts{
 			GroupID:    groupID,
 			TargetType: model.PropertyValueTargetTypeUser,
@@ -532,4 +537,7 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			return ids
 		}
 	}
+	p.API.LogWarn("two-step channel access: attribute member listing hit page cap",
+		"attr", attrName, "members", len(ids), "max_pages", maxPages)
+	return ids
 }

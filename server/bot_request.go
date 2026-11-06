@@ -232,14 +232,14 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (su
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvBotRequestPrefix + req.ID)
 		p.releasePending(pendingKindBot, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot bot request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postBotApprovalRequest(req, requester)
 	if err != nil {
-		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvBotRequestPrefix + req.ID)
 		p.releasePending(pendingKindBot, req.RequesterID, req.ID)
 		p.API.LogError("failed to post bot request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -490,8 +490,8 @@ func (p *Plugin) storeBotRequest(req *botRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal bot request")
 	}
-	if appErr := p.API.KVSet(kvBotRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store bot request")
+	if err := p.putPendingRequestKV(kvBotRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store bot request")
 	}
 	return nil
 }

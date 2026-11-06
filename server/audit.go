@@ -27,6 +27,13 @@ const historyUpdateAttempts = 8
 // historyListPageSize is how many KV keys listHistories reads at a time.
 const historyListPageSize = 200
 
+// historyExportMaxHistories / historyExportMaxEvents bound a single histories
+// export so an unbounded KV store cannot OOM the node on download/approve.
+const (
+	historyExportMaxHistories = 5000
+	historyExportMaxEvents    = 100000
+)
+
 // Audit events. Every event that touches a request is recorded under one
 // of these names, in the request history, the server audit log (as
 // requesthub_<event>) and, depending on AuditChannelDetail, the audit
