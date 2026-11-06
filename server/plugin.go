@@ -117,9 +117,16 @@ func (p *Plugin) OnActivate() error {
 		// Security / system pool members (usergroup or ABAC) into bot + webhook
 		// private channels so they can see and click Approve.
 		p.syncTwoStepApproverChannels()
+		// Primary-team Team Admins: watch-only membership on every primary
+		// ticket channel (including bot/webhook/audit). Approve rights stay gated.
+		p.syncPrimaryTeamAdminVisibility()
 		if p.getConfiguration().PerTeamApprovalChannels {
 			p.ensureAllTeamApprovalChannels()
 		}
+		// Rebuild the open-request index so list/approve paths avoid a full
+		// plugin KV scan (histories, anchors, bot index, …).
+		p.rebuildOpenRequestIndex()
+		p.rebuildTokenExpiryIndex()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

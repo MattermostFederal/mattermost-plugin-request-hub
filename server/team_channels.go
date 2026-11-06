@@ -162,6 +162,7 @@ func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
 	}
 
 	p.addSystemAdminsToChannel(ch.Id)
+	p.addPrimaryTeamAdminsToChannel(ch.Id)
 	p.bookmarkDocs(ch)
 
 	return ch
@@ -326,7 +327,10 @@ func (p *Plugin) ensureNamedApprovalChannel(name, displayName, purpose string) *
 	// without waiting for the next activation cycle. Security/system pool
 	// members are seeded separately via syncTwoStepApproverChannels (activate /
 	// config change / login) to avoid an init cycle with ensure* helpers.
+	// Primary-team Team Admins get watch-only membership (approve rights stay
+	// gated by existing toggles / two-step rules).
 	p.addSystemAdminsToChannel(ch.Id)
+	p.addPrimaryTeamAdminsToChannel(ch.Id)
 	p.bookmarkDocs(ch)
 
 	return ch
@@ -516,9 +520,19 @@ func (p *Plugin) ensureAllTeamApprovalChannels() {
 		return
 	}
 	approvalTeam := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
+	channelName := p.getConfiguration().TeamChannelName()
 	created := 0
 	skipped := 0
 	for _, team := range teams {
+		// Fast path: channel already exists — skip the Team Admin / SysAdmin
+		// membership scan for every other team. Only the Approval team reseeds.
+		if existing, _ := p.lookupApprovalChannel(team.Id, channelName); existing != nil {
+			if team.Name == approvalTeam {
+				p.addTeamApproversToChannel(team.Id, existing.Id)
+			}
+			created++
+			continue
+		}
 		if !p.hasActiveTeamApprovers(team.Id) {
 			skipped++
 			continue
@@ -639,8 +653,16 @@ func (p *Plugin) placeChannelMembersInManagedCategory(ch *model.Channel) int {
 // per-team channel-requests channel when PerTeamApprovalChannels is on and the
 // team has at least one local approver. Used after team create and after Team
 // Admin promotion — both paths where membership/roles change without a join hook.
+// When the team is the primary Approval team, also reseeds Team Admin visibility
+// across all primary ticket channels (bot/webhook/team/audit included).
 func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
-	if teamID == "" || !p.getConfiguration().PerTeamApprovalChannels {
+	if teamID == "" {
+		return
+	}
+	if approval, err := p.approvalTeam(); err == nil && approval != nil && approval.Id == teamID {
+		p.syncPrimaryTeamAdminVisibility()
+	}
+	if !p.getConfiguration().PerTeamApprovalChannels {
 		return
 	}
 	if !p.hasActiveTeamApprovers(teamID) {
@@ -659,17 +681,267 @@ func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
 	p.placeChannelMembersInManagedCategory(ch)
 }
 
+// primaryTicketChannels returns the shared ticket channels on the primary
+// Approval team (root, bot, webhook, team-creation, audit), creating them if
+// needed. Used for setup-time ensure and Team Admin visibility seeding.
+func (p *Plugin) primaryTicketChannels() []*model.Channel {
+	var out []*model.Channel
+	for _, ensure := range []func() *model.Channel{
+		p.ensureRootApprovalChannel,
+		p.ensureBotApprovalChannel,
+		p.ensureWebhookApprovalChannel,
+		p.ensureTeamCreationApprovalChannel,
+		p.ensureAuditChannel,
+	} {
+		if ch := ensure(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// listTeamAdminIDs returns Team Admin user IDs for teamID (best-effort).
+func (p *Plugin) listTeamAdminIDs(teamID string) []string {
+	var out []string
+	if teamID == "" {
+		return out
+	}
+	const perPage = 200
+	for page := range 50 {
+		members, appErr := p.API.GetTeamMembers(teamID, page, perPage)
+		if appErr != nil {
+			p.API.LogWarn("failed to list team members for Team Admin visibility seeding",
+				"team_id", teamID, "error", appErr.Error())
+			return out
+		}
+		for _, m := range members {
+			if m == nil || m.UserId == "" || m.UserId == p.botUserID {
+				continue
+			}
+			if isTeamAdminMember(m) {
+				out = append(out, m.UserId)
+			}
+		}
+		if len(members) < perPage {
+			return out
+		}
+	}
+	return out
+}
+
+// addPrimaryTeamAdminsToChannel adds every Team Admin of the configured
+// Approval team to channelID for watch-only visibility, and places each in the
+// managed sidebar category. No-op when ApprovalTeam is unset.
+func (p *Plugin) addPrimaryTeamAdminsToChannel(channelID string) {
+	if channelID == "" {
+		return
+	}
+	team, err := p.approvalTeam()
+	if err != nil || team == nil {
+		return
+	}
+	for _, userID := range p.listTeamAdminIDs(team.Id) {
+		if _, appErr := p.API.AddChannelMember(channelID, userID); appErr != nil {
+			p.API.LogWarn("failed to add primary Team Admin to ticket channel",
+				"channel_id", channelID, "user_id", userID, "error", appErr.Error())
+			continue
+		}
+		p.addChannelToPermissionsCategory(userID, team.Id, channelID)
+	}
+}
+
+// primaryVisibilityChannels are primary ticket channels where membership is
+// SysAdmin + Approval-team Team Admin only (watch-only for Team Admins).
+// Bot/webhook are excluded: security-pool members also belong there, and
+// two-step reconcile already evicts demoted pool members / Team Admins.
+func (p *Plugin) primaryVisibilityChannels() []*model.Channel {
+	var out []*model.Channel
+	for _, ensure := range []func() *model.Channel{
+		p.ensureRootApprovalChannel,
+		p.ensureTeamCreationApprovalChannel,
+		p.ensureAuditChannel,
+	} {
+		if ch := ensure(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// syncPrimaryTeamAdminVisibility ensures primary ticket channels exist and
+// reseeds Approval-team Team Admins into all of them, then evicts members who
+// no longer qualify. Scoped to the primary Approval team only — never
+// auto-joins Team Admins into other teams' channels.
+func (p *Plugin) syncPrimaryTeamAdminVisibility() {
+	team, err := p.approvalTeam()
+	if err != nil || team == nil {
+		return
+	}
+	channels := p.primaryTicketChannels()
+	if len(channels) == 0 {
+		return
+	}
+	adminIDs := p.listTeamAdminIDs(team.Id)
+	p.API.LogInfo("primary team admin visibility: reseeding into ticket channels",
+		"team_id", team.Id, "admins", len(adminIDs), "channels", len(channels))
+	for _, userID := range adminIDs {
+		for _, ch := range channels {
+			p.addUserToApprovalChannel(ch, userID)
+		}
+	}
+	p.evictStalePrimaryTeamAdminChannelMembers()
+}
+
+// ensurePrimaryTeamAdminVisibilityForUser adds one Approval-team Team Admin to
+// every primary ticket channel. No-op when the user is not a Team Admin there.
+func (p *Plugin) ensurePrimaryTeamAdminVisibilityForUser(userID string) {
+	if userID == "" || userID == p.botUserID || !p.isApprovalTeamAdmin(userID) {
+		return
+	}
+	for _, ch := range p.primaryTicketChannels() {
+		p.addUserToApprovalChannel(ch, userID)
+	}
+}
+
+// reconcilePrimaryTeamAdminVisibilityForUser adds the user when they still
+// qualify as SysAdmin or Approval-team Team Admin, or removes them from
+// visibility-only primary channels (root / team-creation / audit) when demoted.
+// Bot/webhook eviction stays with two-step reconcile so security-pool members
+// are not removed. Skips users who are not on the Approval team and are not
+// System Admins — avoids DeleteChannelMember on every login for unrelated users.
+func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
+	if user == nil || user.Id == "" || user.Id == p.botUserID {
+		return
+	}
+	team, err := p.approvalTeam()
+	if err != nil || team == nil {
+		return
+	}
+
+	if user.IsSystemAdmin() {
+		for _, ch := range p.primaryTicketChannels() {
+			p.addUserToApprovalChannel(ch, user.Id)
+		}
+		return
+	}
+
+	member, appErr := p.API.GetTeamMember(team.Id, user.Id)
+	if appErr != nil || member == nil || member.DeleteAt != 0 {
+		return
+	}
+	if isTeamAdminMember(member) {
+		for _, ch := range p.primaryTicketChannels() {
+			p.addUserToApprovalChannel(ch, user.Id)
+		}
+		return
+	}
+
+	for _, ch := range p.primaryVisibilityChannels() {
+		if ch == nil {
+			continue
+		}
+		if _, getErr := p.API.GetChannelMember(ch.Id, user.Id); getErr != nil {
+			continue
+		}
+		if delErr := p.API.DeleteChannelMember(ch.Id, user.Id); delErr != nil {
+			p.API.LogDebug("primary team admin visibility: evict on login",
+				"channel_id", ch.Id, "user_id", user.Id, "error", delErr.Error())
+			continue
+		}
+		p.API.LogInfo("primary team admin visibility: evicted demoted Team Admin",
+			"user_id", user.Id, "username", user.Username, "channel_id", ch.Id)
+	}
+}
+
+// evictStalePrimaryTeamAdminChannelMembers removes members of root /
+// team-creation / audit who are not the bot, not a System Admin, and not an
+// Approval-team Team Admin. Fail-closed on user/role lookup errors (skip).
+func (p *Plugin) evictStalePrimaryTeamAdminChannelMembers() {
+	team, err := p.approvalTeam()
+	if err != nil || team == nil {
+		return
+	}
+	for _, ch := range p.primaryVisibilityChannels() {
+		if ch == nil {
+			continue
+		}
+		p.evictStaleMembersFromPrimaryVisibilityChannel(ch, team.Id)
+	}
+}
+
+func (p *Plugin) evictStaleMembersFromPrimaryVisibilityChannel(ch *model.Channel, approvalTeamID string) {
+	if ch == nil || approvalTeamID == "" {
+		return
+	}
+	const perPage = 100
+	for page := 0; page < 50; page++ {
+		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
+		if appErr != nil {
+			p.API.LogWarn("primary team admin visibility: GetChannelMembers failed",
+				"channel_id", ch.Id, "error", appErr.Error())
+			return
+		}
+		for i := range members {
+			m := &members[i]
+			if m.UserId == "" || m.UserId == p.botUserID {
+				continue
+			}
+			user, uErr := p.API.GetUser(m.UserId)
+			if uErr != nil || user == nil {
+				continue
+			}
+			if user.IsSystemAdmin() {
+				continue
+			}
+			tm, tmErr := p.API.GetTeamMember(approvalTeamID, m.UserId)
+			if tmErr != nil {
+				// Fail closed on API errors so a brief outage does not mass-evict.
+				// Not-found means they are not an Approval-team Team Admin → evict.
+				if !isNotFound(tmErr) {
+					continue
+				}
+			} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) {
+				continue
+			}
+			if delErr := p.API.DeleteChannelMember(ch.Id, m.UserId); delErr != nil {
+				p.API.LogWarn("primary team admin visibility: failed to evict demoted member",
+					"channel_id", ch.Id, "user_id", m.UserId, "error", delErr.Error())
+				continue
+			}
+			p.API.LogInfo("primary team admin visibility: evicted demoted Team Admin",
+				"user_id", m.UserId, "username", user.Username, "channel_id", ch.Id)
+		}
+		if len(members) < perPage {
+			return
+		}
+	}
+}
+
 // UserHasJoinedTeam ensures that a Team Admin or System Admin who joins (or is
 // added to) a team is automatically added to the team's approval channel. This
 // handles new team creation and explicit admin additions. Promotion of an
 // existing member to Team Admin is handled by syncTeamApprovalChannelAfterAdminChange
 // (called from promoteTeamAdmins / createTeamForRequest).
+//
+// When the join is onto the primary Approval team as Team Admin, the user is
+// also seeded into all primary ticket channels (bot/webhook/team/audit) for
+// visibility — even when PerTeamApprovalChannels is off.
 func (p *Plugin) UserHasJoinedTeam(_ *plugin.Context, teamMember *model.TeamMember, actor *model.User) {
-	if !p.getConfiguration().PerTeamApprovalChannels {
+	if teamMember == nil || teamMember.UserId == "" {
 		return
 	}
 
 	isTeamAdmin := isTeamAdminMember(teamMember)
+	if isTeamAdmin {
+		if approval, err := p.approvalTeam(); err == nil && approval != nil && approval.Id == teamMember.TeamId {
+			p.ensurePrimaryTeamAdminVisibilityForUser(teamMember.UserId)
+		}
+	}
+
+	if !p.getConfiguration().PerTeamApprovalChannels {
+		return
+	}
+
 	isSysAdmin := false
 	if actor != nil && actor.Id == teamMember.UserId {
 		isSysAdmin = actor.IsSystemAdmin()

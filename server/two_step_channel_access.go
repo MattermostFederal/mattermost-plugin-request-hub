@@ -12,16 +12,21 @@ import (
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
 // based on current pool / admin status. Mattermost has no plugin hook for
 // custom-group membership changes, so login + periodic reconcile cover joins
-// and demotions.
+// and demotions. Also reconciles primary-team Team Admin visibility (seed on
+// promote, evict from root/team/audit on demote).
 func (p *Plugin) UserHasLoggedIn(_ *plugin.Context, user *model.User) {
 	if user == nil || user.Id == "" || user.Id == p.botUserID {
 		return
 	}
-	go p.reconcileTwoStepAccessForUser(user)
+	go func() {
+		p.reconcileTwoStepAccessForUser(user)
+		p.reconcilePrimaryTeamAdminVisibilityForUser(user)
+	}()
 }
 
 // startTwoStepChannelReconciler periodically adds current pool members to the
-// bot/webhook channels. Cheap when groups resolve (only lists ~6 members).
+// bot/webhook channels and evicts stale primary Team Admin visibility members
+// from root/team/audit. Cheap when groups resolve (only lists ~6 members).
 func (p *Plugin) startTwoStepChannelReconciler() {
 	p.stopTwoStepChannelReconciler()
 	stop := make(chan struct{})
@@ -32,6 +37,7 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 	go func() {
 		// Run once immediately — NewTicker only fires after the first interval.
 		p.reconcileTwoStepApproverChannels()
+		p.evictStalePrimaryTeamAdminChannelMembers()
 
 		ticker := time.NewTicker(twoStepChannelReconcileInterval)
 		defer ticker.Stop()
@@ -41,6 +47,7 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 				return
 			case <-ticker.C:
 				p.reconcileTwoStepApproverChannels()
+				p.evictStalePrimaryTeamAdminChannelMembers()
 			}
 		}
 	}()
@@ -452,6 +459,7 @@ func (p *Plugin) listApproverGroupMemberIDs(groupName string) []string {
 
 func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 	const perPage = 100
+	const maxMembers = 75 // security pools are small; refuse runaway LDAP/group misconfig
 	var ids []string
 	for page := 0; ; page++ {
 		users, listErr := p.API.GetGroupMemberUsers(groupID, page, perPage)
@@ -461,8 +469,14 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			return ids
 		}
 		for _, u := range users {
-			if u != nil {
-				ids = append(ids, u.Id)
+			if u == nil {
+				continue
+			}
+			ids = append(ids, u.Id)
+			if len(ids) >= maxMembers {
+				p.API.LogWarn("two-step channel access: group member listing hit member cap",
+					"group", label, "members", len(ids), "max_members", maxMembers)
+				return ids[:maxMembers]
 			}
 		}
 		if len(users) < perPage {
@@ -494,6 +508,7 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 	}
 
 	const perPage = 100
+	const maxMembers = 75 // same cap as usergroup pools
 	var ids []string
 	var cursor model.PropertyValueSearchCursor
 	for {
@@ -515,6 +530,11 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 			if attributeValueIsSet(v.Value, field) {
 				ids = append(ids, v.TargetID)
+				if len(ids) >= maxMembers {
+					p.API.LogWarn("two-step channel access: attribute member listing hit member cap",
+						"attr", attrName, "members", len(ids), "max_members", maxMembers)
+					return ids[:maxMembers]
+				}
 			}
 			cursor = model.PropertyValueSearchCursor{
 				PropertyValueID: v.ID,

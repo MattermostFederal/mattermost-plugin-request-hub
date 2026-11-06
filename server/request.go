@@ -509,7 +509,7 @@ func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr err
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvRequestPrefix + req.ID)
 		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot channel request")
 	}
@@ -517,7 +517,7 @@ func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr err
 	approvalPostID, approvalChannelID, err := p.postApprovalRequest(req, requester)
 	if err != nil {
 		// Roll back the stored request so it isn't orphaned without an approval message.
-		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvRequestPrefix + req.ID)
 		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		p.API.LogError("failed to post channel request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -771,8 +771,8 @@ func (p *Plugin) storeRequest(req *channelRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal request")
 	}
-	if appErr := p.API.KVSet(kvRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store request")
+	if err := p.putPendingRequestKV(kvRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store request")
 	}
 	return nil
 }

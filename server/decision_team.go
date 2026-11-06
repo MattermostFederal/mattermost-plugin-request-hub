@@ -330,7 +330,7 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 
 	if approve {
 		if fulfillErr := p.fulfillTeamGuestRequest(req, actingUser.Id); fulfillErr != nil {
-			if restoreErr := p.API.KVSet(kvTeamGuestRequestPrefix+req.ID, rawReq); restoreErr != nil {
+			if restoreErr := p.putPendingRequestKV(kvTeamGuestRequestPrefix+req.ID, rawReq); restoreErr != nil {
 				p.API.LogError("failed to restore team guest request", "error", restoreErr.Error())
 				return p.lostRequest(cards, pendingKindTeamGuest, req.RequesterID, actingUser.Username,
 					fulfillErr.Error()+" The pending request could not be saved either; ask the requester to submit it again.")

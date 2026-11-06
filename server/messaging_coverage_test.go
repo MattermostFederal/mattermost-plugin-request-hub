@@ -54,9 +54,10 @@ func TestMessageHasBeenPosted_IgnoresBotPosts(t *testing.T) {
 
 func TestMessageHasBeenPosted_ChannelLookupFailureStops(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{})
+	// Root-level posts still need GetChannel (DM nudge vs ignore).
 	api.On("GetChannel", "c1").Return(nil, testAppErr("gone"))
 
-	p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{UserId: "u1", ChannelId: "c1", RootId: "r1"})
+	p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{UserId: "u1", ChannelId: "c1"})
 
 	api.AssertNotCalled(t, "KVGet", mock.Anything)
 }
@@ -89,20 +90,19 @@ func TestMessageHasBeenPosted_DirectMessages(t *testing.T) {
 
 	t.Run("reply outside a ticket thread is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "dm").Return(dm, nil)
-		api.On("GetChannelMember", "dm", "bot-user-id").Return(&model.ChannelMember{}, nil)
+		api.On("KVGet", kvApprovalPostPrefix+"other").Return(nil, nil)
 		api.On("KVGet", kvDMRootPrefix+"other").Return(nil, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{UserId: "u1", ChannelId: "dm", RootId: "other"})
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "CreatePost", mock.Anything)
 	})
 
 	t.Run("reply in a ticket thread is forwarded to the approval thread", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
 		defer api.AssertExpectations(t)
-		api.On("GetChannel", "dm").Return(dm, nil)
-		api.On("GetChannelMember", "dm", "bot-user-id").Return(&model.ChannelMember{}, nil)
+		api.On("KVGet", kvApprovalPostPrefix+"dmroot").Return(nil, nil)
 		api.On("KVGet", kvDMRootPrefix+"dmroot").Return(mustMarshal(t, relayAnchor), nil)
 		api.On("GetUser", "u1").Return(&model.User{Id: "u1", Username: "req"}, nil)
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
@@ -113,6 +113,8 @@ func TestMessageHasBeenPosted_DirectMessages(t *testing.T) {
 		p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{
 			UserId: "u1", ChannelId: "dm", RootId: "dmroot", Message: "more detail",
 		})
+
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 	})
 }
 
@@ -133,60 +135,60 @@ func TestMessageHasBeenPosted_ChannelPosts(t *testing.T) {
 
 	t.Run("reply under an unknown post is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "appch").Return(appch, nil)
-		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(nil, testAppErr("down"))
+		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(nil, nil)
+		api.On("KVGet", kvDMRootPrefix+"ap").Return(nil, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "GetUser", mock.Anything)
 	})
 
 	t.Run("unreadable anchor is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "appch").Return(appch, nil)
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return([]byte("{"), nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "GetUser", mock.Anything)
 	})
 
 	t.Run("anchor without a DM thread is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "appch").Return(appch, nil)
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(mustMarshal(t, threadAnchor{ApprovalPostID: "ap"}), nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "GetUser", mock.Anything)
 	})
 
 	t.Run("poster lookup failure is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "appch").Return(appch, nil)
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(mustMarshal(t, relayAnchor), nil)
 		api.On("GetUser", "sa1").Return(nil, testAppErr("gone"))
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "CreatePost", mock.Anything)
 	})
 
 	t.Run("reply from a non-reviewer stays local", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
-		api.On("GetChannel", "appch").Return(appch, nil)
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(mustMarshal(t, relayAnchor), nil)
 		api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Username: "plain", Roles: "system_user"}, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "CreatePost", mock.Anything)
 	})
 
 	t.Run("reviewer reply is forwarded to the requester DM", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
 		defer api.AssertExpectations(t)
-		api.On("GetChannel", "appch").Return(appch, nil)
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(mustMarshal(t, relayAnchor), nil)
 		api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Username: "admin", Roles: "system_user system_admin"}, nil)
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
@@ -195,6 +197,8 @@ func TestMessageHasBeenPosted_ChannelPosts(t *testing.T) {
 		})).Return(&model.Post{}, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
+
+		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 	})
 }
 
