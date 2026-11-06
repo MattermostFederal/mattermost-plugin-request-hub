@@ -13,19 +13,21 @@ import (
 
 // Bot token expiry reminders. When an approved bot request issues a token,
 // the plugin keeps who asked for it and when it expires, never the token
-// value. An hourly job reminds the requester weekly from a month before the
-// expiry, daily in the last week, and once when it has expired. If the
+// value (bot_token_expiry_* KV). A once-daily cluster job scans that index
+// and DMs the requester: weekly from a month before expiry, daily in the
+// last week, and once when expired. LastRemindedAt in the same KV record is
+// the notification ledger so we do not re-spam between scans. If the
 // requester's account is gone, System Admins get the reminders instead.
 
 const (
 	botTokenExpiryKeyPrefix = "bot_token_expiry_"   //nolint:gosec // G101: a KV key, not a credential
 	tokenReminderJobKey     = "bot_token_reminders" //nolint:gosec // G101: a KV key, not a credential
-	tokenReminderJobPeriod  = time.Hour
+	tokenReminderJobPeriod  = 24 * time.Hour
 
 	tokenWeeklyWindow = 30 * 24 * time.Hour
 	tokenDailyWindow  = 7 * 24 * time.Hour
-	// tokenReminderSlack lets a reminder go out up to one job run early, so
-	// an hourly job doesn't push a daily reminder to the next day.
+	// tokenReminderSlack lets a reminder go out up to one job run early, so a
+	// daily job does not push a due reminder to the next calendar day.
 	tokenReminderSlack = tokenReminderJobPeriod
 )
 
@@ -107,7 +109,7 @@ func (p *Plugin) stopTokenReminderJob() {
 
 // sendTokenExpiryReminders goes through every tracked token and sends the
 // reminders that are due at now. Uses the token-expiry index so it does not
-// scan histories/anchors/other plugin KV on every hourly run.
+// scan histories/anchors/other plugin KV on every daily run.
 func (p *Plugin) sendTokenExpiryReminders(now time.Time) {
 	keys, err := p.listTokenExpiryKeys()
 	if err != nil {

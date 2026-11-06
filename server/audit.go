@@ -29,9 +29,10 @@ const historyListPageSize = 200
 
 // historyExportMaxHistories / historyExportMaxEvents bound a single histories
 // export so an unbounded KV store cannot OOM the node on download/approve.
+// Prefer filtering by date/request in the UI; these are hard ceilings only.
 const (
-	historyExportMaxHistories = 5000
-	historyExportMaxEvents    = 100000
+	historyExportMaxHistories = 500
+	historyExportMaxEvents    = 20000
 )
 
 // Audit events. Every event that touches a request is recorded under one

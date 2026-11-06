@@ -120,10 +120,12 @@ func TestRemindTokenExpiry_Schedule(t *testing.T) {
 		"more than a month out":            {expiresIn: 40 * day, lastReminded: 60 * day},
 		"month out, a week since the last": {expiresIn: 20 * day, lastReminded: 7 * day, want: "in 20 days"},
 		"month out, days since the last":   {expiresIn: 20 * day, lastReminded: 2 * day},
-		"last week, a day since the last":  {expiresIn: 5 * day, lastReminded: day - 30*time.Minute, want: "in 5 days"},
-		"last week, hours since the last":  {expiresIn: 5 * day, lastReminded: 10 * time.Hour},
-		"weekly turns daily":               {expiresIn: 6 * day, lastReminded: 2 * day, want: "in 6 days"},
-		"last day":                         {expiresIn: 3 * time.Hour, lastReminded: day, want: "within a day"},
+		"last week, a day since the last": {expiresIn: 5 * day, lastReminded: day - 30*time.Minute, want: "in 5 days"},
+		// Daily job: once we are inside the last-week window, each scan may
+		// remind again (LastRemindedAt is updated after send).
+		"last week, hours since the last": {expiresIn: 5 * day, lastReminded: 10 * time.Hour, want: "in 5 days"},
+		"weekly turns daily":              {expiresIn: 6 * day, lastReminded: 2 * day, want: "in 6 days"},
+		"last day":                        {expiresIn: 3 * time.Hour, lastReminded: day, want: "within a day"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := botTokenExpiry{

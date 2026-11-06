@@ -459,9 +459,9 @@ func (p *Plugin) listApproverGroupMemberIDs(groupName string) []string {
 
 func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 	const perPage = 100
-	const maxPages = 50 // hard cap (~5k members) so a huge group cannot hang reconcile
+	const maxMembers = 75 // security pools are small; refuse runaway LDAP/group misconfig
 	var ids []string
-	for page := 0; page < maxPages; page++ {
+	for page := 0; ; page++ {
 		users, listErr := p.API.GetGroupMemberUsers(groupID, page, perPage)
 		if listErr != nil {
 			p.API.LogWarn("two-step channel access: GetGroupMemberUsers failed",
@@ -469,17 +469,20 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			return ids
 		}
 		for _, u := range users {
-			if u != nil {
-				ids = append(ids, u.Id)
+			if u == nil {
+				continue
+			}
+			ids = append(ids, u.Id)
+			if len(ids) >= maxMembers {
+				p.API.LogWarn("two-step channel access: group member listing hit member cap",
+					"group", label, "members", len(ids), "max_members", maxMembers)
+				return ids[:maxMembers]
 			}
 		}
 		if len(users) < perPage {
 			return ids
 		}
 	}
-	p.API.LogWarn("two-step channel access: group member listing hit page cap",
-		"group", label, "members", len(ids), "max_pages", maxPages)
-	return ids
 }
 
 func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
@@ -505,10 +508,10 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 	}
 
 	const perPage = 100
-	const maxPages = 50 // hard cap (~5k attribute holders) for reconcile safety
+	const maxMembers = 75 // same cap as usergroup pools
 	var ids []string
 	var cursor model.PropertyValueSearchCursor
-	for page := 0; page < maxPages; page++ {
+	for {
 		values, searchErr := p.API.SearchPropertyValues(groupID, model.PropertyValueSearchOpts{
 			GroupID:    groupID,
 			TargetType: model.PropertyValueTargetTypeUser,
@@ -527,6 +530,11 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 			if attributeValueIsSet(v.Value, field) {
 				ids = append(ids, v.TargetID)
+				if len(ids) >= maxMembers {
+					p.API.LogWarn("two-step channel access: attribute member listing hit member cap",
+						"attr", attrName, "members", len(ids), "max_members", maxMembers)
+					return ids[:maxMembers]
+				}
 			}
 			cursor = model.PropertyValueSearchCursor{
 				PropertyValueID: v.ID,
@@ -537,7 +545,4 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			return ids
 		}
 	}
-	p.API.LogWarn("two-step channel access: attribute member listing hit page cap",
-		"attr", attrName, "members", len(ids), "max_pages", maxPages)
-	return ids
 }
