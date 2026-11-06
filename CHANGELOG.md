@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.2...v0.7.0) (2026-11-06)
+
+
+### Features
+
+* argument forms, prefixes and help for /mattermost-request-hub ([6b066ea](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/6b066ea7bc3a8c41030d46a39648c503a291f9fb))
+* audit exports are requests by default, with export types and a required reason ([60b2407](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/60b24074503056a1455e114e73ff69dab93db3fe))
+* audit history window and security approver export requests ([313d20e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/313d20e6ea62ad67a3b98c3303de8026478806ca))
+* bookmark the docs in every request channel ([2d90bba](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/2d90bbaa4b2eff41a0fbd1202d6f6b56779ce6ea))
+* bot access tokens expire after a year by default ([ae0a362](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/ae0a362873f9a02266031b56b5e0e018effd72d3))
+* bot forensic export traces one bot's channels and posts over a date range ([968a97e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/968a97e7f03f40652329132f273f515bfdbf480f))
+* bot inventory export as PDF, CSV or JSON ([46e707c](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/46e707c973122675b94261e4fb25b31473f9df26))
+* bot requesters accept a compliance statement before submitting ([d8ab5ef](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/d8ab5efb60b323472194a4e62e7297793122861c))
+* bot requests declare purpose, privilege, ingestion and environment, and name a home channel ([7f586e8](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/7f586e898c15b8729f0c6a0b60cd3651f2bf796c))
+* full audit trail for every request ([cad31ba](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/cad31ba69fdcce69dcfa02d6de4f55d3fac6577d))
+* full audit trail for every request ([09f9d17](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/09f9d170e126e8c73bf2aa6a6af57eea82b2b981))
+* remind requesters before bot tokens expire; lifetime in months ([273758e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/273758e9135f3eadb8a83dfdc2abbb082af31b1f))
+* request limits, slash-command decisions, exercise mode, token expiry and e2e suite ([a1da723](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/a1da7237f1fe17b73077cda7a00ff2afdc3485d3))
+* simplify two-step pools, rewrite bot form, fix inventory owners ([1176533](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/11765330aa20616e6b6e752e9b0768aeab3bb370))
+* team's own Team Admins approve Team Admin requests; opt-in approval-team Team Admins for team creation ([5d05c0f](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/5d05c0f0e6aaa0df3235c1802dfe9c91a1100976))
+
+
+### Bug Fixes
+
+* add the approval team's Team Admins to the shared approval channel ([fa0351e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/fa0351ea4c26b95c392894ca997c5f9d8c15bf07))
+* address review on coverage tooling, injected-item matching and outgoing webhook gating ([b212ce2](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b212ce200cffb07cb50578270cbb6516d84d2154))
+* adopt approval channels a System Admin or bot made; opt-in custom approver groups ([a2ff303](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/a2ff303d16b0e49416f2ff0a36a797ea00aacd7c))
+* adopt approval channels only from this plugin's bot, require the compliance hash ([bac2842](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/bac2842286a20cc48bfa7134337503b22bb68053))
+* approval, input and settings rules for every request type ([#61](https://github.com/MattermostFederal/mattermost-plugin-request-hub/issues/61)) ([ac726a3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/ac726a3105e467cbd40a61d0c27abc4d9fa18b88))
+* block nominees from approving their own promotion; detect archived approval channels; update approval copy ([0cb7bff](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/0cb7bff1a2e0a47fc38f6339650135ff70a15cdb))
+* bugs found by the e2e suite; docs: bot token expiry needs Mattermost 11.9 ([23d2a13](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/23d2a13623309b529e6f58307e4d88ae4d53dd78))
+* create bot tokens through the plugin API; check webhook permission before the final approval ([256a2ad](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/256a2ad68b1a43b1e7637fafe9c6be786773d440))
+* **deps:** bump golang.org/x/net to v0.62.0 for GO-2026-6860 ([0411216](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/04112164878a598e176b873eaa0111819fa94e2f))
+* don't shadow appErr in submitRequest's name check ([3431f73](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/3431f73d809d5368dcbf4c992e79b3cb5e2802a6))
+* escape slash-command replies, clearer quote and empty-list errors, forgive missing prefix hyphen ([b54b561](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b54b5613f341ad83276ad053431ca863d9443614))
+* find approver attributes in the pre-rename property group ([aa96d14](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/aa96d1485c7e41cfabd8ec6558913710006d77fb))
+* gate custom security groups, serve hosting codes, fix CI ([d99810e](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/d99810ea836237986d2630af5483d847e8c43171))
+* hold just-reserved pending entries, prune long-expired ones, renew the migration claim ([b3df7f3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/b3df7f3fa2196196777d8956020d89102067ff27))
+* limit Team Admin approvals to System Admins and opt-in approval-team Team Admins ([7f2f474](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/7f2f4741e76312cbe9e1cc875d371164a7c543e8))
+* pin CodeQL 2.27.2 checksums; leave the migration claim alone when renewal errors ([8ac75e1](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/8ac75e16b76c972f73f5bc94e3761396a597c10b))
+* re-check already-Team-Admin and already-on-team nominees at approval ([d54ebd6](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/d54ebd6e8345207dcff4e82cf9789a3161d4729b))
+* read dialog user pickers as lists, refuse taken names at submit, cap callback URLs at 1020 bytes ([795f1f6](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/795f1f61ca71e1f9e5297aac506399d3976e1b09))
+* refuse nominees who are already Team Admins or already on the team ([ac40bd0](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/ac40bd0fc5a8d866f34391c1b09d9cb319f00913))
+* show unknown users and prefixes as inline code in replies ([00c081f](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/00c081f8fbb738238c199a56c45bb3549b3ff1c3))
+* trap focus in the bot form's nested dialogs, reset Audit history on close, update audit help ([88f8505](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/88f8505b821123db43cafe82738cc6d20f9c9f2c))
+* **webapp:** close the team and channel menus from inside the menu ([36da4bd](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/36da4bd55abefe20fed328fe197215ff1a2c5eae))
+
+
+### Dependencies
+
+* **actions:** bump the actions-minor-patch group across 1 directory with 5 updates ([20bd1b8](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/20bd1b881d37a6ad042cf8d68f1924953f9eef96))
+* **go:** bump github.com/mattermost/mattermost/server/public ([8d39a17](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/8d39a17d16d706eb5f13c2ffb88228aca24c9aeb))
+* **npm:** bump the npm-minor-patch group across 1 directory with 8 updates ([d98bfd3](https://github.com/MattermostFederal/mattermost-plugin-request-hub/commit/d98bfd3cb4739dc45c72462fab277736158e434e))
+
 ## [0.6.2](https://github.com/MattermostFederal/mattermost-plugin-request-hub/compare/v0.6.1...v0.6.2) (2026-10-23)
 
 
