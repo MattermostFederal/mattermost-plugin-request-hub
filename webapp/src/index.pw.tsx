@@ -53,6 +53,8 @@ test.describe('plugin entry point', () => {
             'RequestBotModal',
             'RequestIncomingWebhookModal',
             'RequestOutgoingWebhookModal',
+            'AuditHistoryModal',
+            'RequestAuditExportModal',
         ]);
         expect(r.called.filter((c) => c === 'registerChannelHeaderButtonAction')).toHaveLength(1);
         expect(r.menus.map((m) => m.text)).toEqual([
@@ -66,7 +68,13 @@ test.describe('plugin entry point', () => {
             'Request Outgoing Webhook',
             'Request a Bot',
         ]);
-        expect(r.adminSettings).toEqual(['ApprovalTeam', 'ChannelNamePrefixes']);
+        expect(r.adminSettings).toEqual([
+            'TwoStepApproverMode',
+            'SecurityApproverAttribute',
+            'SecurityApproverGroup',
+            'ApprovalTeam',
+            'ChannelNamePrefixes',
+        ]);
         expect(r.errors).toEqual([]);
     });
 
@@ -129,7 +137,7 @@ test.describe('plugin entry point', () => {
         const r = await recorded(page);
         expect(r.errors).toEqual(['[channel-requests] channel-header button failed to initialize']);
         expect(r.menus).toHaveLength(9);
-        expect(r.adminSettings).toHaveLength(2);
+        expect(r.adminSettings).toHaveLength(5);
     });
 
     test('skips the admin console settings on servers without them', async ({mount, page}) => {

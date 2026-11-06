@@ -26,7 +26,7 @@ func waitFor(t *testing.T, done <-chan struct{}, what string) {
 
 // --- request.go ---
 
-func TestLogAudit_LinksThreadAndLogsPostFailure(t *testing.T) {
+func TestPostAuditCard_LinksThreadAndLogsPostFailure(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).
@@ -42,9 +42,9 @@ func TestLogAudit_LinksThreadAndLogsPostFailure(t *testing.T) {
 			att[0].Text == "note\n\n[Open ticket thread](https://mm.example.com/appteam/pl/ap)"
 	})).Return(nil, testAppErr("down"))
 
-	p.logAudit(auditOutcome(99), " note ", "ap")
+	p.postAuditCard(auditOutcome(99), " note ", "ap")
 
-	api.AssertCalled(t, "LogWarn", "audit post failed", "channel_id", "auditch", "error", mock.Anything)
+	api.AssertCalled(t, "LogError", "audit post failed", "channel_id", "auditch", "error", mock.Anything)
 }
 
 func TestAuditCardStyle_UnknownKindIsNeutral(t *testing.T) {
@@ -225,7 +225,7 @@ func TestGetConfiguration_UnsetReturnsEmpty(t *testing.T) {
 
 func TestTwoStepPoolFingerprint_NilAndTrimmed(t *testing.T) {
 	require.Empty(t, twoStepPoolFingerprint(nil))
-	require.Equal(t, twoStepModeUserGroup+"|sec|||",
+	require.Equal(t, twoStepModeUserGroup+"|sec||false",
 		twoStepPoolFingerprint(&configuration{TwoStepApproverMode: "groups", SecurityApproverGroup: " sec "}))
 }
 
@@ -355,7 +355,15 @@ func TestOnConfigurationChange_TwoStepPoolChangeReseedsChannels(t *testing.T) {
 	// Keep the log stubs: the background reseed still logs after the wait.
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	stubLoadConfiguration(api, configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
+	// newTestPlugin defaults to system_admin; switching to usergroup changes the fingerprint.
+	stubLoadConfiguration(api, configuration{
+		TwoStepApproverMode:   twoStepModeUserGroup,
+		SecurityApproverGroup: "security-approvers",
+	})
+	api.On("GetTeamByName", mock.Anything).Return(nil, testAppErr("no approval team")).Maybe()
+	api.On("GetGroupByName", mock.Anything).Return(nil, testAppErr("missing")).Maybe()
+	api.On("GetGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*model.Group{}, nil).Maybe()
+	api.On("GetGroupsBySource", mock.Anything).Return([]*model.Group{}, nil).Maybe()
 
 	require.NoError(t, p.OnConfigurationChange())
 

@@ -34,7 +34,10 @@ type teamMemberRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs []string, reason string) (string, error) {
+func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs []string, reason string) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindTeamMember, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeTeamMember) {
 		return "", errors.New(teamMemberRequestsDisabledMsg)
 	}
@@ -83,6 +86,7 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 	// approve. Membership of the requester on the target team is intentionally
 	// not required — governance is the approval card, not submit-side RBAC.
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindTeamMember, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -92,6 +96,7 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 		p.API.LogError("failed to store team member request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamMemberRequestPrefix + req.ID)

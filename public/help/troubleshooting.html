@@ -83,9 +83,15 @@
             <li>Team, Team Admin, team member, guest, bot and webhook requests: <em>Approval team</em> isn't set or
                 can't be found. When it names a team that can't be found, the server log has <em>cannot ensure named
                 approval channel</em>.</li>
+            <li>Any request type: a channel with the approval channel's name already exists and can't be used,
+                because it is public, archived, or was created by a regular user or another bot. The server log has <em>An approval
+                channel name is used by a channel the plugin can't use</em>, with the channel and its creator. A
+                private channel with that name created by a System Admin or this plugin's bot is used instead: the plugin adds
+                its bot and logs <em>adopted an existing approval channel</em>.</li>
         </ul>
         <p>
-            <strong>Fix:</strong> set <em>Approval team</em> in the plugin settings to the name of an existing
+            <strong>Fix:</strong> for a name that can't be used, rename or archive that channel so the plugin can
+            create its own. Otherwise, set <em>Approval team</em> in the plugin settings to the name of an existing
             team. The plugin creates its approval channels there. Any one System Admin can act on a DMed request;
             after that, the other copies are closed with the outcome. A copy sent before the plugin was upgraded
             to this version keeps its buttons, which reply <em>This request has already been handled.</em>
@@ -157,7 +163,7 @@
             <li><em>You created this request</em> on a bot or webhook card: nobody can approve either step of their
                 own bot or webhook request, System Admins included. The card shows the reminder for everyone.</li>
             <li><em>Security review required first.</em> on a bot or webhook card: a security approver has to approve
-                before a system approver can finish it.</li>
+                before a System Admin can finish it.</li>
             <li><em>You've already approved your step. This request needs a different approver to complete it.</em>
                 The two steps of a bot or webhook card need two different people.</li>
             <li><em>You don't have permission to approve or deny this channel request.</em>, <em>... this Channel Admin
@@ -189,10 +195,56 @@
             plugin.
         </p>
 
+        <h2 id="audit">Audit trail</h2>
+        <p>
+            Every event on every request is recorded: the submission (and a submission that was refused, or failed
+            and was withdrawn), each step of a two-step approval, the approval or denial, an Approve or Deny that
+            was refused, an approval that failed and left the request pending, an approval that lost the request,
+            a token or webhook URL that couldn't be delivered, expiry, every message in the request's ticket threads
+            (with its text), bot token reminders, and exercise mode seeding and teardown. Each event says who did it
+            and when. Tokens and incoming webhook URLs are never recorded.
+        </p>
+        <p>Events go to three places:</p>
+        <ul>
+            <li><strong>The request history</strong>, which the plugin keeps for good, after the request is decided.
+                System Admins open <strong>Audit history</strong> in the Request Hub to search it and read any
+                request's timeline. Exports are requested from there with <strong>Request an export</strong> (see
+                below). Only when a System Admin has turned on <em>Allow direct audit export</em> does the window
+                offer downloads instead: all or part of the history as CSV or JSON, and the bot inventory as PDF, CSV
+                or JSON. The same is in <a href="slash.html#audit"><code>/mattermost-request-hub audit</code></a>.</li>
+            <li><strong>The server audit log</strong>, as <code>requesthub_</code> events such as
+                <code>requesthub_approved</code>, when audit logging is turned on for the server (System Console →
+                Compliance → Audit Logging, or <code>ExperimentalAuditSettings</code> in the server configuration; a
+                restart is needed). Use this to keep the trail with the rest of your compliance records.</li>
+            <li><strong>The audit channel</strong>, <code>mattermost-audit-requests</code>, as cards people can read.
+                <em>Audit channel detail</em> in System Console → Plugins → Mattermost Request Hub picks what is
+                posted there: decisions only, every lifecycle event (the default), or everything including refused
+                approvals and every relayed message. It changes only the channel: the history and the server audit
+                log always get every event.</li>
+        </ul>
+        <p>
+            If the history can't be saved, the server log has <em>failed to save request audit history</em> with the
+            whole event, so nothing is lost silently.
+        </p>
+        <p>
+            <strong>Security approvers</strong> (the security group or attribute set for bot and webhook approvals)
+            who aren't System Admins see <strong>Request Audit Export</strong> in the Request Hub instead. They pick
+            the export and its format: the request histories (CSV or JSON), the bot inventory (PDF, CSV or JSON)
+            or bot forensics (one bot's history, teams, channels and posts, JSON only). They narrow it if they want,
+            by request type or hosting environment, a requester and a date range (bot forensics needs the bot and
+            the dates it posted, at most 90 days apart), give a reason, and the request goes to the audit channel
+            for a System Admin to approve. Unless a System Admin has turned on <em>Allow direct audit export</em>,
+            System Admins request exports the same way (from <strong>Request an export</strong> in Audit history),
+            and a different System Admin approves them. Approving builds the export and posts it as a file in the
+            requester's request thread with the Request Hub bot. The request and the approval are recorded like any
+            other request.
+        </p>
+
         <h2 id="audit-missing">No cards in the audit channel</h2>
         <p>
-            <strong>Cause:</strong> the plugin posts every approve, deny and expiry to the private
-            <code>mattermost-audit-requests</code> channel it creates in the approval team. Without an
+            <strong>Cause:</strong> the plugin posts request events to the private
+            <code>mattermost-audit-requests</code> channel it creates in the approval team (which events depends on
+            <em>Audit channel detail</em>). Without an
             <em>Approval team</em>, or when the team can't be found, there is no audit channel and nothing is
             posted. In the second case the server log has <em>cannot ensure named approval channel</em>; when the
             setting is empty, nothing is logged. If the channel exists

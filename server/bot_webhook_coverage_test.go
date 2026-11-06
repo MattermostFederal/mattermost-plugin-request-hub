@@ -75,7 +75,8 @@ func TestSubmitBotRequest_StoreFailure(t *testing.T) {
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotRequestPrefix) }), mock.Anything).
 		Return(testAppErr("kv down"))
 
-	_, err := p.submitBotRequest("u_req", botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"})
+	stubBotHome(api)
+	_, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"}))
 
 	require.EqualError(t, err, "could not save your request; try again")
 	api.AssertCalled(t, "LogError", "failed to store bot request", "error", mock.Anything)
@@ -101,7 +102,8 @@ func TestSubmitBotRequest_ApprovalPostFailureRemovesRequest(t *testing.T) {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotRequestPrefix) })).
 		Run(func(args mock.Arguments) { deleted = args.String(0) }).Return(nil)
 
-	_, err := p.submitBotRequest("u_req", botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"})
+	stubBotHome(api)
+	_, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "ci-bot", DisplayName: "CI Bot"}))
 
 	require.EqualError(t, err, "could not send your request to the approvers; try again or contact a System Admin")
 	require.NotEmpty(t, deleted)
@@ -471,7 +473,7 @@ func TestScheduleTokenPostDeletion_AppendsAfterRetry(t *testing.T) {
 	api.On("KVCompareAndSet", tokenPostRegistryKey, existing, registryHolds("old", "new")).
 		Return(true, nil).Once()
 
-	p.scheduleTokenPostDeletion("new")
+	p.scheduleTokenPostDeletion("new", "")
 
 	api.AssertNumberOfCalls(t, "KVCompareAndSet", 2)
 	api.AssertNotCalled(t, "DeletePost", mock.Anything)

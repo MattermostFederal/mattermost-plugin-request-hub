@@ -33,7 +33,7 @@ func TestTrackBotTokenExpiry_StoresDetailsButNotTheToken(t *testing.T) {
 	}).Return(nil)
 
 	before := model.GetMillis()
-	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", Token: "secret-value", UserId: "bot1", ExpiresAt: 12345}, "mybot", "req1")
+	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", Token: "secret-value", UserId: "bot1", ExpiresAt: 12345}, "mybot", "req1", "")
 
 	require.Equal(t, botTokenExpiry{
 		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
@@ -48,8 +48,8 @@ func TestTrackBotTokenExpiry_SkipsTokensThatNeverExpire(t *testing.T) {
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 
-	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", UserId: "bot1"}, "mybot", "req1")
-	p.trackBotTokenExpiry(nil, "mybot", "req1")
+	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", UserId: "bot1"}, "mybot", "req1", "")
+	p.trackBotTokenExpiry(nil, "mybot", "req1", "")
 
 	api.AssertNotCalled(t, "KVSet", mock.Anything, mock.Anything)
 }
@@ -60,7 +60,7 @@ func TestTrackBotTokenExpiry_StoreFailureIsLogged(t *testing.T) {
 	p := newTestPlugin(api)
 	api.On("KVSet", botTokenExpiryKey("tok1"), mock.Anything).Return(testAppErr("kv down"))
 
-	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", UserId: "bot1", ExpiresAt: 1}, "mybot", "req1")
+	p.trackBotTokenExpiry(&model.UserAccessToken{Id: "tok1", UserId: "bot1", ExpiresAt: 1}, "mybot", "req1", "")
 
 	api.AssertCalled(t, "LogWarn", "failed to store bot token expiry; no reminders will be sent", "bot_user_id", "bot1", "error", mock.Anything)
 }
@@ -147,15 +147,20 @@ func TestRemindTokenExpiry_Schedule(t *testing.T) {
 func TestRemindTokenExpiry_ExpiredSendsOneNoticeThenStops(t *testing.T) {
 	now := time.Now()
 	f := newReminderFixture(t, botTokenExpiry{
-		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
+		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1", RequestID: "req-id",
 		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-2 * time.Hour).UnixMilli(),
 	})
+	events := captureAudit(f.p)
 
 	f.p.remindTokenExpiry(botTokenExpiryKey("tok1"), now)
 
 	require.Len(t, f.sent["req1"], 1)
 	require.Contains(t, f.sent["req1"][0], "expired on")
 	f.api.AssertCalled(t, "KVDelete", botTokenExpiryKey("tok1"))
+	require.Equal(t, []string{eventTokenReminder, eventTokenTrackingEnded}, eventNames(*events))
+	require.Equal(t, "req-id", (*events)[0].RequestID)
+	require.Equal(t, true, (*events)[0].Detail["expired"])
+	require.Equal(t, "the token expired", (*events)[1].Detail["reason"])
 }
 
 func TestRemindTokenExpiry_UsesTheBotsCurrentUsername(t *testing.T) {
@@ -184,6 +189,7 @@ func TestRemindTokenExpiry_GoneBotStopsTracking(t *testing.T) {
 			api := &plugintest.API{}
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
+			events := captureAudit(p)
 			rec := botTokenExpiry{TokenID: "tok1", BotUserID: "bot1", RequesterID: "req1", ExpiresAt: time.Now().Add(time.Hour).UnixMilli()}
 			api.On("KVGet", botTokenExpiryKey("tok1")).Return(mustMarshal(t, rec), nil)
 			getBot(api)
@@ -192,6 +198,8 @@ func TestRemindTokenExpiry_GoneBotStopsTracking(t *testing.T) {
 			p.remindTokenExpiry(botTokenExpiryKey("tok1"), time.Now())
 
 			api.AssertNotCalled(t, "CreatePost", mock.Anything)
+			require.Equal(t, []string{eventTokenTrackingEnded}, eventNames(*events))
+			require.Equal(t, "tok1", (*events)[0].Detail["token_id"])
 		})
 	}
 }

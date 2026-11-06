@@ -59,6 +59,14 @@ const (
 	routeSubmitOutgoingWebhookWebapp = "/api/v1/submit_outgoing_webhook_request"
 	routeSidebarCategories           = "/api/v1/sidebar_categories" // ?team_id=... — list caller's sidebar categories
 	routeConfig                      = "/api/v1/config"
+	routeBotForm                     = "/api/v1/bot_form"       // the bot form's compliance statement
+	routeAuditExport                 = "/api/v1/audit/export"   // every request history as CSV or JSON, System Admins only
+	routeAuditRequests               = "/api/v1/audit/requests" // the audit history list for the webapp, System Admins only
+	routeAuditRequest                = "/api/v1/audit/request"  // one request's history for the webapp, ?id=..., System Admins only
+	routeAuditAccess                 = "/api/v1/audit/access"   // whether the caller may view the audit history or request a copy
+	routeSubmitAuditExportWebapp     = "/api/v1/submit_audit_export_request"
+	routeApproveAuditExport          = "/api/v1/approve_audit_export"
+	routeDenyAuditExport             = "/api/v1/deny_audit_export"
 
 	// fieldPrefix is the dialog element name for the domain-prefix
 	// dropdown. Kept alongside the other field* constants in request.go.
@@ -107,6 +115,20 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	switch r.URL.Path {
+	case routeAuditExport:
+		p.handleAuditExport(w, r)
+	case routeAuditRequests:
+		p.handleAuditRequests(w, r)
+	case routeAuditRequest:
+		p.handleAuditRequest(w, r)
+	case routeAuditAccess:
+		p.handleAuditAccess(w, r)
+	case routeSubmitAuditExportWebapp:
+		p.handleSubmitAuditExportWebapp(w, r)
+	case routeApproveAuditExport:
+		p.handleDecisionClick(w, r, true, p.deciderFor(pendingKindAuditExport))
+	case routeDenyAuditExport:
+		p.handleDecisionClick(w, r, false, p.deciderFor(pendingKindAuditExport))
 	case routeDialog:
 		p.handleDialogSubmit(w, r)
 	case routeCreate:
@@ -185,6 +207,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleSubmitOutgoingWebhookWebapp(w, r)
 	case routeConfig:
 		p.handleConfig(w, r)
+	case routeBotForm:
+		p.handleBotForm(w, r)
 	case routeSidebarCategories:
 		p.handleListSidebarCategories(w, r)
 	default:
@@ -232,7 +256,8 @@ func isPostActionPath(path string) bool {
 		routeApproveTeamMember, routeDenyTeamMember,
 		routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot,
-		routeApproveWebhook, routeDenyWebhook:
+		routeApproveWebhook, routeDenyWebhook,
+		routeApproveAuditExport, routeDenyAuditExport:
 		return true
 	default:
 		return false
@@ -768,13 +793,13 @@ func (p *Plugin) handleDecisionClick(w http.ResponseWriter, r *http.Request, app
 
 // handleAction handles Approve/Deny clicks on a channel request card.
 func (p *Plugin) handleAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideChannelRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindChannel))
 }
 
 // handleAdminAction handles Approve/Deny clicks on a Channel Admin request
 // card.
 func (p *Plugin) handleAdminAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideAdminRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindAdmin))
 }
 
 // handleTwoStepClick handles an Approve or Deny click on a bot or webhook
@@ -933,7 +958,7 @@ func (p *Plugin) handleTeamCreationDialogSubmit(w http.ResponseWriter, r *http.R
 
 // handleTeamAdminAction handles Approve/Deny on a Team Admin request card.
 func (p *Plugin) handleTeamAdminAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamAdminRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamAdmin))
 }
 
 func (p *Plugin) handleTeamMemberDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -976,7 +1001,7 @@ func (p *Plugin) handleTeamMemberDialogSubmit(w http.ResponseWriter, r *http.Req
 
 // handleTeamMemberAction handles Approve/Deny on a team member request card.
 func (p *Plugin) handleTeamMemberAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamMemberRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamMember))
 }
 
 func (p *Plugin) handleTeamGuestDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1020,12 +1045,12 @@ func (p *Plugin) handleTeamGuestDialogSubmit(w http.ResponseWriter, r *http.Requ
 
 // handleTeamGuestAction handles Approve/Deny on a guest invite request card.
 func (p *Plugin) handleTeamGuestAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamGuestRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeamGuest))
 }
 
 // handleTeamAction handles Approve/Deny on a team creation request card.
 func (p *Plugin) handleTeamAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleDecisionClick(w, r, approve, p.decideTeamRequest)
+	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindTeam))
 }
 
 func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1050,8 +1075,18 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 	message, err := p.submitBotRequest(userID, botRequestInput{
 		Username:    submissionString(submission.Submission, fieldBotUsername),
 		DisplayName: submissionString(submission.Submission, fieldBotDisplayName),
-		Description: submissionString(submission.Submission, fieldBotDescription),
 		OwnerUserID: submissionString(submission.Submission, fieldBotOwner),
+
+		Purpose:            submissionString(submission.Submission, fieldBotPurpose),
+		ArchitectureURL:    submissionString(submission.Submission, fieldBotArchitectureURL),
+		IntegrationURL:     submissionString(submission.Submission, fieldBotIntegrationURL),
+		HostingEnv:         submissionString(submission.Submission, fieldBotHostingEnv),
+		HostingOtherDetail: submissionString(submission.Submission, fieldBotHostingOtherDetail),
+		HomeTeamID:         submission.TeamId,
+		HomeChannelID:      submission.ChannelId,
+
+		ComplianceAccepted: submissionBool(submission.Submission, fieldBotCompliance),
+		ComplianceTextHash: submission.State,
 	})
 	if err != nil {
 		writeJSON(w, model.SubmitDialogResponse{Error: err.Error()})
@@ -1063,7 +1098,7 @@ func (p *Plugin) handleBotDialogSubmit(w http.ResponseWriter, r *http.Request) {
 
 // handleBotAction handles Approve/Deny on a bot account request card.
 func (p *Plugin) handleBotAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleTwoStepClick(w, r, approve, p.decideBotRequest)
+	p.handleTwoStepClick(w, r, approve, p.deciderFor(pendingKindBot))
 }
 
 func (p *Plugin) handleIncomingWebhookDialogSubmit(w http.ResponseWriter, r *http.Request) {
@@ -1138,7 +1173,7 @@ func (p *Plugin) handleOutgoingWebhookDialogSubmit(w http.ResponseWriter, r *htt
 
 // handleWebhookAction handles Approve/Deny on a webhook request card.
 func (p *Plugin) handleWebhookAction(w http.ResponseWriter, r *http.Request, approve bool) {
-	p.handleTwoStepClick(w, r, approve, p.decideWebhookRequest)
+	p.handleTwoStepClick(w, r, approve, p.deciderFor(pendingKindWebhook))
 }
 
 // handleListSidebarCategories returns the caller's sidebar categories for a
@@ -1579,6 +1614,18 @@ func requesterUsername(user *model.User, userID string) string {
 	return "user " + userID
 }
 
+// submissionBool reads a dialog checkbox, which arrives as a bool (or, from
+// older clients, the string "true").
+func submissionBool(submission map[string]any, key string) bool {
+	switch v := submission[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
+}
+
 func submissionString(submission map[string]any, key string) string {
 	if value, ok := submission[key].(string); ok {
 		return value
@@ -1773,8 +1820,8 @@ func (p *Plugin) handleSubmitTeamGuestWebapp(w http.ResponseWriter, r *http.Requ
 
 // handleSubmitBotWebapp handles bot account creation requests from the plugin's
 // React modal. Fields match the slash-command dialog: username, display_name,
-// description, and an optional bot_owner (defaults to the requester when
-// empty). Every request, a System Admin's included, goes to the approvers.
+// description, an optional bot_owner (defaults to the requester when
+// empty), the declaration and the home team and channel. Every request, a System Admin's included, goes to the approvers.
 func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -1788,14 +1835,22 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Username                   string `json:"username"`
 		DisplayName                string `json:"display_name"`
-		Description                string `json:"description"`
 		BotOwner                   string `json:"bot_owner"`
+		Purpose                    string `json:"purpose"`
+		ArchitectureURL            string `json:"architecture_url"`
+		IntegrationURL             string `json:"integration_endpoint"`
+		HostingEnv                 string `json:"hosting_env"`
+		HostingOtherDetail         string `json:"hosting_other_detail"`
+		HomeTeamID                 string `json:"home_team_id"`
+		HomeChannelID              string `json:"home_channel_id"`
 		RequestToken               bool   `json:"request_token"`
 		IncomingWebhookChannelID   string `json:"incoming_webhook_channel_id"`
 		IncomingWebhookDisplayName string `json:"incoming_webhook_display_name"`
 		OutgoingWebhookChannelID   string `json:"outgoing_webhook_channel_id"`
 		OutgoingWebhookDisplayName string `json:"outgoing_webhook_display_name"`
 		OutgoingWebhookCallbackURL string `json:"outgoing_webhook_callback_url"`
+		ComplianceAccepted         bool   `json:"compliance_accepted"`
+		ComplianceTextHash         string `json:"compliance_text_hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -1803,10 +1858,18 @@ func (p *Plugin) handleSubmitBotWebapp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg, err := p.submitBotRequest(userID, botRequestInput{
+		ComplianceAccepted:         payload.ComplianceAccepted,
+		ComplianceTextHash:         payload.ComplianceTextHash,
 		Username:                   payload.Username,
 		DisplayName:                payload.DisplayName,
-		Description:                payload.Description,
 		OwnerUserID:                payload.BotOwner,
+		Purpose:                    payload.Purpose,
+		ArchitectureURL:            payload.ArchitectureURL,
+		IntegrationURL:             payload.IntegrationURL,
+		HostingEnv:                 payload.HostingEnv,
+		HostingOtherDetail:         payload.HostingOtherDetail,
+		HomeTeamID:                 payload.HomeTeamID,
+		HomeChannelID:              payload.HomeChannelID,
 		RequestToken:               payload.RequestToken,
 		IncomingWebhookChannelID:   payload.IncomingWebhookChannelID,
 		IncomingWebhookDisplayName: payload.IncomingWebhookDisplayName,

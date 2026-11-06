@@ -37,6 +37,7 @@ func commandArgs(sub string) *model.CommandArgs {
 		Command:   "/" + commandTrigger + " " + sub,
 		TriggerId: "trig",
 		TeamId:    "team1",
+		ChannelId: testHomeChannelID,
 		UserId:    "u1",
 	}
 }
@@ -47,6 +48,7 @@ func TestExecuteCommand_SubcommandsOpenTheirDialog(t *testing.T) {
 			api := &plugintest.API{}
 			p := newTestPlugin(api)
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil).Maybe()
+			stubBotHome(api)
 			var opened model.OpenDialogRequest
 			api.On("OpenInteractiveDialog", mock.Anything).Run(func(args mock.Arguments) {
 				opened = args.Get(0).(model.OpenDialogRequest)
@@ -88,6 +90,7 @@ func TestExecuteCommand_SubcommandsDialogFailureReply(t *testing.T) {
 			stubLogLevels(api)
 			p := newTestPlugin(api)
 			api.On("GetTeam", "team1").Return(nil, testAppErr("missing")).Maybe()
+			stubBotHome(api)
 			api.On("OpenInteractiveDialog", mock.Anything).Return(testAppErr("expired trigger"))
 
 			resp, appErr := p.ExecuteCommand(nil, commandArgs(tc.sub))

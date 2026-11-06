@@ -58,6 +58,7 @@
                 <tr><td><a href="#list-approvals"><code>/mattermost-request-hub list approvals</code></a></td><td>For approvers: lists the pending requests you can approve, with their IDs.</td></tr>
                 <tr><td><a href="#approve"><code>/mattermost-request-hub approve &lt;request ID&gt;</code></a></td><td>For approvers: approves a request of any type, as its Approve button would.</td></tr>
                 <tr><td><a href="#deny"><code>/mattermost-request-hub deny &lt;request ID&gt;</code></a></td><td>For approvers: denies a request of any type, as its Deny button would.</td></tr>
+                <tr><td><a href="#audit"><code>/mattermost-request-hub audit &lt;request ID&gt;|recent|export</code></a></td><td>For System Admins: shows everything that happened to a request, lists the latest requests, or links to download the whole audit history. Security approvers can ask for a copy with <code>export</code>.</td></tr>
                 <tr><td><a href="#exercise"><code>/mattermost-request-hub exercise populate|teardown|status</code></a></td><td>For System Admins, when exercise mode is on: seeds, removes or reports marked exercise data in this team.</td></tr>
                 <tr><td><a href="#team"><code>/mattermost-request-hub team</code></a></td><td>Opens the Request a Team form, or with arguments requests a new team without it.</td></tr>
                 <tr><td><a href="#team-admin"><code>/mattermost-request-hub team-admin</code></a></td><td>Opens the Request Team Admin form, or with <code>@user</code> names asks for those team members to be made Team Admins of the current team.</td></tr>
@@ -232,7 +233,7 @@
                 <tr><td><em>This request was just updated. Please run the command again.</em></td><td>Someone acted on it at the same moment. Run the command again.</td></tr>
                 <tr><td><em>You don't have permission to approve or deny this channel request...</em>, <em>...this Channel Admin request...</em>, <em>Only System Admins can approve or deny ... requests.</em>, <em>You don't have permission to deny this request.</em>, <em>⚠️ You don't have permission to approve this request.</em></td><td>Only approvers can act on a request. See <a href="approving.html#who-sees-what">Who sees and approves what</a>.</td></tr>
                 <tr><td><em>You can't approve your own request. Another approver has to review it.</em>, <em>⚠️ You created this request...</em></td><td>Ask another approver. You can still deny your own request.</td></tr>
-                <tr><td><em>⚠️ Security review must happen first...</em>, <em>⚠️ Security already approved...</em>, <em>⚠️ You've already approved your step...</em></td><td>A bot or webhook request needs a security approver, then a different system approver. Ask the approver whose step is next.</td></tr>
+                <tr><td><em>⚠️ Security review must happen first...</em>, <em>⚠️ Security already approved...</em>, <em>⚠️ You've already approved your step...</em></td><td>A bot or webhook request needs a security approver, then a different System Admin. Ask the approver whose step is next.</td></tr>
                 <tr><td><em>This request has expired.</em></td><td>The request is closed and the requester is told. See <a href="troubleshooting.html#expired">Expired</a>.</td></tr>
                 <tr><td><em>The requester's account is no longer active...</em>, <em>...no longer a member...</em></td><td>See <a href="troubleshooting.html#requester-left">Requester left</a>.</td></tr>
                 <tr><td><em>The channel name no longer matches the configured prefixes...</em></td><td>The prefixes changed after the request was made. Deny it and ask for a new request.</td></tr>
@@ -241,6 +242,27 @@
                 <tr><td><em>Could not create the channel: ...</em>, <em>Could not create the team: ...</em>, <em>Couldn't create the bot: ...</em>, <em>Couldn't create the webhook: ...</em></td><td>The request stays pending. Run the command again, or if the name is already taken, deny it and ask for a new name.</td></tr>
             </tbody>
         </table>
+
+        <h2 id="audit"><code>/mattermost-request-hub audit</code></h2>
+<pre><code>/mattermost-request-hub audit &lt;request ID&gt;
+/mattermost-request-hub audit recent [count]
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--env name] [--bot @name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text</code></pre>
+        <p>
+            System Admins can run all of it. A security approver who isn't a System Admin can run
+            <code>audit export</code>, which asks the System Admins for a copy (see
+            <a href="troubleshooting.html#audit">Audit trail</a>). The plugin keeps a history of every request: when it was submitted,
+            each approval step, the decision, failures and retries, expiry, every message relayed in its ticket
+            threads, and token reminders. The history is kept after the request is decided, and nothing deletes it.
+        </p>
+        <table class="field-table">
+            <thead><tr><th>Subcommand</th><th>What it does</th></tr></thead>
+            <tbody>
+                <tr><td><code>&lt;request ID&gt;</code></td><td>Shows the request's status and its events, oldest first, with who did each one. The ID is on the approval card and in <code>list</code>. A reply shows at most the last 100 events; the export has them all.</td></tr>
+                <tr><td><code>recent [count]</code></td><td>Lists the most recently updated requests (20 unless you give a count, at most 200), then links to download the whole history when direct export is on.</td></tr>
+                <tr><td><code>export</code></td><td>Requests an audit export, which a System Admin other than you approves; the file is then posted in your request thread. The type is <code>full_histories</code> (every event of every request covered, with all its details and the full text of ticket thread messages; <code>csv</code> or <code>json</code>, CSV unless you say otherwise) or <code>bot_inventory</code> (every bot Request Hub created, with what its requester declared, who approved it and whether it is still active; <code>pdf</code>, <code>csv</code> or <code>json</code>, PDF unless you say otherwise), or <code>bot_forensic</code> (one bot's Request Hub history, its teams and channels, and the posts it made, <code>json</code> only). <code>--request</code> and <code>--kind</code> narrow the histories, <code>--env</code> narrows the inventory to one hosting environment, and <code>--requester</code>, <code>--since</code> and <code>--until</code> narrow either. <code>bot_forensic</code> needs <code>--bot @name</code>, <code>--since</code> and <code>--until</code>, at most 90 days apart, and takes no other filter. <code>--reason</code> is required. When <em>Allow direct audit export</em> is on, a System Admin gets download links instead.</td></tr>
+            </tbody>
+        </table>
+        <p>See <a href="troubleshooting.html#audit">Audit trail</a> for what is recorded and where.</p>
 
         <h2 id="exercise"><code>/mattermost-request-hub exercise</code></h2>
 <pre><code>/mattermost-request-hub exercise populate
@@ -408,10 +430,17 @@
         <p>Asks for a guest invite to those channels of the current team. See <a href="team-guest.html">Guest invites</a>.</p>
 
         <h3 id="bot"><code>/mattermost-request-hub bot</code></h3>
-<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; [--description &lt;text&gt;] [--owner @user]</code></pre>
+<pre><code>/mattermost-request-hub bot &lt;username&gt; &lt;Display name&gt; --purpose &lt;text&gt; --integration &lt;https-url&gt; --env ci_cd|on_prem_server|cloud_or_k8s|workstation|external_saas|other [--architecture &lt;https-url&gt;] [--hosting-other &lt;text&gt;] [--owner @user] [--accept-compliance]</code></pre>
         <p>
-            The username is one word; the display name can be several. Access tokens and webhooks for the bot are
-            only in the form. See <a href="bot.html">Bots</a>.
+            The username is one word; the display name can be several. <code>--purpose</code> (which becomes the
+            bot's profile description), <code>--integration</code> (an <code>https://</code> address) and
+            <code>--env</code> (where the integration runs) are required. With <code>--env other</code>, say where with
+            <code>--hosting-other</code>. <code>--architecture</code> is an optional <code>https://</code> link to the
+            design or architecture review. The channel you run
+            the command in is the bot's home, so run it in a public or private channel of a team. Access tokens and
+            webhooks for the bot are only in the form. While bot requesters must accept the compliance statement, the command without
+            <code>--accept-compliance</code> replies with the statement and submits nothing; run it again with the
+            flag to accept it. See <a href="bot.html">Bots</a>.
         </p>
 
         <h3 id="webhook-incoming"><code>/mattermost-request-hub webhook-incoming</code></h3>
@@ -426,7 +455,7 @@
 <pre><code>/mattermost-request-hub team Field Support --description Support for field teams --invite-only
 /mattermost-request-hub team-member @alice,@bob --reason Joining the ops rotation
 /mattermost-request-hub team-guest guest@example.com --channels ~town-square ~vendor-chat
-/mattermost-request-hub bot build-bot Build Bot --description Posts build results --owner @carol
+/mattermost-request-hub bot build-bot Build Bot --owner @carol --purpose Posts build results --integration https://ci.example.com/mm --env ci_cd --accept-compliance
 /mattermost-request-hub webhook-outgoing ~deploys Deploy Hook --callback https://ci.example.com/hook</code></pre>
         <p>
             If something is wrong, the reply starts <em>Could not read the request:</em>, says what, and repeats

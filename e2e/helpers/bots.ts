@@ -11,7 +11,6 @@ export const SUBMIT_BOT_ROUTE = '/api/v1/submit_bot_request';
 export type BotRequestBody = {
     username?: string;
     display_name?: string;
-    description?: string;
     bot_owner?: string;
     request_token?: boolean;
     incoming_webhook_channel_id?: string;
@@ -19,6 +18,15 @@ export type BotRequestBody = {
     outgoing_webhook_channel_id?: string;
     outgoing_webhook_display_name?: string;
     outgoing_webhook_callback_url?: string;
+    compliance_accepted?: boolean;
+    compliance_text_hash?: string;
+    purpose?: string;
+    architecture_url?: string;
+    integration_endpoint?: string;
+    hosting_env?: string;
+    hosting_other_detail?: string;
+    home_team_id?: string;
+    home_channel_id?: string;
 };
 
 export type SubmitReply = {message?: string; error?: string};
@@ -31,12 +39,58 @@ export type StoredBotRequest = {
     username: string;
     owner_user_id?: string;
     request_token?: boolean;
+    compliance?: {accepted_at: number; text_sha256: string; text: string};
+    purpose?: string;
+    architecture_url?: string;
+    integration_endpoint?: string;
+    privilege_level?: string;
+    mm_privilege?: string;
+    data_ingestion?: string;
+    hosting_env?: string;
+    hosting_other_detail?: string;
+    home_team_id?: string;
+    home_channel_id?: string;
     security_approver_id?: string;
     system_approver_id?: string;
 };
 
-export const submitBot = (hub: RequestHub, username: string, body: BotRequestBody) =>
-    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {display_name: 'E2E Bot', ...body});
+// DECLARED is what submitBot declares about the bot unless body says
+// otherwise; its home is town-square, which every team member is in.
+export const DECLARED = {
+    purpose: 'E2E test bot',
+    architecture_url: 'https://docs.example/arch',
+    integration_endpoint: 'https://ci.example/hooks/e2e',
+    hosting_env: 'ci_cd',
+};
+
+export const BOT_FORM_ROUTE = '/api/v1/bot_form';
+
+// complianceHash is the SHA-256 of the compliance statement username is
+// shown now, which a REST submission must send while the statement is
+// required (undefined while it isn't).
+export const complianceHash = async (hub: RequestHub, username: string) =>
+    (await hub.pluginFetch<{compliance: {sha256?: string}}>(username, BOT_FORM_ROUTE)).compliance.sha256;
+
+// submitBot accepts the compliance statement, which is required by default,
+// with the hash of the statement shown now, and declares DECLARED with a
+// home of town-square, unless body says otherwise.
+export const submitBot = async (hub: RequestHub, username: string, body: BotRequestBody) =>
+    hub.pluginFetch<SubmitReply>(username, SUBMIT_BOT_ROUTE, {
+        display_name: 'E2E Bot',
+        compliance_accepted: true,
+        compliance_text_hash: await complianceHash(hub, username),
+        ...DECLARED,
+        home_team_id: hub.teamId,
+        home_channel_id: await hub.channelId('town-square'),
+        ...body,
+    });
+
+// The slash flag that accepts the compliance statement.
+export const ACCEPT = '--accept-compliance';
+
+// The slash flags that declare DECLARED. A slash request's home is the
+// channel it is run in.
+export const DECLARE = `--purpose ${DECLARED.purpose} --integration ${DECLARED.integration_endpoint} --architecture ${DECLARED.architecture_url} --env ${DECLARED.hosting_env}`;
 
 // A valid bot username that is unique on the server (3-22 characters).
 export const botName = () => uid('b').slice(0, 22);
@@ -119,8 +173,8 @@ export async function setAttribute(hub: RequestHub, userId: string, fieldId: str
 }
 
 // Inserts a group straight into the database, as LDAP or a group-sync plugin
-// would. Entry servers can't create custom groups, and the plugin refuses
-// them as approver pools anyway. Returns the group's name.
+// would. Entry servers can't create custom groups through the API, so
+// custom ones are inserted the same way. Returns the group's name.
 export async function createGroup(hub: RequestHub, members: TestUser[], source = 'plugin_e2e'): Promise<string> {
     const name = uid('grp');
     const id = uid('g').padEnd(26, '0').slice(0, 26);

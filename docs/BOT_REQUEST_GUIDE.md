@@ -19,7 +19,7 @@ This guide covers:
 
 - [Requesting a bot](#requesting-a-bot): any member
 - [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
-- [Approving requests](#approving-requests): security + system approvers
+- [Approving requests](#approving-requests): a security approver, then a System Admin
 - [Admin setup](#admin-setup): system admins
 
 ---
@@ -34,8 +34,9 @@ Same **Request a Bot Account** form from every entry point.
 - **Dropdown:** channel More actions → **Request a Bot**
 - **Hub:** right App Bar **plug** → Requests → **Request a Bot**
 - **Slash:** `/mattermost-request-hub bot` (or skip the form with
-  `/mattermost-request-hub bot <username> <Display name> [--description <text>] [--owner @user]`;
-  access tokens and webhooks for the bot are only in the form)
+  `/mattermost-request-hub bot <username> <Display name> --purpose <text> --integration <https-url> --env ci_cd|on_prem_server|cloud_or_k8s|workstation|external_saas|other [--architecture <https-url>] [--hosting-other <text>] [--owner @user] [--accept-compliance]`,
+  run in the channel that will be the bot's home; access tokens and webhooks
+  for the bot are only in the form)
 - **Agent:** when **Offer tools to Agents** is on, ask an agent from the
   Mattermost Agents plugin to file it for you (the `request_bot` tool, which like the
   slash command covers the account only; see the
@@ -58,7 +59,42 @@ Same **Request a Bot Account** form from every entry point.
 |-------|--------------|
 | **Bot username** | Username the bot posts as. Lowercase letters, numbers, periods, underscores, and hyphens. 3–22 characters. Example: `deploy_bot` or `deploy-notifier`. |
 | **Display name** | Friendly name shown in messages. Example: `Deploy Notifier`. |
-| **Description** | Optional. What the bot does and which systems it connects to. |
+| **Purpose** | Why the bot is needed and what it will do. Up to 500 characters. It also becomes the bot's profile description. |
+| **Home team** / **Home channel** | Picked from the teams and channels you belong to. The form starts on the team and channel you're in. |
+| **Integration endpoint** | The `https://` address of the integration that drives the bot. `http://` is refused. |
+| **Where does the script / service run?** | **CI/CD pipeline**, **On-prem server / VM**, **Cloud VM / Kubernetes**, **Developer workstation**, **External SaaS / vendor** or **Other**. With **Other**, say where in **Specify hosting**. This is where the integration runs, not which Mattermost server the bot is on. |
+
+The form also has an optional **Architecture link** (an `https://` link to the
+design or architecture review). Submitting without one asks you to confirm.
+
+The bot is always a regular Mattermost user, never a Team Admin or System
+Admin, with member permissions in the channels it is added to. The form shows
+this, and it is recorded with the request: there is no privilege level to pick.
+
+#### Home team and channel
+
+When the request is approved, the bot is added to its home team and home
+channel, even if you asked for no webhook. The home says where the bot belongs
+and who answers for it. It is not a sandbox: an access token can still reach
+anything the bot account can, in any channel the bot is added to. Before either
+approval step, Approve checks that the home team and channel still exist and
+that you are still in them; if not, the request can only be denied.
+
+Security can later list the bots Request Hub created by their user ID, with
+what was declared for each. Bots approved before these fields existed have no
+declaration. Bots requested before the current form keep the privilege level,
+data ingestion and hosting environment declared for them then.
+
+#### Compliance statement
+
+Unless a System Admin has turned it off, **Submit request** opens the Terms and
+Conditions. Tick **I have read and agree to the Terms and Conditions above.**
+and click **Agree and submit**. By default they say the bot is for authorized
+use only, that you are responsible for everything done with it, its tokens and
+its webhooks, that you will protect its credentials, and that what you declared
+is accurate; your organization may have replaced them with its own wording. The request keeps the
+exact text you accepted and when, and both are in its audit history. If the
+statement changes while the form is open, submitting asks you to read it again.
 
 #### Optional: Access token
 
@@ -82,7 +118,7 @@ Check **Request an incoming webhook** to also create a webhook that posts
 | Field | What it does |
 |-------|--------------|
 | **Webhook display name** | Pre-filled with `{username} incoming`. Edit if needed. |
-| **Target channel** | Pre-filled with the channel you're currently in (read-only). Switch channels before opening the form to change it. |
+| **Target channel** | The bot's home channel (read-only). Pick another home channel to change it. |
 
 #### Optional: Outgoing webhook
 
@@ -92,13 +128,14 @@ external URL (for example, to trigger a pipeline on a keyword).
 | Field | What it does |
 |-------|--------------|
 | **Webhook display name** | Pre-filled with `{username} outgoing`. |
-| **Source channel** | Pre-filled with your current channel (read-only). |
+| **Source channel** | The bot's home channel (read-only). |
 | **Callback URL** | Required. The `https://` endpoint that receives the payload. |
 
 ### Submitting
 
 Click **Submit request**. One approval ticket covers the bot, token, and any
-webhooks you checked. You'll get a DM when both approvers have acted.
+webhooks you checked. The approval card shows that you accepted the compliance
+statement. You'll get a DM when both approvers have acted.
 
 ---
 
@@ -134,8 +171,8 @@ if a token DM needs follow-up).
 ## Approving requests
 
 Bot requests post to **`mattermost-bot-requests`**. They need **two different
-people**: one security-step approver and one system-step approver. The card shows
-both status lines.
+people**: a security approver first, then a System Admin for the system step.
+The card shows both status lines.
 
 <img src="images/bot-request/mattermost-bot-approval-card.png" alt="Bot approval card" width="720">
 
@@ -173,7 +210,7 @@ If something failed, the DM says what couldn't be created and what to do next.
 
 Every bot request goes through both approval steps, including requests from
 System Admins. Nobody can approve either step of their own request, so a System
-Admin's request needs a security approver and a different system approver (or
+Admin's request needs a security approver and a different System Admin (or
 one other System Admin when the approver mode is System Admins only).
 
 ---
@@ -184,8 +221,9 @@ one other System Admin when the approver mode is System Admins only).
 |---------|---------|
 | **Approval team** | Owns `mattermost-bot-requests`. Required. |
 | **Allow bot account requests** | Enables bot entry points. Default **on**. |
-| **Security approver attribute** | User Attribute (access_control) for the security step. System Admins do **not** auto-qualify. |
-| **System approver attribute** | User Attribute for the system step. System Admins auto-qualify. |
+| **Bot/webhook two-step approver mode** | Who does the security step: holders of a User Attribute (default), members of a user group, or System Admins. The system step is always a System Admin. |
+| **Security approver attribute** / **Security approver user group** | The security pool for the chosen mode (defaults `security_approver` and `security-approvers`). System Admins do **not** cover the security step. |
+| **Allow custom approver groups** | Off by default. Lets a custom group be the security approver group. |
 
 Create and assign attributes in **System Console → User Management → Attributes**.
 See the [Admin Guide](admin-guide.md).

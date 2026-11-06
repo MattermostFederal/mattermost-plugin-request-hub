@@ -569,6 +569,7 @@ func TestDecision_CreateFailureKeepsTheCards(t *testing.T) {
 
 func TestDecision_LostRequestResolvesTheCards(t *testing.T) {
 	api, p, store := decisionFixture(t, "")
+	events := captureAudit(p)
 	stubActiveTeamMember(api, "team1", "u_req")
 	stubLiveTeam(api, "team1")
 	api.On("CreateChannel", mock.Anything).Return(nil, testAppErr("name taken"))
@@ -588,6 +589,8 @@ func TestDecision_LostRequestResolvesTheCards(t *testing.T) {
 	require.Equal(t, lost, updated["post2"].Message)
 	require.NotContains(t, store, kvApprovalCardsPrefix+testChannelRequestID)
 	require.NotContains(t, store, pendingListKey(pendingKindChannel, "u_req"))
+	require.Equal(t, []string{eventLost}, eventNames(*events))
+	require.Equal(t, "admin1", (*events)[0].ActorID)
 }
 
 func TestExecuteDecision_CardUpdateFailureIsLogged(t *testing.T) {

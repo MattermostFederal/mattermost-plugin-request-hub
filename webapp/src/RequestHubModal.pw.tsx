@@ -209,4 +209,27 @@ test.describe('RequestHubModal', () => {
         await page.mouse.click(5, 5);
         await expect(page.getByText(TITLE)).toBeHidden();
     });
+
+    for (const [who, access, card] of [
+        ['a System Admin', {can_view: true, can_request: false}, 'Audit history'],
+        ['a security approver', {can_view: false, can_request: true}, 'Request Audit Export'],
+    ] as const) {
+        test(`offers ${who} the ${card} card`, async ({mount, page}) => {
+            await routeConfig(page);
+            await page.route(`${API}/audit/access`, (route) => route.fulfill({contentType: 'application/json', body: JSON.stringify(access)}));
+            await mount(<StoreHarness pluginState={open}><RequestHubModal/></StoreHarness>);
+            const button = page.getByRole('button', {name: new RegExp(`^\\W*${card}`)});
+            await expect(button).toBeVisible();
+            await expect(page.getByRole('button', {name: /Audit history|Request Audit Export/})).toHaveCount(1);
+        });
+    }
+
+    test('offers no audit card to anyone else, or when the check fails', async ({mount, page}) => {
+        await routeConfig(page);
+        await page.route(`${API}/audit/access`, (route) => route.fulfill({status: 500, body: ''}));
+        await mount(<StoreHarness pluginState={open}><RequestHubModal/></StoreHarness>);
+        await configLoaded(page);
+        await expect.poll(() => tiles(page)).toEqual(ALL_TILES);
+        await expect(page.getByRole('button', {name: /Audit history|Request Audit Export/})).toHaveCount(0);
+    });
 });

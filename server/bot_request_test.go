@@ -40,7 +40,7 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true})
 
 	api.On("GetUser", "u_admin").Return(&model.User{Id: "u_admin", Username: "admin", Roles: "system_user system_admin"}, nil)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
@@ -52,9 +52,10 @@ func TestSubmitBotRequest_SystemAdminQueues(t *testing.T) {
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "approval-1"}, nil)
 	api.On("GetDirectChannel", "u_admin", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 
-	msg, err := p.submitBotRequest("u_admin", botRequestInput{
+	stubBotHome(api)
+	msg, err := p.submitBotRequest("u_admin", declared(botRequestInput{
 		Username: "tokbot", DisplayName: "Token Bot", RequestToken: true,
-	})
+	}))
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")
 	api.AssertNotCalled(t, "CreateBot", mock.Anything)
@@ -67,7 +68,7 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", AllowBotTokenRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, ApprovalTeam: "appteam", AllowBotTokenRequests: true})
 
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
@@ -88,7 +89,8 @@ func TestSubmitBotRequest_RegularUserQueuesInBotChannel(t *testing.T) {
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm-ch"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "dm-1"}, nil)
 
-	msg, err := p.submitBotRequest("u_req", botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot", Description: "watches things"})
+	stubBotHome(api)
+	msg, err := p.submitBotRequest("u_req", declared(botRequestInput{Username: "monitoring-bot", DisplayName: "Monitoring Bot"}))
 
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")

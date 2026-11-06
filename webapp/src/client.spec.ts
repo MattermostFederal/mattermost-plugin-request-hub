@@ -2,6 +2,7 @@ import {expect, test} from '@playwright/test';
 import manifest from 'manifest';
 
 import {
+    fetchBotForm,
     fetchEnabledRequestTypes,
     fetchPrefixes,
     fetchSidebarCategories,
@@ -125,7 +126,7 @@ test.describe('fetchPrefixes', () => {
     ['submitTeamAdminRequest', () => submitTeamAdminRequest({team_id: 'team1'}), 'submit_team_admin_request'],
     ['submitTeamMemberRequest', () => submitTeamMemberRequest({team_id: 'team1', nominees: ['alice']}), 'submit_team_member_request'],
     ['submitTeamGuestRequest', () => submitTeamGuestRequest({team_id: 'team1', email: 'guest@example.com', channel_ids: ['chan1']}), 'submit_team_guest_request'],
-    ['submitBotRequest', () => submitBotRequest({username: 'helper-bot', display_name: 'Helper'}), 'submit_bot_request'],
+    ['submitBotRequest', () => submitBotRequest({username: 'helper-bot', display_name: 'Helper', purpose: 'CI', integration_endpoint: 'https://ci.example/hooks/mm', hosting_env: 'ci_cd', home_team_id: 'team1', home_channel_id: 'chan1'}), 'submit_bot_request'],
     ['submitIncomingWebhookRequest', () => submitIncomingWebhookRequest({channel_id: 'chan1', display_name: 'Alerts'}), 'submit_incoming_webhook_request'],
     ['submitOutgoingWebhookRequest', () => submitOutgoingWebhookRequest({channel_id: 'chan1', display_name: 'Relay', callback_url: 'https://example.com/hook'}), 'submit_outgoing_webhook_request'],
 ] as const).forEach(([name, submit, path]) => {
@@ -174,6 +175,31 @@ test.describe('fetchSidebarCategories', () => {
     test('throws on a non-OK status', async () => {
         mockFetch(403, {});
         await expect(fetchSidebarCategories('team1')).rejects.toThrow('Failed to load sidebar categories (403)');
+    });
+});
+
+test.describe('fetchBotForm', () => {
+    test('maps the compliance statement', async () => {
+        mockFetch(200, {compliance: {enabled: true, text: 'Be good.', sha256: 'abc'}, hosting_envs: [{value: 'ci_cd', label: 'CI/CD pipeline'}, {value: 7}]});
+        expect(await fetchBotForm()).toEqual({
+            compliance: {enabled: true, text: 'Be good.', sha256: 'abc'},
+            hosting_envs: [{value: 'ci_cd', label: 'CI/CD pipeline'}],
+        });
+        expect(calls[0].url).toBe(`/plugins/${manifest.id}/api/v1/bot_form`);
+    });
+
+    test('a statement that is off has no text', async () => {
+        mockFetch(200, {compliance: {enabled: false}});
+        expect(await fetchBotForm()).toEqual({compliance: {enabled: false, text: undefined, sha256: undefined}, hosting_envs: []});
+    });
+
+    test('returns null on a non-OK status or a network failure', async () => {
+        mockFetch(500, {});
+        expect(await fetchBotForm()).toBeNull();
+        globalThis.fetch = (async () => {
+            throw new Error('offline');
+        }) as typeof fetch;
+        expect(await fetchBotForm()).toBeNull();
     });
 });
 

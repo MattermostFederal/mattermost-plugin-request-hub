@@ -36,7 +36,6 @@ func TestHandleBotAction_UserGroupDualRoleFillsOnlySecurity(t *testing.T) {
 		AllowBotTokenRequests: true,
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	req := &botRequest{
@@ -122,7 +121,6 @@ func TestPlanAndApply_UserGroupDualRoleEndToEnd(t *testing.T) {
 	p.setConfiguration(&configuration{
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	secName := "security-approvers"

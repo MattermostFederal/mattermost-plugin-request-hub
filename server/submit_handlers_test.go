@@ -153,9 +153,18 @@ func dialogRoutes() map[string]dialogRoute {
 		"bot": {
 			route:    routeBotDialog,
 			kvPrefix: kvBotRequestPrefix,
-			ok:       model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "svcbot", fieldBotDisplayName: "Service Bot"}},
-			bad:      model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "@ab"}},
-			wantErr:  "3-22 characters",
+			// The dialog is submitted from channel "here", the bot's home.
+			stub: func(api *plugintest.API) {
+				api.On("GetChannel", "here").Return(&model.Channel{Id: "here", Name: "builds", TeamId: "team1", Type: model.ChannelTypeOpen}, nil)
+				api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Ops"}, nil)
+			},
+			ok: model.SubmitDialogRequest{TeamId: "team1", Submission: map[string]any{
+				fieldBotUsername: "svcbot", fieldBotDisplayName: "Service Bot", fieldBotPurpose: "Posts CI results",
+				fieldBotIntegrationURL: testBotIntegURL, fieldBotArchitectureURL: testBotArchURL,
+				fieldBotHostingEnv: hostingCICD,
+			}},
+			bad:     model.SubmitDialogRequest{Submission: map[string]any{fieldBotUsername: "@ab"}},
+			wantErr: "3-22 characters",
 		},
 		"incoming webhook": {
 			route:    routeIncomingWebhookDialog,
@@ -347,9 +356,13 @@ func webappRoutes() map[string]webappRoute {
 		"bot": {
 			route:    routeSubmitBotWebapp,
 			kvPrefix: kvBotRequestPrefix,
-			ok:       `{"username":"svcbot","display_name":"Service Bot","description":"Posts alerts","request_token":true}`,
+			stub:     stubBotHome,
+			ok: `{"username":"svcbot","display_name":"Service Bot","request_token":true,` +
+				`"purpose":"Posts CI results","architecture_url":"` + testBotArchURL + `","integration_endpoint":"` + testBotIntegURL + `",` +
+				`"hosting_env":"ci_cd","home_team_id":"team1","home_channel_id":"` + testHomeChannelID + `"}`,
 			refusals: map[string]webappRefusal{
 				"username too short": {body: `{"username":"ab"}`, wantErr: "3-22 characters"},
+				"no purpose":         {body: `{"username":"svcbot","display_name":"Service Bot"}`, stub: stubNamesFree, wantErr: "purpose is required"},
 			},
 		},
 		"incoming webhook": {
@@ -531,7 +544,7 @@ func TestHandleListSidebarCategories_SkipsEmptyEntries(t *testing.T) {
 func TestHandleConfig_ReportsEachRequestType(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{AllowChannelRequests: true, AllowBotTokenRequests: true, AllowWebhookRequests: true})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin, AllowChannelRequests: true, AllowBotTokenRequests: true, AllowWebhookRequests: true})
 
 	w := serve(p, http.MethodGet, routeConfig, "u1", "")
 

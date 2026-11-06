@@ -60,6 +60,9 @@ func newMCPTestPlugin(t *testing.T, api *plugintest.API, config *configuration) 
 	config.AllowTeamGuestRequests = true
 	config.AllowBotTokenRequests = true
 	config.AllowWebhookRequests = true
+	if strings.TrimSpace(config.TwoStepApproverMode) == "" {
+		config.TwoStepApproverMode = twoStepModeSystemAdmin
+	}
 	p.setConfiguration(config)
 	p.mcpActive = true
 	require.NoError(t, p.syncMCPServer())
@@ -241,7 +244,9 @@ func TestOnConfigurationChange_TogglesMCPServer(t *testing.T) {
 	enabled := false
 	api.On("KVGet", kvPrefixMaxLenV48).Return([]byte("1"), nil)
 	api.On("LoadPluginConfiguration", mock.Anything).Run(func(args mock.Arguments) {
-		args.Get(0).(*configuration).EnableMCP = enabled
+		cfg := args.Get(0).(*configuration)
+		cfg.TwoStepApproverMode = twoStepModeSystemAdmin
+		cfg.EnableMCP = enabled
 	}).Return(nil)
 
 	require.NoError(t, p.OnConfigurationChange())
@@ -285,7 +290,9 @@ func TestOnConfigurationChange_LogsMCPFailure(t *testing.T) {
 	p.mcpActive = true
 	api.On("KVGet", kvPrefixMaxLenV48).Return([]byte("1"), nil)
 	api.On("LoadPluginConfiguration", mock.Anything).Run(func(args mock.Arguments) {
-		args.Get(0).(*configuration).EnableMCP = true
+		cfg := args.Get(0).(*configuration)
+		cfg.TwoStepApproverMode = twoStepModeSystemAdmin
+		cfg.EnableMCP = true
 	}).Return(nil)
 
 	require.NoError(t, p.OnConfigurationChange())

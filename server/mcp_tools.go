@@ -78,10 +78,16 @@ type RequestTeamGuestArgs struct {
 }
 
 type RequestBotArgs struct {
-	Username    string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
-	DisplayName string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
-	Description string `json:"description,omitempty" jsonschema:"What the bot is for, at most 500 characters"`
-	Owner       string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
+	Username           string `json:"username" jsonschema:"The bot's username, 3-22 lowercase letters, numbers and . - _"`
+	DisplayName        string `json:"display_name" jsonschema:"The bot's display name, at most 64 characters"`
+	Owner              string `json:"owner,omitempty" jsonschema:"The username of the bot's owner; the user when blank"`
+	Purpose            string `json:"purpose" jsonschema:"What the bot does and why; becomes the bot profile description, at most 500 characters"`
+	ArchitectureURL    string `json:"architecture_url,omitempty" jsonschema:"Optional https link to an architecture or design review"`
+	IntegrationURL     string `json:"integration_endpoint" jsonschema:"Required https URL of the integration that drives this bot"`
+	HostingEnv         string `json:"hosting_env" jsonschema:"Where the script/service runs: ci_cd, on_prem_server, cloud_or_k8s, workstation, external_saas, or other"`
+	HostingOtherDetail string `json:"hosting_other_detail,omitempty" jsonschema:"Required when hosting_env is other: where the script or service runs"`
+	TeamID             string `json:"team_id" jsonschema:"The ID of the bot's home team, a team the user is a member of"`
+	ChannelID          string `json:"channel_id" jsonschema:"The ID of the bot's home channel, a public or private channel of that team the user is a member of; the bot joins it on approval"`
 }
 
 type RequestWebhookArgs struct {
@@ -187,7 +193,7 @@ func (p *Plugin) registerMCPTools(server *pluginmcp.Server) {
 
 	addTool(p, server, &mcp.Tool{
 		Name:        "request_bot",
-		Description: "Request a new bot account on the user's behalf. The request is posted for admin approval.",
+		Description: "Request a new bot account on the user's behalf. The request is posted for admin approval. Refused while the server requires bot requesters to accept a compliance statement: the user must then use the Request a Bot Account form or the bot slash command.",
 	}, p.requestBotTool)
 
 	addTool(p, server, &mcp.Tool{
@@ -351,6 +357,10 @@ func (p *Plugin) requestBotTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return nil, MCPMessageOutput{}, errors.New(botRequestsDisabledMsg)
 	}
+	// An agent can't accept the compliance statement for the user.
+	if p.getConfiguration().BotComplianceRequired() {
+		return nil, MCPMessageOutput{}, errors.New(botComplianceMCPMsg)
+	}
 
 	// A blank owner leaves the owner to submitBotRequest's default, as the
 	// slash command does.
@@ -369,8 +379,15 @@ func (p *Plugin) requestBotTool(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return mcpMessage(p.submitBotRequest(userID, botRequestInput{
 		Username:    in.Username,
 		DisplayName: in.DisplayName,
-		Description: in.Description,
 		OwnerUserID: ownerID,
+
+		Purpose:            in.Purpose,
+		ArchitectureURL:    in.ArchitectureURL,
+		IntegrationURL:     in.IntegrationURL,
+		HostingEnv:         in.HostingEnv,
+		HostingOtherDetail: in.HostingOtherDetail,
+		HomeTeamID:         in.TeamID,
+		HomeChannelID:      in.ChannelID,
 	}))
 }
 

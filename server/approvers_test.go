@@ -116,12 +116,13 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("system admin auto-qualifies for the system step", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SystemApproverAttribute: "system_approver"})
+		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSystem)
 		require.NoError(t, err)
 		require.True(t, ok)
-		// The role shortcut must skip the attribute lookup entirely.
+		// System step is role-only — never looks up attributes/groups.
 		api.AssertNotCalled(t, "GetPropertyGroup", mock.Anything)
+		api.AssertNotCalled(t, "GetGroupsForUser", mock.Anything)
 	})
 
 	t.Run("system admin does NOT auto-qualify for the security step", func(t *testing.T) {
@@ -160,14 +161,14 @@ func TestCanApproveStep(t *testing.T) {
 		require.False(t, ok, "forced security review: System Admins must not cover a configured security pool")
 	})
 
-	t.Run("empty security attribute: system admin covers security", func(t *testing.T) {
+	t.Run("blank security attribute uses default and still blocks system admin", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		p.setConfiguration(&configuration{})
+		mockApproverAttr(api, defaultSecurityApproverAttribute, "a", []*model.PropertyValue{})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSecurity)
 		require.NoError(t, err)
-		require.True(t, ok)
-		api.AssertNotCalled(t, "GetPropertyGroup", mock.Anything)
+		require.False(t, ok, "defaulted security pool must not be covered by System Admins")
 	})
 
 	t.Run("CPA group failure: configured security pool still blocks system admin", func(t *testing.T) {
@@ -230,6 +231,24 @@ func TestCanApproveStep(t *testing.T) {
 		api.AssertNotCalled(t, "GetGroupsForUser", mock.Anything)
 	})
 
+	t.Run("usergroup mode: a custom group qualifies its members when custom groups are allowed", func(t *testing.T) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		p := newTestPlugin(api)
+		p.setConfiguration(&configuration{
+			TwoStepApproverMode:       twoStepModeUserGroup,
+			SecurityApproverGroup:     "security-approvers",
+			AllowCustomApproverGroups: true,
+		})
+		name := "security-approvers"
+		custom := &model.Group{Id: "g-custom", Name: &name, Source: model.GroupSourceCustom}
+		api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+		api.On("GetGroupsForUser", "u2").Return([]*model.Group{{Id: "g-custom"}}, nil)
+		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+
 	t.Run("usergroup mode: a synced group found by display name qualifies its members", func(t *testing.T) {
 		api := &plugintest.API{}
 		stubLogs(api)
@@ -273,7 +292,6 @@ func TestCanApproveStep(t *testing.T) {
 		p.setConfiguration(&configuration{
 			TwoStepApproverMode:   twoStepModeUserGroup,
 			SecurityApproverGroup: "security-approvers",
-			SystemApproverGroup:   "system-approvers",
 		})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSystem)
 		require.NoError(t, err)
@@ -308,7 +326,6 @@ func TestApplyTwoStepApproval(t *testing.T) {
 		p.setConfiguration(&configuration{
 			TwoStepApproverMode:   twoStepModeUserGroup,
 			SecurityApproverGroup: "security-approvers",
-			SystemApproverGroup:   "system-approvers",
 		})
 
 		dual := &model.User{Id: "dual", Roles: model.SystemAdminRoleId}

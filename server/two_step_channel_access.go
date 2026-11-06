@@ -96,6 +96,9 @@ func (p *Plugin) syncTwoStepApproverChannels() {
 	ids := p.listTwoStepApproverUserIDs()
 	p.API.LogInfo("two-step channel access: reseeding approvers into bot/webhook channels",
 		"count", len(ids))
+	if len(ids) == 0 {
+		p.warnNoSecurityApprovers()
+	}
 	for _, userID := range ids {
 		if userID == "" || userID == p.botUserID {
 			continue
@@ -105,41 +108,57 @@ func (p *Plugin) syncTwoStepApproverChannels() {
 	p.evictStaleTwoStepApproverChannelMembers()
 }
 
-// linkTwoStepGroupsToChannel attaches syncable (LDAP/plugin) security/system
-// groups to the channel with AutoAdd. Custom user groups are skipped — Mattermost
-// only syncs LDAP/plugin group sources.
+// linkTwoStepGroupsToChannel attaches a syncable (LDAP/plugin) security
+// group to the channel with AutoAdd. Custom user groups are skipped —
+// Mattermost only syncs LDAP/plugin group sources (custom members are
+// added individually via listTwoStepApproverUserIDs).
+// warnNoSecurityApprovers logs, once per sync (activation and each change
+// to the pool settings), that the security pool has nobody in it. Bot and
+// webhook requests then wait at the security step: System Admins don't
+// cover it in attribute or usergroup mode.
+func (p *Plugin) warnNoSecurityApprovers() {
+	cfg := p.getConfiguration()
+	switch cfg.twoStepMode() {
+	case twoStepModeUserGroup:
+		p.API.LogWarn("two-step approvals: the security approver group has no usable members, so bot and webhook requests can't get a security approval. "+
+			"Create the group and add members, or, for a custom group, turn on Allow custom approver groups.",
+			"group", cfg.approverGroupName(stepSecurity))
+	case twoStepModeAttribute:
+		p.API.LogWarn("two-step approvals: nobody holds the security approver attribute, so bot and webhook requests can't get a security approval. "+
+			"Create the attribute (admin-managed or synced) and set it on the security reviewers.",
+			"attribute", cfg.approverAttributeName(stepSecurity))
+	}
+}
+
 func (p *Plugin) linkTwoStepGroupsToChannel(ch *model.Channel) {
 	if ch == nil || p.getConfiguration().twoStepMode() != twoStepModeUserGroup {
 		return
 	}
-	cfg := p.getConfiguration()
-	for _, step := range []approverStep{stepSecurity, stepSystem} {
-		name := cfg.approverGroupName(step)
-		if name == "" {
-			continue
+	name := p.getConfiguration().approverGroupName(stepSecurity)
+	if name == "" {
+		return
+	}
+	group, err := p.resolveApproverGroup(name)
+	if err != nil || !group.IsSyncable() {
+		return
+	}
+	if ch.TeamId != "" {
+		if _, err := p.API.UpsertGroupSyncable(model.NewGroupTeam(group.Id, ch.TeamId, true)); err != nil {
+			p.API.LogDebug("two-step channel access: group→team syncable skipped",
+				"group", name, "team_id", ch.TeamId, "error", err.Error())
 		}
-		group, err := p.resolveApproverGroup(name)
-		if err != nil || !group.IsSyncable() {
-			continue
-		}
-		if ch.TeamId != "" {
-			if _, err := p.API.UpsertGroupSyncable(model.NewGroupTeam(group.Id, ch.TeamId, true)); err != nil {
-				p.API.LogDebug("two-step channel access: group→team syncable skipped",
-					"group", name, "team_id", ch.TeamId, "error", err.Error())
-			}
-		}
-		if _, err := p.API.UpsertGroupSyncable(model.NewGroupChannel(group.Id, ch.Id, true)); err != nil {
-			p.API.LogDebug("two-step channel access: group→channel syncable skipped",
-				"group", name, "channel_id", ch.Id, "error", err.Error())
-			continue
-		}
-		if syncErr := p.API.CreateDefaultSyncableMemberships(model.CreateDefaultMembershipParams{
-			ReAddRemovedMembers: true,
-			ScopedChannelID:     &ch.Id,
-		}); syncErr != nil {
-			p.API.LogDebug("two-step channel access: CreateDefaultSyncableMemberships skipped",
-				"channel_id", ch.Id, "error", syncErr.Error())
-		}
+	}
+	if _, err := p.API.UpsertGroupSyncable(model.NewGroupChannel(group.Id, ch.Id, true)); err != nil {
+		p.API.LogDebug("two-step channel access: group→channel syncable skipped",
+			"group", name, "channel_id", ch.Id, "error", err.Error())
+		return
+	}
+	if syncErr := p.API.CreateDefaultSyncableMemberships(model.CreateDefaultMembershipParams{
+		ReAddRemovedMembers: true,
+		ScopedChannelID:     &ch.Id,
+	}); syncErr != nil {
+		p.API.LogDebug("two-step channel access: CreateDefaultSyncableMemberships skipped",
+			"channel_id", ch.Id, "error", syncErr.Error())
 	}
 }
 
@@ -256,35 +275,25 @@ func (p *Plugin) shouldRetainTwoStepApprovalChannelAccess(user *model.User, team
 	case twoStepModeSystemAdmin:
 		return false, true
 	case twoStepModeUserGroup:
-		for _, step := range []approverStep{stepSecurity, stepSystem} {
-			name := cfg.approverGroupName(step)
-			if name == "" {
-				continue
-			}
-			in, err := p.userInApproverGroup(user.Id, name)
-			if err != nil {
-				return false, false
-			}
-			if in {
-				return true, true
-			}
+		name := cfg.approverGroupName(stepSecurity)
+		if name == "" {
+			return false, true
 		}
-		return false, true
+		in, err := p.userInApproverGroup(user.Id, name)
+		if err != nil {
+			return false, false
+		}
+		return in, true
 	default:
-		for _, step := range []approverStep{stepSecurity, stepSystem} {
-			attr := cfg.approverAttributeName(step)
-			if attr == "" {
-				continue
-			}
-			ok, err := p.userIsApprover(user, attr)
-			if err != nil {
-				return false, false
-			}
-			if ok {
-				return true, true
-			}
+		attr := cfg.approverAttributeName(stepSecurity)
+		if attr == "" {
+			return false, true
 		}
-		return false, true
+		ok, err := p.userIsApprover(user, attr)
+		if err != nil {
+			return false, false
+		}
+		return ok, true
 	}
 }
 
@@ -353,16 +362,12 @@ func (p *Plugin) listTwoStepApproverUserIDs() []string {
 	case twoStepModeSystemAdmin:
 		return nil
 	case twoStepModeUserGroup:
-		for _, step := range []approverStep{stepSecurity, stepSystem} {
-			for _, id := range p.listApproverGroupMemberIDs(cfg.approverGroupName(step)) {
-				add(id)
-			}
+		for _, id := range p.listApproverGroupMemberIDs(cfg.approverGroupName(stepSecurity)) {
+			add(id)
 		}
 	default:
-		for _, step := range []approverStep{stepSecurity, stepSystem} {
-			for _, id := range p.listApproverAttributeUserIDs(cfg.approverAttributeName(step)) {
-				add(id)
-			}
+		for _, id := range p.listApproverAttributeUserIDs(cfg.approverAttributeName(stepSecurity)) {
+			add(id)
 		}
 	}
 	return out
@@ -375,10 +380,11 @@ func normalizeApproverGroupName(groupName string) string {
 	return strings.TrimPrefix(groupName, "@")
 }
 
-// resolveApproverGroup finds the LDAP or plugin-synced group configured as an
-// approver pool, by name or display name. Custom groups are never used: any
-// user can create one or add themselves to it. Returns an error when no such
-// group can be found; it never returns (nil, nil).
+// resolveApproverGroup finds the group configured as the security approver
+// pool, by name or display name. LDAP and plugin-synced groups are accepted;
+// a custom group is accepted only when AllowCustomApproverGroups is on,
+// because a custom group's managers choose its members. Returns an error
+// when no usable group can be found; it never returns (nil, nil).
 func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	groupName = normalizeApproverGroupName(groupName)
 	if groupName == "" {
@@ -386,6 +392,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	}
 
 	want := strings.ToLower(groupName)
+	allowCustom := p.getConfiguration().AllowCustomApproverGroups
 	customMatch := false
 	match := func(g *model.Group) bool {
 		if g == nil || g.DeleteAt != 0 {
@@ -394,7 +401,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 		if (g.Name == nil || strings.ToLower(*g.Name) != want) && strings.ToLower(g.DisplayName) != want {
 			return false
 		}
-		if g.Source == model.GroupSourceCustom {
+		if g.Source == model.GroupSourceCustom && !allowCustom {
 			customMatch = true
 			return false
 		}
@@ -426,7 +433,7 @@ func (p *Plugin) resolveApproverGroup(groupName string) (*model.Group, error) {
 	}
 
 	if customMatch {
-		p.API.LogWarn("two-step channel access: the approver group is a custom group; only LDAP or plugin-synced groups can approve",
+		p.API.LogWarn("two-step channel access: the approver group is a custom group; turn on Allow custom approver groups to use it, or name an LDAP or plugin-synced group",
 			"group", groupName)
 	} else {
 		p.API.LogWarn("two-step channel access: could not resolve approver group", "group", groupName)

@@ -81,7 +81,10 @@ func (p *Plugin) requireWebhookTargetChannel(requester *model.User, channelID, w
 // submitWebhookRequest validates input and queues a webhook request in the
 // dedicated webhook approval channel. The webhook is created at approve time
 // with the approving admin's session token.
-func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displayName, description, callbackURL string) (string, error) {
+func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displayName, description, callbackURL string) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindWebhook, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeWebhook) {
 		return "", errors.New(webhookRequestsDisabledMsg)
 	}
@@ -136,6 +139,7 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err = p.reservePending(pendingKindWebhook, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -145,6 +149,7 @@ func (p *Plugin) submitWebhookRequest(requesterID, webhookType, channelID, displ
 		p.API.LogError("failed to store webhook request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvWebhookRequestPrefix + req.ID)
@@ -370,7 +375,10 @@ func (p *Plugin) internalBaseURL() string {
 
 func (p *Plugin) postWebhookApprovalRequest(req *webhookRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	webhookCh := p.ensureWebhookApprovalChannel()
-	go p.reconcileTwoStepApproverChannels()
+	go func() {
+		defer p.logRecoveredPanic("two-step approver channel reconcile")
+		p.reconcileTwoStepApproverChannels()
+	}()
 	return p.postApprovalAttachment(
 		req.ID,
 		p.webhookApprovalAttachment(req, requester, channel),

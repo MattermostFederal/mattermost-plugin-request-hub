@@ -33,21 +33,25 @@ Disabled types are hidden from the Request Hub and slash commands, and the serve
 
 ### Two-step approvers (bot + webhook)
 
-Bot and webhook requests require **two distinct approvals**: one security step and one system step. **Bot/webhook two-step approver mode** picks where the approvers come from:
+Bot and webhook requests require **two distinct approvals**: a security step, then a system step. The system step is always a System Admin. **Bot/webhook two-step approver mode** picks who does the security step:
 
 | Mode | Security step | System step |
 |------|---------------|-------------|
-| **User Attributes** (default) | Holders of the **Security approver attribute** | System Admins and holders of the **System approver attribute** |
-| **User Groups** | Members of the **Security approver user group** | System Admins and members of the **System approver user group** |
+| **User Attributes** (default) | Holders of the **Security approver attribute** | A System Admin other than the security approver |
+| **User Groups** | Members of the **Security approver user group** | A System Admin other than the security approver |
 | **System Admins only** | System Admins | System Admins (one System Admin can complete both steps) |
+
+The System Console shows only the setting for the selected mode.
 
 | Setting | Purpose |
 |---------|---------|
-| **Security approver attribute** | User Attribute name (access_control group) that marks security-step approvers. System Admins do **not** auto-qualify for this step while it is set. |
-| **System approver attribute** | User Attribute name for system-step approvers. System Admins always qualify for this step. |
-| **Security approver user group** / **System approver user group** | Used in User Groups mode. Only LDAP or plugin-synced groups count; custom groups are ignored, because any user can join them. |
+| **Security approver attribute** | Used in User Attributes mode. User Attribute name (access_control group) that marks security approvers. Default `security_approver`; blank uses the default. System Admins do **not** cover this step. |
+| **Security approver user group** | Used in User Groups mode. Default `security-approvers`; blank uses the default. LDAP and plugin-synced groups always count. A custom group counts only when **Allow custom approver groups** is on. System Admins do **not** cover this step. |
+| **Allow custom approver groups** | Off by default. Turn it on for servers without LDAP, where the security approver group is a custom group. Anyone who can manage a custom group's members can make themselves a security approver, so restrict who manages custom groups first (System Console > User Management > Permissions > Custom Groups). |
 
-Create and assign attributes in **System Console → User Management → Attributes**. If an attribute or group name is left blank, System Admins cover that step. If a security attribute or group is named but doesn't exist or has no members, nobody can fill the security step and bot/webhook cards stay pending.
+Create and assign attributes in **System Console → User Management → Attributes**. If the security attribute or group doesn't exist or has no members, nobody can fill the security step and bot and webhook cards stay pending. The server log then says so (`the security approver group has no usable members` or `nobody holds the security approver attribute`) on activation and whenever the approver settings change.
+
+Earlier versions had a system approver attribute and group. They are no longer read: the system step now always needs a System Admin.
 
 ### Required for channel creation
 
@@ -65,7 +69,11 @@ Create and assign attributes in **System Console → User Management → Attribu
 | **Offer tools to Agents** | Default **off**. Lets the Mattermost Agents plugin list prefixes, file requests of every type on a user's behalf and look up pending ones (see [Agents tools](#agents-tools)). Takes effect on save. |
 | **Pending requests per user** | Default **5**, up to 1000; 0 means no limit. How many requests of each type one user can have waiting for review; each type is counted separately. A second pending request for the same thing is refused: the same channel name in a team, the same nominees in the same channel or team (Channel Admin, Team Admin, team members), the same team URL, the same guest email in a team, the same bot username, or a webhook of the same type and name in the same channel. |
 | **Request expiry (days)** | Default **30**, at most 3650; 0 means requests never expire. Pending requests of any type older than this can no longer be approved: clicking Approve or Deny marks the card expired and closes the requester's ticket. Bot and webhook requests count from submission, even after one approval step. Applies to requests already pending too. |
+| **Require bot compliance acceptance** | On by default. Bot requesters must accept the **Bot compliance statement**: the form shows it as Terms and Conditions when they submit, and they agree there. The request keeps the exact text, its SHA-256 and the time of acceptance; the approval card shows it was accepted and the audit history records it. A form or API submission must send the SHA-256 of the statement it showed, and is refused without it or when it no longer matches. The slash command needs `--accept-compliance`, which accepts the statement configured at that moment (the one a command without the flag prints), and the Agents `request_bot` tool is refused while this is on. A refused submission (box not ticked, no statement hash, or a statement changed while the form was open) is recorded in the server audit log. The acceptance is an acknowledgement, not an approval: both approval steps are still required. |
+| **Bot compliance statement** | The Terms and Conditions bot requesters accept. Blank uses the built-in Terms and Conditions (authorized use only; the requester is responsible for everything done with the bot, its tokens and its webhooks; protecting credentials; the bot stays a regular user; activity may be audited; what they declared is accurate). Changing it doesn't change what earlier requesters accepted. |
 | **Bot token lifetime** | **1 to 12 months**, default **12**. How long an access token issued with an approved bot request lasts. The token DM gives the expiry date, and the requester gets reminders before it (see [Token expiry reminders](#token-expiry-reminders)). Only affects tokens issued after the change. Not the same as Request expiry. Needs Mattermost 11.9 or later (see [Token expiry reminders](#token-expiry-reminders)). |
+| **Audit channel detail** | Default **Every lifecycle event**. What is posted to `mattermost-audit-requests`: **Decisions only** (approved, denied, expired), **Every lifecycle event** (also submissions, approval steps, failures, token reminders), or **Everything** (also refused approvals and every relayed message). It changes only the channel. The request history and the server audit log always get every event (see [Audit trail](#audit-trail)). |
+| **Allow direct audit export** | Default off. Off: every audit export is a request with a reason that a System Admin approves (see [Audit export requests](#audit-export-requests)), and the export API refuses downloads. On: System Admins can also download exports directly from Audit history, `audit export` and the export API. |
 | **Enable exercise mode** | Default **off**. **Do not enable in production.** Lets System Admins run `/mattermost-request-hub exercise populate`, `teardown` and `status` to seed and remove marked exercise data in a team: persona accounts nobody can sign in as, channels, and pending requests of every type on real approval cards. Populate needs **Allow channel requests**, at least one prefix, and the setting for each other type the scenario seeds (the built-in scenario seeds all eight). Approving a seeded request does the real thing, marked EXERCISE: a channel, team, bot or webhook, a Team Admin or team member change for a persona, or a guest invite. Teardown deletes the webhooks and bots, archives the teams and channels, and undoes the personas' team changes. Personas and guest invites use `exercise.invalid` email addresses, so a server or team that restricts email domains, or a guest domain list, must allow that domain, and guest access must be on for a scenario with guest invites. A guest invite can't be withdrawn; it reaches nobody and expires on its own. |
 | **Exercise scenario (JSON)** | Optional. Blank uses the built-in fictional scenario. Paste a scenario to seed your own; it is stored only in this server's configuration. The format is on the plugin's built-in `slash.html#exercise-scenario` page. |
 
@@ -108,7 +116,7 @@ The plugin creates and manages five dedicated private channels in the configured
 | `mattermost-team-requests` | Team creation, Team Admin, team member add, guest invite |
 | `mattermost-bot-requests` | Bot account requests (including associated tokens and webhooks) |
 | `mattermost-webhook-requests` | Standalone incoming and outgoing webhook requests |
-| `mattermost-audit-requests` | Audit log |
+| `mattermost-audit-requests` | Audit cards (see [Audit trail](#audit-trail)) |
 
 Each channel gets a **Request Hub docs** bookmark that links to the built-in guide. The plugin bot joins the channel to add it. Channels that existed before the upgrade get the bookmark once, on the next activation that has **Site URL** set. If you remove the bookmark, the plugin doesn't add it back.
 
@@ -121,7 +129,7 @@ If one of these channels is archived, the plugin doesn't recreate it: the archiv
 ### Who is in each channel
 
 - **Approval team channels** (root `mattermost-channel-requests`, `mattermost-team-requests`, `mattermost-bot-requests`, `mattermost-webhook-requests`, `mattermost-audit-requests`): private channels created by the plugin's bot. System Admins on the approval team are added when a channel is created and on every activation.
-- **Two-step approvers:** in User Attributes or User Groups mode, members of the security and system pools are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team.
+- **Two-step approvers:** in User Attributes or User Groups mode, members of the security pool are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team.
 - **Per-team channels** (`mattermost-channel-requests` in other teams, when **Per-team approval channels** is on): created in each team that has a Team Admin or a System Admin member, and seeded with those people. A user who joins the team later as an admin is added when they join; someone promoted to Team Admin in Mattermost itself (not through a Request Hub request) is added the next time they join the team. Existing per-team channels aren't reseeded on activation. In the approval team, the per-team channel and the root channel are the same channel.
 
 People who aren't members of a channel can't see its cards. The requester gets their own copy of the card, without buttons, as the root of a DM thread with the bot.
@@ -181,6 +189,129 @@ Bot and webhook cards use **two-step** approval. The card shows security and sys
 
 ---
 
+## Audit trail
+
+Every event on every request is recorded, with who did it and when:
+
+- the submission, and a submission that was refused or failed and was withdrawn
+- each step of a two-step approval, and the final approval or denial
+- an Approve or Deny that was refused (no permission, own request, already handled, a failed re-check)
+- an approval that failed and left the request pending, or that lost the request
+- an approval that was only partly carried out (a team member who couldn't be added, a bot token that couldn't be made)
+- a bot token or incoming webhook URL that couldn't be delivered, so what was made was removed
+- expiry, which is recorded as the plugin's doing with the person whose click noticed it
+- every message in the request's ticket threads, with its text, including messages that weren't relayed
+- bot token expiry reminders, the end of reminders, and the deletion of the message that delivered the token
+- exercise mode seeding and teardown, and requests upgraded from older plugin versions
+
+Tokens and incoming webhook URLs are never recorded.
+
+Events go to three places:
+
+| Where | What it is | Who can see it |
+|-------|------------|----------------|
+| Request history | A record per request in the plugin's KV store, kept after the request is decided. Nothing deletes it. | System Admins, in **Audit history** in the Request Hub, with `/mattermost-request-hub audit`, and the export below. Security approvers can ask for a copy (see [Audit export requests](#audit-export-requests)). |
+| Server audit log | One `requesthub_<event>` record per event (for example `requesthub_submitted`, `requesthub_approved`), with the actor, request ID, kind, requester and details. Failed events have status `fail`. | Wherever your server's audit logging sends records. Audit logging must be turned on for the server. |
+| `mattermost-audit-requests` | Cards people can read, as chosen by **Audit channel detail** | Members of the audit channel |
+
+### Turning on the server audit log
+
+The plugin sends its records through the server's own audit logger, so they go wherever the server's audit records go. Nothing is written until audit logging is turned on:
+
+- **File:** in **System Console > Compliance > Audit Logging**, turn on **File Enabled** and set **File Name** (the console shows this page on Enterprise licenses). On other editions, set `ExperimentalAuditSettings.FileEnabled` and `ExperimentalAuditSettings.FileName` in `config.json` or with `mmctl config set`. The file has one JSON record per line.
+- **Syslog, TCP and other targets:** use **Advanced Logging** (`ExperimentalAuditSettings.AdvancedLoggingJSON`), which needs a license with advanced logging. Plugin records use the `audit-cli` level, so a target must include that level.
+
+Changes to these settings need a server restart. Every record from the plugin has `event_name` starting with `requesthub_` and a `plugin_id` parameter of `com.mattermostfederal.mattermost-plugin-request-hub`, so a SIEM can filter on either.
+
+### Audit history in the Request Hub
+
+System Admins see an **Audit history** card in the Request Hub. It lists every request, newest activity first, and can be searched by request ID, name or requester and filtered by type and status. Opening a request shows its timeline: every event, who did it and when, the text of ticket thread messages, and each event's details. When **Allow direct audit export** is on, download buttons give the whole history, every request of one type, or one request, as CSV or JSON, and the [bot inventory](#bot-inventory) as PDF, CSV or JSON. When it is off (the default), the window has a **Request an export** button instead.
+
+### Audit export requests
+
+Security approvers (the security group or attribute set under **Two-step approvers**) who aren't System Admins see **Request Audit Export** in the Request Hub instead. While **Allow direct audit export** is off, System Admins request exports too, from **Request an export** in Audit history or with the slash command, and a different System Admin must approve them. The slash command is:
+
+```
+/mattermost-request-hub audit export [type] [format] [--request ID] [--kind kind] [--env name] [--bot @name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] --reason text
+```
+
+The requester picks the export type and a format that type comes in:
+
+| Type | Formats (default first) | Narrowed by |
+|------|-------------------------|-------------|
+| `full_histories` | CSV, JSON | Request, request type, requester, dates the request was active |
+| `bot_inventory` | PDF, CSV, JSON | Hosting environment (`--env`), requester, dates the bot was approved |
+| `bot_forensic` | JSON | One bot (`--bot`, required) and the dates it posted (`--since` and `--until`, both required, at most 90 days apart) |
+
+They must give a reason. The approval card shows the export type, format, what it covers and the reason. The request goes to `mattermost-audit-requests` (or to System Admins by direct message when there is no audit channel), and only a System Admin can approve or deny it, with the card's buttons or `approve`/`deny` by ID. Nobody can approve their own export request. Approving builds the export as asked and posts it as a file in the requester's request thread with the Request Hub bot. If the file can't be sent, the request stays pending. The request has no on/off setting: who may ask is decided by the security approver pool, and it expires like other requests.
+
+### Exporting
+
+While **Allow direct audit export** is on, System Admins can download exports from `/plugins/com.mattermostfederal.mattermost-plugin-request-hub/api/v1/audit/export`. `audit recent` and `audit export` link to it. While it is off, the endpoint answers `403 Direct export is off. Request an export instead.` The export is a `GET` with these optional parameters:
+
+| Parameter | Values |
+|-----------|--------|
+| `type` | `full_histories` (default), `bot_inventory` or `bot_forensic` |
+| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. For `bot_forensic`: `json` only. |
+| `request` | One request ID (`full_histories` only) |
+| `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` (`full_histories` only) |
+| `env` | One hosting code: `ci_cd`, `on_prem_server`, `cloud_or_k8s`, `workstation`, `external_saas` or `other`. A bot requested before these codes keeps the environment it was requested with (such as `mattermost-prod`), which also works here. (`bot_inventory` only) |
+| `bot` | The bot's user ID (`bot_forensic` only, and required there) |
+| `requester` | A requester's user ID (not for `bot_forensic`) |
+| `since`, `until` | Unix time in milliseconds. For `bot_inventory`, the date the bot was approved. For `bot_forensic`, when the bot posted: both are required and at most 90 days apart. |
+
+Each export is itself recorded in the server audit log as `requesthub_audit_exported`.
+
+Every cell of a CSV export that a spreadsheet could run as a formula (one starting with `=`, `+`, `-` or `@`, even after spaces, or with a tab, carriage return or other control character) starts with an apostrophe.
+
+If the history can't be saved for an event, the server log has `failed to save request audit history` with the whole event.
+
+### Bot inventory
+
+The `bot_inventory` export lists every bot Request Hub created, oldest first, for Security to review the fleet. Each bot has:
+
+- its user ID, username and display name, and its status as of the export: `active`, `deactivated`, `deleted`, or `unknown` when the server could not be asked
+- its home team and channel, by ID and by their current display names
+- what the requester declared: purpose, where the integration runs, the integration endpoint and the architecture link. Privilege level and data ingestion are the plugin's fixed policy for new bots (a regular user, with member permissions in the channels it is added to); bots requested before then show what was declared
+- the owner. A bot requested without one is owned by its requester; the export shows the bot's owner in Mattermost when it has one
+- the requester, the owner (when another user owns it), the request ID, when it was requested, and who approved it and when
+- whether the requester accepted the bot compliance statement, when, and the SHA-256 of the statement's text
+- `rh_managed: true` and the time of the export (`as_of`)
+
+The PDF is for reading: a title, what it covers and one block per bot. The CSV and JSON have the same fields for tooling, and the CSV guards against formulas as above.
+
+The inventory is built from the bot index Request Hub writes when it creates a bot, so it lists only bots created after the index was added. Bots created outside Request Hub are not listed. The declared fields are the requester's word: they do not limit what the bot's token can do.
+
+### Bot forensics
+
+The `bot_forensic` export traces one bot over at most 90 days, for Security to answer "what did this bot do". It is one JSON document with:
+
+- `rh_managed`, and when Request Hub created the bot, its bot index entry (`index`) and the full history of the request that created it (`history`)
+- the bot record and its status (`active`, `deactivated` or `deleted`)
+- `teams`: the teams the bot is in now, each with the channels it is in now (direct and group messages left out)
+- `scanned_channels`: every channel searched, and why: `member`, `home` or `webhook`. The home channel and the channels its webhooks post to are searched even when the bot has left them.
+- `posts`: every post the bot made in those channels in the date range, oldest first, with its message, props and file IDs. This includes system posts made as the bot, such as joining a channel.
+- `files`: the name, size and type of each file attached to those posts
+- `post_count`, `truncated` and, when it is cut short, `truncated_reason`
+- `limitations`: what the export can't show
+
+It stops at 5,000 posts or 20 MB of posts, whichever comes first, or after reading 200,000 posts in the scanned channels without reaching the start date. It then sets `truncated: true`; ask for a shorter date range to see the rest.
+
+It does not show:
+
+- posts in channels the bot has left, other than its home and webhook channels
+- direct and group messages, which follow the server's own compliance export
+- deleted posts
+- the API calls made with the bot's tokens. Plugins can't see them; look in the server audit log or your SIEM.
+
+The export can trace a bot Request Hub didn't create (`rh_managed: false`), as long as the bot still exists. The audit event for the export records the filter, the post count, whether it was truncated and how many channels were scanned, never the posts themselves.
+
+A request's history keeps relayed messages in full until it reaches 2 MB. After that, each new message is kept to its first 2 KB in the history (marked `message_truncated`), so a very long ticket thread can't stop the history being saved. The server audit log always gets the full text.
+
+Requests that were already pending when auditing was added get their history from their next event on.
+
+---
+
 ## Two-way DM relay
 
 When a request is submitted, the bot sends the requester a DM with a thread for that request. Admins can communicate with the requester through the approval thread:
@@ -232,7 +363,7 @@ If a token is suspected compromised, revoke it in **System Console → User Mana
 
 Webhook requests use the same two-step engine as bots. The final approver's session is used for a single create call and is never stored, so the final approver must be allowed to manage other people's webhooks in the channel's team (Team Admins and System Admins are, by default). Anyone else gets a private reply asking for someone who is, and the request stays pending.
 
-**Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different system approver (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
+**Webhook requests from System Admins get both steps too.** Nobody can approve either step of their own request, so a System Admin's request needs a security approver and a different System Admin (or one other System Admin in System Admins only mode). If creation fails after both steps, the card stays pending for retry. If an incoming webhook URL cannot be DM'd to the requester, the hook is deleted.
 
 ---
 
@@ -292,7 +423,7 @@ Request Hub has a different plugin ID, so Mattermost treats it as a separate plu
 4. Before enabling Request Hub, review its settings. A new install turns on every request type except guest invites, including types the old plugin didn't have (team, Team Admin, team member, bot, webhook). Turn off the ones you don't want yet.
 5. Enter the approval team and the other settings again, then enable the plugin.
 
-Channel Requests posted its cards to an approval channel you chose. Request Hub doesn't use that channel: it creates its own private channels in the approval team (see [Approval channels](#approval-channels)). If a channel with one of those names already exists and Request Hub didn't create it, the plugin won't post there and logs an error; rename that channel so the plugin can create its own.
+Channel Requests posted its cards to an approval channel you chose. Request Hub doesn't use that channel: it creates its own private channels in the approval team (see [Approval channels](#approval-channels)). If a private channel with one of those names already exists and a System Admin or this plugin's bot created it (for example on an upgraded server, or after the plugin's bot was recreated), Request Hub adds its bot to that channel and uses it. Any other channel with one of those names (public, archived, or created by a regular user or by another bot) is not used: the plugin logs an error and sends cards to System Admins by direct message instead. Rename that channel so the plugin can create its own.
 
 ### Between Request Hub versions
 
@@ -323,6 +454,7 @@ The plugin records which team **Approval team** named the first time it was used
 | Bot account (+ token + webhooks) | More actions, Integrations page | `mattermost-bot-requests` | Two-step: security, then system |
 | Incoming webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
 | Outgoing webhook (standalone) | More actions, Integrations page | `mattermost-webhook-requests` | Two-step: security, then system |
+| Audit export | Request Hub, `audit export` (security approvers, and System Admins while direct export is off) | `mattermost-audit-requests` | System Admins (not the requester) |
 
 Every request is queued for approval, including requests from System Admins.
 

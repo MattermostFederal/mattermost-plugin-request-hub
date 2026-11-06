@@ -38,7 +38,10 @@ type teamGuestRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 }
 
-func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, channelIDs []string, reason string) (string, error) {
+func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, channelIDs []string, reason string) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindTeamGuest, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeTeamGuest) {
 		return "", errors.New(teamGuestRequestsDisabledMsg)
 	}
@@ -114,6 +117,7 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindTeamGuest, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -123,6 +127,7 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 		p.API.LogError("failed to store team guest request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamGuestRequestPrefix + req.ID)

@@ -119,7 +119,7 @@
                 <tr><td>Team members</td><td>The team still exists, isn't archived and isn't managed by groups; the requester's account is active; every nominee's account is active</td></tr>
                 <tr><td>Guest invite</td><td>The team still exists and isn't archived; the requester's account is active and they're still on the team and in each channel (System Admins excepted); each channel still exists, isn't archived and is still in the team</td></tr>
                 <tr><td>Team</td><td>The requester's account is active</td></tr>
-                <tr><td>Bot</td><td>The requester's account is active; a chosen owner's account is active and isn't a bot; any webhook channels still exist and aren't archived, the requester is still in them (System Admins excepted), and an outgoing webhook's channel is still public</td></tr>
+                <tr><td>Bot</td><td>The requester's account is active; a chosen owner's account is active and isn't a bot; the home team and home channel still exist and aren't archived, the home channel is still in that team, and the requester is still in both (System Admins excepted); any webhook channels still exist and aren't archived, the requester is still in them (System Admins excepted), and an outgoing webhook's channel is still public</td></tr>
                 <tr><td>Webhook</td><td>The requester's account is active; the channel still exists and isn't archived; the requester is still in it (System Admins excepted); an outgoing webhook's channel is still public</td></tr>
             </tbody>
         </table>
@@ -156,7 +156,8 @@
             approved. Clicking either button on it, or running <code>approve</code> or <code>deny</code> on it,
             replies <em>This request has expired.</em>, marks the card
             <em>⌛ Expired: not reviewed within N days.</em>, closes the requester's ticket as expired and posts an
-            <em>Expired</em> card to the audit channel. The requester can submit it again.
+            <em>Expired</em> card to the audit channel. The expiry is recorded in the request's
+            <a href="troubleshooting.html#audit">audit history</a>. The requester can submit it again.
         </p>
         <p>
             Bot and webhook requests count from when they were submitted, even after one approval step is done.
@@ -166,43 +167,34 @@
         <h2>Bot &amp; webhook two-step approval</h2>
         <p>Each bot/webhook card needs <strong>two distinct approvers</strong> on the same card:</p>
         <ul class="entry-list">
-            <li><strong>Security first</strong>: security pool (attribute or group). System Admins do <em>not</em> auto-qualify once a security pool is set. Dual-role (both pools / security + System Admin) fills <em>security</em> only.</li>
-            <li><strong>System second</strong>: a <strong>different</strong> System Admin or system-pool member. System-only cannot click before security has signed off.</li>
+            <li><strong>Security first</strong>: a member of the security pool (attribute or group). System Admins do <em>not</em> cover this step. Someone who is in the security pool <em>and</em> a System Admin fills <em>security</em> only.</li>
+            <li><strong>System second</strong>: a <strong>different</strong> System Admin. Nobody else can do this step, and it can't be clicked before security has signed off.</li>
         </ul>
         <p>
-            Configure pools in System Console → Plugins → Mattermost Request Hub →
-            <strong>Bot/webhook two-step approver mode</strong>.
+            Configure the security pool in System Console &rarr; Plugins &rarr; Mattermost Request Hub &rarr;
+            <strong>Bot/webhook two-step approver mode</strong>. The System Console shows only the setting for the mode you pick.
+        </p>
+        <p>
+            If the security attribute or group doesn't exist or has nobody in it, nobody can fill the security step and
+            bot and webhook cards stay pending. The server log says so on activation and whenever these settings change.
         </p>
 
         <h3>Mode: User Attributes (ABAC / CPA)</h3>
         <p>Default. Uses Mattermost User Attributes (custom profile attributes).</p>
         <ol>
-            <li>System Console → User Management → Attributes: create attributes (admin-managed or LDAP/SAML-synced).</li>
-            <li>Set <strong>Security approver attribute name</strong> and <strong>System approver attribute name</strong>
-                to match your schema (defaults <code>security_approver</code> / <code>system_approver</code>, rename freely).</li>
-            <li>Mark the right users with those attributes.</li>
+            <li>System Console &rarr; User Management &rarr; Attributes: create an attribute (admin-managed or LDAP/SAML-synced).</li>
+            <li>Set <strong>Security approver attribute</strong> to its name (default <code>security_approver</code>; blank uses the default).</li>
+            <li>Mark the security reviewers with that attribute.</li>
         </ol>
-        <p>
-            System Admins always qualify for the <em>system</em> step.
-            They do <strong>not</strong> bypass a configured security attribute. Create the attribute and mark security reviewers, or clear the security attribute name if you intentionally want the setup soft-fallback.
-        </p>
 
         <h3>Mode: User Groups</h3>
-        <p>Use when ABAC is not available but you have LDAP or plugin-synced groups. Custom groups are not used, because any user can join them.</p>
+        <p>Use when ABAC is not available. LDAP and plugin-synced groups always work. A custom group works only when <em>Allow custom approver groups</em> is on; anyone who can manage a custom group's members can make themselves a security approver, so restrict who manages custom groups before you turn it on.</p>
         <ol>
-            <li>Create groups (System Console → User Management → Groups). Defaults expect
-                <code>security-approvers</code> and <code>system-approvers</code>. Create those, or rename the plugin fields to match yours.</li>
+            <li>Create the group (System Console &rarr; User Management &rarr; Groups). The default name is
+                <code>security-approvers</code>. Create it, or set the plugin field to yours.</li>
             <li>Set mode to <strong>User Groups</strong>.</li>
-            <li>Confirm <strong>Security approver user group</strong> and <strong>System approver user group</strong>
-                match the group <em>name/handle</em> (not display name). Both fields are editable in System Console.</li>
+            <li>Confirm <strong>Security approver user group</strong> matches the group <em>name/handle</em> or its display name.</li>
         </ol>
-        <p>
-            Security-group members fill security first. System-group members <em>or</em> System Admins fill system
-            second, always two different people. Someone who is in the security group <em>and</em> a System Admin
-            still only fills security on their click; another person must complete system.
-            If the security group name is blank, System Admins may cover the security step (setup soft-fallback),
-            but a second distinct approver is still required for system.
-        </p>
 
         <h3>Mode: System Admins only (no ABAC)</h3>
         <p>

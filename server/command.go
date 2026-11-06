@@ -38,7 +38,7 @@ const (
 	teamArgsHint            = "<Team name> [--name <url name>] [--description <text>] [--invite-only] [--team-admin]"
 	teamMemberArgsHint      = "@user [@user ...] [--reason <text>]"
 	teamGuestArgsHint       = "<email> --channels ~channel [~channel ...] [--reason <text>]"
-	botArgsHint             = "<username> <Display name> [--description <text>] [--owner @user]"
+	botArgsHint             = "<username> <Display name> --purpose <text> --integration <https-url> --env ci_cd|on_prem_server|cloud_or_k8s|workstation|external_saas|other [--architecture <https-url>] [--hosting-other <text>] [--owner @user] [--accept-compliance]"
 	incomingWebhookArgsHint = "~channel <Display name> [--description <text>]"
 	outgoingWebhookArgsHint = "~channel <Display name> --callback <url> [--description <text>]"
 	subcommandPrefixes      = "prefixes"
@@ -59,7 +59,7 @@ func getCommand() *model.Command {
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Request admin-gated permissions (channels, teams, admin roles) or open docs",
-		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
+		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|audit|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
 		AutocompleteData: getAutocompleteData(),
 		DisplayName:      "Mattermost Request Hub",
 	}
@@ -77,6 +77,10 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(list)
 	root.AddCommand(model.NewAutocompleteData(subcommandApprove, requestIDArgHint, "Approve a request by the ID on its approval card"))
 	root.AddCommand(model.NewAutocompleteData(subcommandDeny, requestIDArgHint, "Deny a request by the ID on its approval card"))
+	audit := model.NewAutocompleteData(subcommandAudit, auditArgsHint, "Show a request's audit history, or the latest requests (System Admins); export it (System Admins and security approvers)")
+	audit.AddCommand(model.NewAutocompleteData(auditRecent, "[count]", "List the most recently updated requests"))
+	audit.AddCommand(model.NewAutocompleteData(auditExportSub, auditExportArgsHint, "Request an audit export, or download it when direct export is on"))
+	root.AddCommand(audit)
 	exercise := model.NewAutocompleteData(subcommandExercise, "populate|teardown|status", "Seed, remove or report exercise data (System Admins, exercise mode on)")
 	exercise.AddCommand(model.NewAutocompleteData(exercisePopulate, "", "Seed marked exercise data into this team"))
 	exercise.AddCommand(model.NewAutocompleteData(exerciseTeardown, "", "Remove this team's exercise data"))
@@ -149,6 +153,8 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 		return p.executeDecision(args, params, false), nil
 	case subcommandExercise:
 		return p.executeExercise(args, params), nil
+	case subcommandAudit:
+		return p.executeAudit(args, params), nil
 	case "team-admin":
 		if len(params) > 0 {
 			return p.executeTeamAdminNominateCommand(args, params), nil
@@ -321,7 +327,13 @@ func (p *Plugin) executeBotRequestCommand(args *model.CommandArgs) (*model.Comma
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return ephemeralResponse(botRequestsDisabledMsg), nil
 	}
-	if err := p.openBotRequestDialog(args.TriggerId); err != nil {
+	// The channel the form is opened from is the bot's home, so it must be
+	// a team's public or private channel.
+	home, appErr := p.API.GetChannel(args.ChannelId)
+	if appErr != nil || home == nil || (home.Type != model.ChannelTypeOpen && home.Type != model.ChannelTypePrivate) {
+		return ephemeralResponse(botHomeMissingMsg), nil
+	}
+	if err := p.openBotRequestDialog(args.TriggerId, home); err != nil {
 		p.API.LogError("failed to open bot request dialog", "error", err.Error())
 		return ephemeralResponse("Could not open the bot request form. Please try again."), nil
 	}
@@ -370,6 +382,9 @@ var helpRows = []helpRow{
 	{"", subcommandList + " " + listApprovals, "List the pending requests you can approve and their IDs"},
 	{"", subcommandApprove + " " + requestIDArgHint, "Approve a request, as its Approve button would"},
 	{"", subcommandDeny + " " + requestIDArgHint, "Deny a request, as its Deny button would"},
+	{"", subcommandAudit + " " + requestIDArgHint, "Show everything that happened to a request (System Admins)"},
+	{"", subcommandAudit + " " + auditRecent + " [count]", "List the most recently updated requests (System Admins)"},
+	{"", subcommandAudit + " " + auditExportSub + " " + auditExportArgsHint, "Request an audit export, which another System Admin approves, or download it when direct export is on (System Admins and security approvers)"},
 	{"", subcommandExercise + " <populate, teardown or status>", "Seed (`populate`), remove (`teardown`) or report (`status`) marked exercise data in this team (System Admins, when exercise mode is on)"},
 	{requestTypeTeamAdmin, "team-admin", "Request Team Admin role in this team (opens the form)"},
 	{requestTypeTeamAdmin, "team-admin " + teamAdminArgsHint, "Request Team Admin for those members of this team"},
@@ -824,26 +839,48 @@ func (p *Plugin) executeTeamGuestInviteCommand(args *model.CommandArgs, params [
 }
 
 // executeBotCreateCommand submits a bot account request without the form.
-// Like the form it takes the account fields only; the token and webhook
-// extras are offered in the webapp.
+// Like the form it takes the account fields and the declaration, and the
+// channel it is run in is the bot's home; the token and webhook extras are
+// offered in the webapp.
 func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return ephemeralResponse(botRequestsDisabledMsg)
 	}
 
 	usage := func(err error) *model.CommandResponse { return usageReply(err, "bot", botArgsHint) }
-	positional, flags, err := readArgs(params, "--description", "--owner")
+	positional, flags, err := readArgs(params, "--owner", "--accept-compliance",
+		"--purpose", "--integration", "--architecture", "--env", "--hosting-other")
 	if err != nil {
 		return usage(err)
 	}
 	if len(positional) < 2 {
 		return usage(errors.New("a bot username and a display name are required"))
 	}
-	description, err := flagText(flags, "--description", "some text")
+	accepted, err := flagBool(flags, "--accept-compliance")
 	if err != nil {
 		return usage(err)
 	}
 	owner, err := flagOne(flags, "--owner")
+	if err != nil {
+		return usage(err)
+	}
+	purpose, err := flagText(flags, "--purpose", "some text")
+	if err != nil {
+		return usage(err)
+	}
+	integration, err := flagText(flags, "--integration", "an https URL")
+	if err != nil {
+		return usage(err)
+	}
+	architecture, err := flagText(flags, "--architecture", "an https URL")
+	if err != nil {
+		return usage(err)
+	}
+	env, err := flagOne(flags, "--env")
+	if err != nil {
+		return usage(err)
+	}
+	hostingOther, err := flagText(flags, "--hosting-other", "some text")
 	if err != nil {
 		return usage(err)
 	}
@@ -861,11 +898,29 @@ func (p *Plugin) executeBotCreateCommand(args *model.CommandArgs, params []comma
 		ownerID = ownerIDs[0]
 	}
 
+	// Without the flag, show the statement to accept rather than refuse it
+	// unread.
+	if c := p.getConfiguration(); c.BotComplianceRequired() && !accepted {
+		return ephemeralResponse(slashComplianceText(c))
+	}
+
 	return submitReply(p.submitBotRequest(args.UserId, botRequestInput{
 		Username:    positional[0],
 		DisplayName: strings.Join(positional[1:], " "),
-		Description: description,
 		OwnerUserID: ownerID,
+
+		Purpose:            purpose,
+		ArchitectureURL:    architecture,
+		IntegrationURL:     integration,
+		HostingEnv:         env,
+		HostingOtherDetail: hostingOther,
+		HomeTeamID:         args.TeamId,
+		HomeChannelID:      args.ChannelId,
+
+		// --accept-compliance accepts the statement configured now, the one
+		// a refused slash command prints.
+		ComplianceAccepted: accepted,
+		ComplianceTextHash: complianceHash(p.getConfiguration().BotComplianceText()),
 	}))
 }
 
@@ -1015,8 +1070,17 @@ func (p *Plugin) executeList(args *model.CommandArgs, params []commandArg) *mode
 	return ephemeralResponse(strings.TrimRight(b.String(), "\n"))
 }
 
-// deciderFor returns the decide function for requests of a pending kind.
+// deciderFor returns the decide function for requests of a pending kind,
+// wrapped so every decision it answers is audited.
 func (p *Plugin) deciderFor(kind string) decider {
+	if d := p.kindDecider(kind); d != nil {
+		return p.auditedDecider(kind, d)
+	}
+	return nil
+}
+
+// kindDecider is the decide function for kind, nil for an unknown kind.
+func (p *Plugin) kindDecider(kind string) decider {
 	switch kind {
 	case pendingKindChannel:
 		return p.decideChannelRequest
@@ -1034,6 +1098,8 @@ func (p *Plugin) deciderFor(kind string) decider {
 		return p.decideBotRequest
 	case pendingKindWebhook:
 		return p.decideWebhookRequest
+	case pendingKindAuditExport:
+		return p.decideAuditExportRequest
 	default:
 		return nil
 	}

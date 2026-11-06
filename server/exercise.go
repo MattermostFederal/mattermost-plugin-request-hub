@@ -882,6 +882,35 @@ func exercisePassword() string {
 	return "Ex1!" + base64.RawURLEncoding.EncodeToString(b)
 }
 
+// seedExerciseBotDeclaration fills in what a real requester declares, so
+// exercise bot cards look like real ones. The home is the bot's webhook
+// channel, which the scenario requires the requester to be in; a bot with
+// no webhook has no home, as requests from before homes existed.
+func (p *Plugin) seedExerciseBotDeclaration(req *botRequest, teamID string, spec exerciseBotRequest) {
+	c := p.getConfiguration()
+	req.Purpose = spec.Description
+	if req.Purpose == "" {
+		req.Purpose = spec.DisplayName
+	}
+	req.PrivilegeLevel = privilegeUserEquivalent
+	req.MMPrivilege = mmPrivilegeMemberUserOnly
+	req.DataIngestion = defaultChannelAccessNote
+	req.HostingEnv = hostingCICD
+	req.IntegrationURL = "https://exercise.example/hooks/mm"
+	req.Description = req.Purpose
+	home := req.IncomingWebhookChannelID
+	if home == "" {
+		home = req.OutgoingWebhookChannelID
+	}
+	if home != "" {
+		req.HomeTeamID, req.HomeChannelID = teamID, home
+	}
+	if c.BotComplianceRequired() {
+		text := c.BotComplianceText()
+		req.Compliance = &botCompliance{AcceptedAt: spec.CreatedAt, TextSHA256: complianceHash(text), Text: text}
+	}
+}
+
 func isNotFound(appErr *model.AppError) bool {
 	return appErr != nil && appErr.StatusCode == http.StatusNotFound
 }
@@ -1319,6 +1348,7 @@ func (p *Plugin) seedExercise(plan *exercisePlan) error {
 			OutgoingWebhookChannelID: channelID(spec.OutgoingChannelOpKey),
 			CreatedAt:                spec.CreatedAt, Exercise: true, ExerciseTeamID: teamID,
 		}
+		p.seedExerciseBotDeclaration(req, teamID, spec)
 		if spec.Owner != "" {
 			req.OwnerUserID = users[spec.Owner].Id
 		}
@@ -1422,6 +1452,11 @@ func (p *Plugin) seedRequest(s exerciseSeed, made func(change func(*exerciseMani
 			DMRootPostID: dmRootPostID, DMChannelID: dmChannelID,
 			Kind: pendingKindRequestType(s.kind), ScopeID: s.scopeID,
 		},
+	})
+	p.recordEvent(auditEntry{
+		Event: eventExerciseSeeded, Kind: s.kind, RequestID: id, RequesterID: requesterID, Exercise: true,
+		Snapshot: s.record, ThreadPostID: approvalPostID,
+		Note: fmt.Sprintf("Exercise mode seeded %s request", aKind(s.kind)),
 	})
 	keys := exerciseRequestKeys(id, approvalPostID, dmRootPostID)
 	return made(func(m *exerciseManifest) {
@@ -1830,6 +1865,10 @@ func (p *Plugin) removeExerciseRequest(kind, requestID string) (bool, error) {
 		return false, nil
 	}
 	p.releasePending(kind, rec.RequesterID, requestID)
+	p.recordEvent(auditEntry{
+		Event: eventExerciseRemoved, Kind: kind, RequestID: requestID, RequesterID: rec.RequesterID, Exercise: true,
+		Note: fmt.Sprintf("Exercise teardown removed a pending %s request", kindLabel(kind)),
+	})
 	p.closeRemovedExerciseRequest(newDecisionCards(requestID, "", rec.ApprovalPostID), rec.RequesterID, rec.DMRootPostID, rec.DMChannelID)
 	for _, key := range exerciseRequestKeys(requestID, rec.ApprovalPostID, rec.DMRootPostID) {
 		if appErr := p.API.KVDelete(key); appErr != nil {

@@ -15,6 +15,8 @@ const tokenPostRegistryKey = "token_post_registry"
 type tokenPostEntry struct {
 	PostID    string `json:"post_id"`
 	ExpiresAt int64  `json:"expires_at"` // Unix timestamp
+	// RequestID is the bot request the post delivered secrets for.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // createBotToken creates a personal access token for botUserID through the
@@ -35,10 +37,10 @@ func (p *Plugin) createBotToken(botUserID, description string) (*model.UserAcces
 	return token, nil
 }
 
-// addBotToWebhookChannel puts the new bot on the channel's team and in the
-// channel. An incoming webhook's owner has to be able to read its channel,
-// and a new bot starts on no team.
-func (p *Plugin) addBotToWebhookChannel(botUserID, channelID string) error {
+// addBotToChannel puts the new bot on the channel's team and in the
+// channel: its home channel, or an incoming webhook's channel, which the
+// hook's owner has to be able to read. A new bot starts on no team.
+func (p *Plugin) addBotToChannel(botUserID, channelID string) error {
 	channel, appErr := p.API.GetChannel(channelID)
 	if appErr != nil {
 		return fmt.Errorf("load channel: %s", appErr.Error())
@@ -168,7 +170,7 @@ func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue string, tokenExp
 	// Incoming webhook URLs are Mattermost-generated credentials and get the
 	// same 72-hour auto-delete treatment as access tokens.
 	if tokenValue != "" || incomingWebhookURL != "" {
-		p.scheduleTokenPostDeletion(post.Id)
+		p.scheduleTokenPostDeletion(post.Id, req.ID)
 	}
 }
 
@@ -176,9 +178,9 @@ func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue string, tokenExp
 // best-effort in-process timer to delete it 72 hours from now. The registry
 // survives plugin restarts — cleanupExpiredTokenPosts re-arms timers on
 // OnActivate.
-func (p *Plugin) scheduleTokenPostDeletion(postID string) {
+func (p *Plugin) scheduleTokenPostDeletion(postID, requestID string) {
 	expiresAt := time.Now().Add(72 * time.Hour).Unix()
-	entry := tokenPostEntry{PostID: postID, ExpiresAt: expiresAt}
+	entry := tokenPostEntry{PostID: postID, ExpiresAt: expiresAt, RequestID: requestID}
 
 	for range 3 {
 		raw, _ := p.API.KVGet(tokenPostRegistryKey)
@@ -201,9 +203,7 @@ func (p *Plugin) scheduleTokenPostDeletion(postID string) {
 	}
 
 	time.AfterFunc(72*time.Hour, func() {
-		if appErr := p.API.DeletePost(postID); appErr != nil {
-			p.API.LogWarn("failed to delete expired token post", "post_id", postID, "error", appErr.Error())
-		}
+		p.deleteTokenPost(entry, "failed to delete expired token post")
 		p.removeTokenPostFromRegistry(postID)
 	})
 }
@@ -226,10 +226,7 @@ func (p *Plugin) cleanupExpiredTokenPosts() {
 		var remaining []tokenPostEntry
 		for _, e := range entries {
 			if e.ExpiresAt <= now {
-				if delErr := p.API.DeletePost(e.PostID); delErr != nil {
-					p.API.LogWarn("cleanup: failed to delete expired token post",
-						"post_id", e.PostID, "error", delErr.Error())
-				}
+				p.deleteTokenPost(e, "cleanup: failed to delete expired token post")
 				continue
 			}
 			remaining = append(remaining, e)
@@ -238,12 +235,10 @@ func (p *Plugin) cleanupExpiredTokenPosts() {
 			}
 			armed[e.PostID] = true
 			delay := time.Duration(e.ExpiresAt-now) * time.Second
-			postID := e.PostID
+			entry := e
 			time.AfterFunc(delay, func() {
-				if delErr := p.API.DeletePost(postID); delErr != nil {
-					p.API.LogWarn("failed to delete expired token post", "post_id", postID, "error", delErr.Error())
-				}
-				p.removeTokenPostFromRegistry(postID)
+				p.deleteTokenPost(entry, "failed to delete expired token post")
+				p.removeTokenPostFromRegistry(entry.PostID)
 			})
 		}
 
@@ -286,4 +281,19 @@ func (p *Plugin) removeTokenPostFromRegistry(postID string) {
 			return
 		}
 	}
+}
+
+// deleteTokenPost deletes a post that carried a token or webhook URL once
+// its 72 hours are up, recording it. failMsg is the warning when the
+// delete fails.
+func (p *Plugin) deleteTokenPost(e tokenPostEntry, failMsg string) {
+	if delErr := p.API.DeletePost(e.PostID); delErr != nil {
+		p.API.LogWarn(failMsg, "post_id", e.PostID, "error", delErr.Error())
+		return
+	}
+	p.recordEvent(auditEntry{
+		Event: eventTokenPostDeleted, Kind: pendingKindBot, RequestID: e.RequestID,
+		Note:   "Deleted the message that delivered a bot access token or webhook URL, 72 hours after it was sent",
+		Detail: map[string]any{"post_id": e.PostID},
+	})
 }

@@ -273,14 +273,100 @@ export async function submitTeamGuestRequest(payload: TeamGuestRequestPayload): 
 export type BotRequestPayload = {
     username: string;
     display_name: string;
-    description?: string;
+    purpose: string;
+    architecture_url?: string;
+    integration_endpoint: string;
+    hosting_env: 'ci_cd' | 'on_prem_server' | 'cloud_or_k8s' | 'workstation' | 'external_saas' | 'other';
+    hosting_other_detail?: string;
+    home_team_id: string;
+    home_channel_id: string;
     request_token?: boolean;
     incoming_webhook_channel_id?: string;
     incoming_webhook_display_name?: string;
     outgoing_webhook_channel_id?: string;
     outgoing_webhook_display_name?: string;
     outgoing_webhook_callback_url?: string;
+    compliance_accepted?: boolean;
+    compliance_text_hash?: string;
 };
+
+export type BotHomeTeam = {
+    id: string;
+    name: string;
+    display_name: string;
+};
+
+export type BotHomeChannel = {
+    id: string;
+    name: string;
+    display_name: string;
+    type: string;
+};
+
+export type BotForm = {
+    compliance: {
+        enabled: boolean;
+        text?: string;
+        sha256?: string;
+    };
+    hosting_envs?: Array<{value: string; label: string}>;
+};
+
+// fetchBotHomeTeams lists teams the current user belongs to for the bot home picker.
+export async function fetchBotHomeTeams(): Promise<BotHomeTeam[]> {
+    const response = await fetch(`/plugins/${manifest.id}/api/v1/teams`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to load teams (${response.status})`);
+    }
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
+}
+
+// fetchBotHomeChannels lists public/private channels in a team for the bot home picker.
+export async function fetchBotHomeChannels(teamId: string): Promise<BotHomeChannel[]> {
+    const response = await fetch(
+        `/plugins/${manifest.id}/api/v1/channels?team_id=${encodeURIComponent(teamId)}`,
+        {method: 'GET', credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'}},
+    );
+    if (!response.ok) {
+        throw new Error(`Failed to load channels (${response.status})`);
+    }
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
+}
+
+// fetchBotForm returns the Terms and Conditions settings, or null when they
+// can't be loaded. The form must not be submitted without the statement the
+// server requires when compliance is on.
+export async function fetchBotForm(): Promise<BotForm | null> {
+    try {
+        const response = await fetch(`/plugins/${manifest.id}/api/v1/bot_form`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!response.ok) {
+            return null;
+        }
+        const body = await response.json();
+        return {
+            compliance: {
+                enabled: Boolean(body?.compliance?.enabled),
+                text: typeof body?.compliance?.text === 'string' ? body.compliance.text : undefined,
+                sha256: typeof body?.compliance?.sha256 === 'string' ? body.compliance.sha256 : undefined,
+            },
+            hosting_envs: Array.isArray(body?.hosting_envs) ? body.hosting_envs.filter((e: unknown): e is {value: string; label: string} => (
+                typeof (e as {value?: unknown})?.value === 'string' && typeof (e as {label?: unknown})?.label === 'string'
+            )) : [],
+        };
+    } catch {
+        return null;
+    }
+}
 
 export type IncomingWebhookPayload = {
     channel_id: string;
@@ -388,4 +474,138 @@ export async function submitAdminRequest(payload: AdminRequestPayload): Promise<
     }
 
     return body;
+}
+
+// AuditAccess says what the user may do with the audit history: System
+// Admins view it, and download it while direct export is on; security
+// approvers (and System Admins while direct export is off) ask for a copy.
+export type AuditAccess = {
+    can_view: boolean;
+    can_request: boolean;
+    direct_export: boolean;
+};
+
+// fetchAuditAccess fails closed: on any error neither entry point shows.
+export async function fetchAuditAccess(): Promise<AuditAccess> {
+    try {
+        const response = await fetch(`/plugins/${manifest.id}/api/v1/audit/access`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!response.ok) {
+            return {can_view: false, can_request: false, direct_export: false};
+        }
+        const body = await response.json();
+        return {can_view: Boolean(body?.can_view), can_request: Boolean(body?.can_request), direct_export: Boolean(body?.direct_export)};
+    } catch {
+        return {can_view: false, can_request: false, direct_export: false};
+    }
+}
+
+export type AuditRequestSummary = {
+    request_id: string;
+    kind: string;
+    kind_label: string;
+    title: string;
+    status: string;
+    requester_id: string;
+    requester_username?: string;
+    created_at: number;
+    updated_at: number;
+    event_count: number;
+    last_event: string;
+    exercise?: boolean;
+};
+
+export type AuditEvent = {
+    at: number;
+    event: string;
+    actor_id?: string;
+    actor_name?: string;
+    outcome: string;
+    note?: string;
+    detail?: Record<string, unknown>;
+};
+
+export type AuditHistory = {
+    request_id: string;
+    kind: string;
+    requester_id?: string;
+    created_at: number;
+    updated_at: number;
+    status: string;
+    exercise?: boolean;
+    request?: Record<string, unknown>;
+    events: AuditEvent[];
+};
+
+export type AuditListQuery = {
+    q?: string;
+    kind?: string;
+    status?: string;
+    page?: number;
+    perPage?: number;
+};
+
+function auditQuery(params: Record<string, string | number | undefined>): string {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== '') {
+            search.set(key, String(value));
+        }
+    }
+    const text = search.toString();
+    return text ? `?${text}` : '';
+}
+
+async function getAuditJSON<T>(path: string): Promise<T> {
+    const response = await fetch(`/plugins/${manifest.id}${path}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error((await response.text()).trim() || `Request failed (${response.status})`);
+    }
+    return response.json() as Promise<T>;
+}
+
+// fetchAuditRequests returns a page of the audit history list, newest
+// activity first. System Admins only; throws on any failure.
+export function fetchAuditRequests(query: AuditListQuery): Promise<{total: number; requests: AuditRequestSummary[]}> {
+    return getAuditJSON(`/api/v1/audit/requests${auditQuery({q: query.q, kind: query.kind, status: query.status, page: query.page, per_page: query.perPage})}`);
+}
+
+// fetchAuditHistory returns one request's whole history. System Admins only.
+export function fetchAuditHistory(requestId: string): Promise<{summary: AuditRequestSummary; requester_username: string; history: AuditHistory}> {
+    return getAuditJSON(`/api/v1/audit/request${auditQuery({id: requestId})}`);
+}
+
+export type AuditExportFormat = 'csv' | 'json' | 'pdf';
+
+// auditExportURL is the download link for an export: the request
+// histories by default, narrowed to one request or one kind when given, or
+// another type such as bot_inventory. It works only while direct export is
+// on.
+export function auditExportURL(format: AuditExportFormat, filter: {type?: string; request?: string; kind?: string} = {}): string {
+    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({type: filter.type, format, request: filter.request, kind: filter.kind})}`;
+}
+
+export type AuditExportRequestPayload = {
+    type: string;
+    format: AuditExportFormat;
+    kind?: string;
+    env?: string;
+
+    // bot is a bot's username, for bot_forensic.
+    bot?: string;
+    requester?: string;
+    since?: number;
+    until?: number;
+    reason: string;
+};
+
+export async function submitAuditExportRequest(payload: AuditExportRequestPayload): Promise<ChannelRequestResult> {
+    return postJSON('/api/v1/submit_audit_export_request', payload);
 }

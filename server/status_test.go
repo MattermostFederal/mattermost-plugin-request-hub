@@ -169,6 +169,7 @@ func TestListOwnRequests(t *testing.T) {
 		"request load fails": func(api *plugintest.API) {
 			api.On("KVGet", pendingListKey(pendingKindChannel, "u1")).Return(recordJSON(t, []pendingEntry{{ID: "r1"}}), nil)
 			api.On("KVGet", pendingListKey(pendingKindAdmin, "u1")).Return(nil, nil)
+			api.On("KVGet", pendingListKey(pendingKindAuditExport, "u1")).Return(nil, nil)
 			api.On("KVGet", kvRequestPrefix+"r1").Return(nil, testAppErr("kv down"))
 		},
 	} {

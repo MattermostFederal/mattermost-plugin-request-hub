@@ -15,8 +15,8 @@ const (
 
 	fieldBotUsername    = "bot_username"
 	fieldBotDisplayName = "bot_display_name"
-	fieldBotDescription = "bot_description"
 	fieldBotOwner       = "bot_owner"
+	fieldBotCompliance  = "bot_compliance"
 
 	// Bounds on a requested bot username.
 	minBotUsernameLen = 3
@@ -33,6 +33,23 @@ type botRequest struct {
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+	// Compliance is the requester's acceptance of the compliance
+	// statement; nil when none was required.
+	Compliance *botCompliance `json:"compliance,omitempty"`
+
+	// What the requester declared about the bot (see bot_declaration.go),
+	// and its home team and channel, which the bot joins on approval.
+	// Requests saved by older versions have none of them.
+	Purpose            string `json:"purpose,omitempty"`
+	ArchitectureURL    string `json:"architecture_url,omitempty"`
+	IntegrationURL     string `json:"integration_endpoint,omitempty"`
+	PrivilegeLevel     string `json:"privilege_level,omitempty"`
+	MMPrivilege        string `json:"mm_privilege,omitempty"`
+	DataIngestion      string `json:"data_ingestion,omitempty"`
+	HostingEnv         string `json:"hosting_env,omitempty"`
+	HostingOtherDetail string `json:"hosting_other_detail,omitempty"`
+	HomeTeamID         string `json:"home_team_id,omitempty"`
+	HomeChannelID      string `json:"home_channel_id,omitempty"`
 
 	// Optional extras — requested alongside the bot account in the same ticket.
 	// All three are created at approve-time using the approver's session token.
@@ -63,24 +80,38 @@ type botRequest struct {
 }
 
 // botRequestInput carries the caller-supplied fields for a new bot request.
-// The slash-command dialog path populates only the base fields; the webapp
-// path additionally sets the optional token/webhook fields.
+// Every path sets the account fields, the declaration and the home team and
+// channel; only the webapp path sets the token/webhook extras.
 type botRequestInput struct {
 	Username                   string
 	DisplayName                string
-	Description                string
 	OwnerUserID                string
+	Purpose                    string
+	ArchitectureURL            string
+	IntegrationURL             string
+	HostingEnv                 string
+	HostingOtherDetail         string
+	HomeTeamID                 string
+	HomeChannelID              string
 	RequestToken               bool
 	IncomingWebhookChannelID   string
 	IncomingWebhookDisplayName string
 	OutgoingWebhookChannelID   string
 	OutgoingWebhookDisplayName string
 	OutgoingWebhookCallbackURL string
+	// ComplianceAccepted is the requester's tick on the compliance
+	// statement; ComplianceTextHash the hash of the statement they were
+	// shown, required while the statement is.
+	ComplianceAccepted bool
+	ComplianceTextHash string
 }
 
 // submitBotRequest validates the input and stores a pending request for
 // two-step approval.
-func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (string, error) {
+func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindBot, requesterID)
+	defer sa.done(&submitErr)
+
 	if !p.getConfiguration().RequestEnabled(requestTypeBot) {
 		return "", errors.New(botRequestsDisabledMsg)
 	}
@@ -103,7 +134,6 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 	}
 	for _, check := range []error{
 		checkTextLen("Display name", input.DisplayName, maxDisplayNameLen),
-		checkTextLen("Description", input.Description, maxDescriptionLen),
 		checkByteLen("Incoming webhook name", input.IncomingWebhookDisplayName, maxWebhookNameBytes),
 		checkByteLen("Outgoing webhook name", input.OutgoingWebhookDisplayName, maxWebhookNameBytes),
 	} {
@@ -115,6 +145,18 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		if err := checkCallbackURL(input.OutgoingWebhookCallbackURL); err != nil {
 			return "", err
 		}
+	}
+	declared, declErr := checkBotDeclaration(p.getConfiguration(), botDeclaration{
+		Purpose: input.Purpose, ArchitectureURL: input.ArchitectureURL,
+		IntegrationURL: input.IntegrationURL, HostingEnv: input.HostingEnv,
+		HostingOtherDetail: input.HostingOtherDetail,
+	})
+	if declErr != nil {
+		return "", declErr
+	}
+	compliance, complianceErr := checkBotCompliance(p.getConfiguration(), input.ComplianceAccepted, input.ComplianceTextHash)
+	if complianceErr != nil {
+		return "", complianceErr
 	}
 
 	requester, appErr := p.API.GetUser(requesterID)
@@ -138,14 +180,32 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 			return "", errors.Wrap(err, "outgoing webhook channel")
 		}
 	}
+	homeTeamID := strings.TrimSpace(input.HomeTeamID)
+	homeChannelID := strings.TrimSpace(input.HomeChannelID)
+	if err := p.requireBotHome(requester, homeTeamID, homeChannelID); err != nil {
+		return "", err
+	}
 
+	// Purpose is the required declaration text and also becomes the Mattermost
+	// bot profile description.
 	req := &botRequest{
 		ID:                         model.NewId(),
 		RequesterID:                requesterID,
 		Username:                   username,
 		DisplayName:                strings.TrimSpace(input.DisplayName),
-		Description:                strings.TrimSpace(input.Description),
+		Description:                declared.Purpose,
 		OwnerUserID:                strings.TrimSpace(input.OwnerUserID),
+		Compliance:                 compliance,
+		Purpose:                    declared.Purpose,
+		ArchitectureURL:            declared.ArchitectureURL,
+		IntegrationURL:             declared.IntegrationURL,
+		PrivilegeLevel:             declared.PrivilegeLevel,
+		MMPrivilege:                declared.MMPrivilege,
+		DataIngestion:              declared.DataIngestion,
+		HostingEnv:                 declared.HostingEnv,
+		HostingOtherDetail:         declared.HostingOtherDetail,
+		HomeTeamID:                 homeTeamID,
+		HomeChannelID:              homeChannelID,
 		RequestToken:               input.RequestToken,
 		IncomingWebhookChannelID:   incomingChID,
 		IncomingWebhookDisplayName: strings.TrimSpace(input.IncomingWebhookDisplayName),
@@ -156,6 +216,10 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
+	if compliance != nil {
+		sa.addDetail(complianceAuditDetail(compliance), complianceNote(compliance))
+	}
 	if err := p.reservePending(pendingKindBot, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -165,6 +229,7 @@ func (p *Plugin) submitBotRequest(requesterID string, input botRequestInput) (st
 		p.API.LogError("failed to store bot request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvBotRequestPrefix + req.ID)
@@ -235,7 +300,10 @@ func (p *Plugin) postBotApprovalRequest(req *botRequest, requester *model.User) 
 	ch := p.ensureBotApprovalChannel()
 	// Light reconcile (group member list only) so new/re-added security
 	// approvers see this card without waiting for the 2m ticker.
-	go p.reconcileTwoStepApproverChannels()
+	go func() {
+		defer p.logRecoveredPanic("two-step approver channel reconcile")
+		p.reconcileTwoStepApproverChannels()
+	}()
 	return p.postApprovalAttachment(
 		req.ID,
 		p.botApprovalAttachment(req, requester),
@@ -263,11 +331,38 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 
 	var details []string
 	details = append(details, fmt.Sprintf("**Display name:** %s", escapeMarkdown(req.DisplayName)))
-	if req.Description != "" {
-		details = append(details, fmt.Sprintf("**Description:** %s", escapeMarkdown(req.Description)))
-	}
 	if req.OwnerUserID != "" {
 		details = append(details, fmt.Sprintf("**Owner:** %s", p.mentionList([]string{req.OwnerUserID})))
+	}
+	if req.Purpose != "" {
+		details = append(details, fmt.Sprintf("**Purpose:** %s", escapeMarkdown(req.Purpose)))
+	}
+	if req.ArchitectureURL != "" {
+		details = append(details, fmt.Sprintf("**Architecture link:** %s", escapeMarkdown(req.ArchitectureURL)))
+	}
+	if req.IntegrationURL != "" {
+		details = append(details, fmt.Sprintf("**Integration endpoint:** %s", escapeMarkdown(req.IntegrationURL)))
+	}
+	details = append(details, fmt.Sprintf("**Mattermost role:** %s", mmPrivilegeLabel(req.MMPrivilege)))
+	if req.DataIngestion != "" {
+		details = append(details, fmt.Sprintf("**Channel access:** %s", escapeMarkdown(req.DataIngestion)))
+	}
+	if req.HostingEnv != "" {
+		hostLabel := hostingEnvLabel(req.HostingEnv)
+		if req.HostingEnv == hostingOther && req.HostingOtherDetail != "" {
+			hostLabel = fmt.Sprintf("%s (%s)", hostLabel, escapeMarkdown(req.HostingOtherDetail))
+		}
+		details = append(details, fmt.Sprintf("**Script / service runs from:** %s", hostLabel))
+	}
+	if req.IntegrationURL != "" {
+		details = append(details, "**Transit security:** the integration endpoint uses https (checked on submit)")
+	}
+	details = append(details, "**Activity logs:** Request Hub audit history; forensic pull by bot user ID after approval")
+	if req.HomeChannelID != "" {
+		details = append(details, fmt.Sprintf("**Home:** %s", p.channelDisplayRef(req.HomeChannelID)))
+	}
+	if req.Compliance != nil {
+		details = append(details, fmt.Sprintf("**Compliance:** accepted (sha256 %s)", shortHash(req.Compliance.TextSHA256)))
 	}
 	if req.RequestToken {
 		details = append(details, "**Token:** requested (generated at approve-time, sent in DM)")
@@ -417,13 +512,37 @@ func (p *Plugin) loadBotRequest(id string) (*botRequest, []byte, error) {
 }
 
 // openBotRequestDialog opens the interactive dialog for submitting a bot
-// account request.
-func (p *Plugin) openBotRequestDialog(triggerID string) error {
+// account request. The channel it is opened from becomes the bot's home.
+func (p *Plugin) openBotRequestDialog(triggerID string, home *model.Channel) error {
+	dialog := p.botRequestDialog(p.channelDisplayRef(home.Id))
+	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
+		TriggerId: triggerID,
+		URL:       fmt.Sprintf("/plugins/%s%s", manifest.Id, routeBotDialog),
+		Dialog:    dialog,
+	}); appErr != nil {
+		return appErr
+	}
+	return nil
+}
+
+// botRequestDialog is the bot request form. homeRef names the channel it
+// was opened from, the bot's home. While the compliance statement is
+// required it is shown in the introduction with a box to accept it, and its
+// hash rides in the dialog state so a statement changed meanwhile is caught
+// on submit.
+func (p *Plugin) botRequestDialog(homeRef string) model.Dialog {
+	c := p.getConfiguration()
+	envs := make([]*model.PostActionOptions, 0, len(c.HostingEnvs()))
+	for _, code := range c.HostingEnvs() {
+		envs = append(envs, &model.PostActionOptions{Text: hostingEnvLabel(code), Value: code})
+	}
 	dialog := model.Dialog{
-		CallbackId:       botDialogCallbackID,
-		Title:            "Request a Bot Account",
-		IntroductionText: "Bot account requests need a security approval and a system approval.",
-		SubmitLabel:      "Submit request",
+		CallbackId: botDialogCallbackID,
+		Title:      "Request a Bot Account",
+		IntroductionText: "Bot account requests need a security approval and a system approval. The bot is always a regular user (never Team Admin or System Admin).\n\n" +
+			"**Home:** " + homeRef + ". The bot joins this channel when it is approved. " +
+			"Open the form from another channel to change it. A home doesn't limit what the bot's token can reach.",
+		SubmitLabel: "Submit request",
 		Elements: []model.DialogElement{
 			{
 				DisplayName: "Bot username",
@@ -441,12 +560,44 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 				MaxLength:   maxDisplayNameLen,
 			},
 			{
-				DisplayName: "Description",
-				Name:        fieldBotDescription,
+				DisplayName: "Purpose",
+				Name:        fieldBotPurpose,
 				Type:        "textarea",
+				Placeholder: "What the bot does and why",
+				HelpText:    "Required. This also becomes the bot's Mattermost profile description.",
+				MaxLength:   maxBotPurposeLen,
+			},
+			{
+				DisplayName: "Architecture link",
+				Name:        fieldBotArchitectureURL,
+				Type:        "text",
 				Optional:    true,
-				Placeholder: "What does this bot do? What systems will it integrate with?",
-				MaxLength:   maxDescriptionLen,
+				Placeholder: "https://…",
+				HelpText:    "Optional https link to an architecture or design review.",
+				MaxLength:   maxBotURLLen,
+			},
+			{
+				DisplayName: "Integration endpoint",
+				Name:        fieldBotIntegrationURL,
+				Type:        "text",
+				Placeholder: "https://ci.example/hooks/mm",
+				HelpText:    "Required https URL of the integration that drives this bot.",
+				MaxLength:   maxBotURLLen,
+			},
+			{
+				DisplayName: "Where the script / service runs",
+				Name:        fieldBotHostingEnv,
+				Type:        "select",
+				Options:     envs,
+				HelpText:    "Where the integration that drives this bot runs (not which Mattermost environment).",
+			},
+			{
+				DisplayName: "Specify hosting (if Other)",
+				Name:        fieldBotHostingOtherDetail,
+				Type:        "text",
+				Optional:    true,
+				Placeholder: "e.g. air-gapped appliance",
+				MaxLength:   maxBotHostingOtherLen,
 			},
 			{
 				DisplayName: "Bot owner",
@@ -458,12 +609,16 @@ func (p *Plugin) openBotRequestDialog(triggerID string) error {
 			},
 		},
 	}
-	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
-		TriggerId: triggerID,
-		URL:       fmt.Sprintf("/plugins/%s%s", manifest.Id, routeBotDialog),
-		Dialog:    dialog,
-	}); appErr != nil {
-		return appErr
+	if c.BotComplianceRequired() {
+		text := c.BotComplianceText()
+		dialog.IntroductionText += "\n\n**Compliance statement**\n\n> " + strings.ReplaceAll(text, "\n", "\n> ")
+		dialog.Elements = append(dialog.Elements, model.DialogElement{
+			DisplayName: "Compliance",
+			Name:        fieldBotCompliance,
+			Type:        "bool",
+			Placeholder: "I accept the compliance statement above",
+		})
+		dialog.State = complianceHash(text)
 	}
-	return nil
+	return dialog
 }

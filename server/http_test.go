@@ -1136,20 +1136,23 @@ var (
 		routeSubmitBotWebapp, routeSubmitIncomingWebhookWebapp,
 		routeSubmitOutgoingWebhookWebapp,
 	}
-	lookupRoutes = []string{
+	// untoggledSubmitRoutes take requests of a type with no admin toggle.
+	untoggledSubmitRoutes = []string{routeSubmitAuditExportWebapp}
+	lookupRoutes          = []string{
 		routePrefixes, routeTeams, routeChannels, routeUserAutocomplete,
-		routeSidebarCategories, routeConfig,
+		routeSidebarCategories, routeConfig, routeBotForm, routeAuditExport, routeAuditRequests, routeAuditRequest, routeAuditAccess,
 	}
 	actionRoutes = []string{
 		routeApprove, routeDeny, routeApproveAdmin, routeDenyAdmin,
 		routeApproveTeam, routeDenyTeam, routeApproveTeamAdmin, routeDenyTeamAdmin,
 		routeApproveTeamMember, routeDenyTeamMember, routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot, routeApproveWebhook, routeDenyWebhook,
+		routeApproveAuditExport, routeDenyAuditExport,
 	}
 )
 
 func allRoutes() []string {
-	return append(append(append([]string{}, submitRoutes...), lookupRoutes...), actionRoutes...)
+	return append(append(append(append([]string{}, submitRoutes...), untoggledSubmitRoutes...), lookupRoutes...), actionRoutes...)
 }
 
 // TestServeHTTP_RouteListsMatchDispatch keeps the route lists above in step
@@ -1688,7 +1691,7 @@ func TestHandleAction_DenyWithUnknownRequesterAuditsByID(t *testing.T) {
 	require.Contains(t, auditCard.Text, "from user u_req")
 	api.AssertNotCalled(t, "CreateChannel", mock.Anything)
 	api.AssertCalled(t, "LogWarn", "failed to open DM for card notification", "user_id", "u_req", "error", mock.Anything)
-	api.AssertCalled(t, "LogWarn", "audit post failed", "channel_id", "audit", "error", mock.Anything)
+	api.AssertCalled(t, "LogError", "audit post failed", "channel_id", "audit", "error", mock.Anything)
 }
 
 func TestHandleAdminAction_ErrorPaths(t *testing.T) {

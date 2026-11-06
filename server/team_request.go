@@ -54,7 +54,10 @@ type teamCreationInput struct {
 
 // submitTeamCreationRequest validates the input and stores a pending request
 // for approval. AllowTeamRequests is enforced here so every entry point is gated.
-func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error) {
+func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (submitted string, submitErr error) {
+	sa := p.startSubmitAudit(pendingKindTeam, in.RequesterID)
+	defer sa.done(&submitErr)
+
 	config := p.getConfiguration()
 	if !config.RequestEnabled(requestTypeTeam) {
 		return "", errors.New(teamRequestsDisabledMsg)
@@ -110,6 +113,7 @@ func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error)
 	}
 
 	entry := newPendingEntry(req)
+	sa.built(req, requester)
 	if err := p.reservePending(pendingKindTeam, req.RequesterID, entry, p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -119,6 +123,7 @@ func (p *Plugin) submitTeamCreationRequest(in teamCreationInput) (string, error)
 		p.API.LogError("failed to store team request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
+	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		_ = p.API.KVDelete(kvTeamRequestPrefix + req.ID)

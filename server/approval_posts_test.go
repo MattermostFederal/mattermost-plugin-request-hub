@@ -357,7 +357,8 @@ func TestActionHandlers_TurnedOffTypeRefusesApprove(t *testing.T) {
 			stubLogs(api)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
-			p.setConfiguration(&configuration{}) // every request type off
+			// Request types off; keep system_admin so the actor can still decide.
+			p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
 
 			raw, err := json.Marshal(tc.record("post1"))
 			require.NoError(t, err)
@@ -380,7 +381,7 @@ func TestActionHandlers_TurnedOffTypeStillAllowsDeny(t *testing.T) {
 			stubLogs(api)
 			defer api.AssertExpectations(t)
 			p := newTestPlugin(api)
-			p.setConfiguration(&configuration{})
+			p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
 
 			raw, err := json.Marshal(tc.record("post1"))
 			require.NoError(t, err)

@@ -754,28 +754,19 @@ test.describe('team menu', () => {
         await page.getByRole('menuitem', {name: /Leave team|Learn about teams/}).first().waitFor();
     };
 
-    // Clicks the open menu's invisible backdrop away from the form.
-    const closeStuckMenu = async (page: import('@playwright/test').Page) => {
-        const backdrop = page.locator('#backdropForMenuComponent');
-        if (await backdrop.count() > 0) {
-            await backdrop.click({position: {x: 5, y: 5}, force: true});
-            await expect(backdrop).toHaveCount(0);
-        }
-    };
-
     test('a member gets Request a Team and Request Team Admin, which open the plugin forms', async ({hub, page}) => {
         const requester = await hub.createUser();
         await login(page, hub, requester.username);
         await openChannel(page, hub, 'town-square');
 
-        // The forms are found by CSS, not by role, and the menu is closed by
-        // hand: it stays open over them (see the next test).
+        // The forms are found by CSS, not by role. Choosing an item closes
+        // the menu (see the next test).
         await openTeamMenu(page);
         await expect(page.getByText('Create a team', {exact: true})).toHaveCount(0);
         await page.getByText('Request a Team', {exact: true}).click();
         const teamForm = page.locator('[role="dialog"]').filter({hasText: 'Request a New Team'});
         await expect(teamForm).toBeVisible();
-        await closeStuckMenu(page);
+        await expect(page.locator('#backdropForMenuComponent')).toHaveCount(0);
         await teamForm.locator('button', {hasText: 'Cancel'}).click();
         await expect(teamForm).toBeHidden();
 
@@ -783,7 +774,7 @@ test.describe('team menu', () => {
         await page.getByText('Request Team Admin', {exact: true}).click();
         const adminForm = page.locator('[role="dialog"]').filter({hasText: 'Request Team Admin'});
         await expect(adminForm).toBeVisible();
-        await closeStuckMenu(page);
+        await expect(page.locator('#backdropForMenuComponent')).toHaveCount(0);
         await adminForm.locator('button', {hasText: 'Submit request'}).click();
         const [card, id] = await cardFor(hub, requester);
         expect(await hub.kv(`team_admin_request_${id}`)).toMatchObject({team_id: hub.teamId, nominee_ids: [requester.id]});

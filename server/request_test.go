@@ -21,10 +21,13 @@ const channelAdminRoles = "channel_user channel_admin"
 // newTestPlugin wires a Plugin up to a mock API with a known bot user.
 // Every request type defaults to enabled so tests don't each set toggles;
 // a test that calls setConfiguration replaces these.
+// Audit events go to decisionCardsOnly, so tests that aren't about the
+// audit trail don't each stub the request history.
 func newTestPlugin(api *plugintest.API) *Plugin {
 	p := &Plugin{}
 	p.SetAPI(api)
 	p.botUserID = "bot-user-id"
+	p.auditSink = decisionCardsOnly(p)
 	p.setConfiguration(&configuration{
 		AllowChannelRequests:      true,
 		AllowChannelAdminRequests: true,
@@ -34,8 +37,24 @@ func newTestPlugin(api *plugintest.API) *Plugin {
 		AllowTeamGuestRequests:    true,
 		AllowBotTokenRequests:     true,
 		AllowWebhookRequests:      true,
+		// Most handler tests act as a System Admin. system_admin mode lets
+		// that actor cover both two-step stamps; attribute/usergroup suites
+		// set their mode explicitly.
+		TwoStepApproverMode: twoStepModeSystemAdmin,
 	})
 	return p
+}
+
+// decisionCardsOnly is the test plugin's audit sink: it keeps no history
+// and sends no audit records, and posts only the decision cards (approved,
+// denied, expired) to the audit channel. Tests of the audit trail itself
+// clear it or use captureAudit.
+func decisionCardsOnly(p *Plugin) func(auditEntry, auditEventSpec) {
+	return func(e auditEntry, spec auditEventSpec) {
+		if spec.level == auditLevelDecisions {
+			p.postAuditCard(spec.card, exerciseLabel(e.Exercise)+strings.TrimSpace(e.Note), e.ThreadPostID)
+		}
+	}
 }
 
 // stubLogs registers permissive log expectations so production code can
@@ -126,6 +145,7 @@ func stubLogLevels(api *plugintest.API) {
 			api.On(method, args...).Maybe()
 		}
 	}
+	api.On("LogAuditRec", mock.Anything).Maybe()
 }
 
 // stubApprovalTeamRecord lets approvalTeam read and write its record of the
@@ -527,6 +547,7 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
+			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: "system_user"}, nil).Maybe()
 			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(taken, nil)
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 			api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)

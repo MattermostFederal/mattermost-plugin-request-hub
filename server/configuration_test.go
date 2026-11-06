@@ -128,6 +128,7 @@ func TestOnConfigurationChange_ParsesRequestLimits(t *testing.T) {
 
 	api.On("LoadPluginConfiguration", mock.Anything).Run(func(args mock.Arguments) {
 		dest := args.Get(0).(*configuration)
+		dest.TwoStepApproverMode = twoStepModeSystemAdmin
 		dest.MaxPendingRequestsPerUser = "2"
 		dest.RequestExpiryDays = "soon"
 	}).Return(nil)
@@ -149,6 +150,7 @@ func TestOnConfigurationChange_CapsRequestLimits(t *testing.T) {
 	api.On("KVGet", kvPrefixMaxLenV48).Return([]byte("1"), nil)
 	api.On("LoadPluginConfiguration", mock.Anything).Run(func(args mock.Arguments) {
 		dest := args.Get(0).(*configuration)
+		dest.TwoStepApproverMode = twoStepModeSystemAdmin
 		dest.MaxPendingRequestsPerUser = "5000"
 		dest.RequestExpiryDays = "99999999999999"
 	}).Return(nil)

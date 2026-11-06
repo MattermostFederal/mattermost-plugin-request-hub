@@ -1,5 +1,6 @@
 import {expect, test} from '../helpers/fixtures';
 import {ADMIN, PLUGIN_ID, REQUEST_CHANNELS, atLeast, uid} from '../helpers/requesthub';
+import {complianceHash} from '../helpers/bots';
 
 const TOKEN_LIFETIME_MONTHS = 1;
 
@@ -39,8 +40,14 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
         const res = await hub.pluginFetch<{message?: string; error?: string}>(requester.username, '/api/v1/submit_bot_request', {
             username,
             display_name: 'E2E Bot',
-            description: 'e2e',
             request_token: true,
+            compliance_accepted: true,
+            compliance_text_hash: await complianceHash(hub, requester.username),
+            purpose: 'e2e',
+            integration_endpoint: 'https://ci.example/hooks/e2e',
+            hosting_env: 'ci_cd',
+            home_team_id: hub.teamId,
+            home_channel_id: await hub.channelId('town-square'),
         });
         expect(res.error, JSON.stringify(res)).toBeUndefined();
 

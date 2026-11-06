@@ -42,6 +42,7 @@ type requestSummary struct {
 var allPendingKinds = []string{
 	pendingKindChannel, pendingKindAdmin, pendingKindTeam, pendingKindTeamAdmin,
 	pendingKindTeamMember, pendingKindTeamGuest, pendingKindBot, pendingKindWebhook,
+	pendingKindAuditExport,
 }
 
 // pendingKindRequestType returns the request type (requestType*) of a
@@ -59,12 +60,17 @@ func pendingKindRequestType(kind string) string {
 
 // enabledPendingKinds returns the request kinds the list and status views
 // cover, leaving out any type an administrator turned off.
+// Audit export requests have no toggle, so they are listed alongside the
+// request types that are on, and not at all when every type is off.
 func enabledPendingKinds(config *configuration) []string {
 	var kinds []string
 	for _, kind := range allPendingKinds {
-		if config.RequestEnabled(pendingKindRequestType(kind)) {
+		if kind != pendingKindAuditExport && config.RequestEnabled(pendingKindRequestType(kind)) {
 			kinds = append(kinds, kind)
 		}
+	}
+	if len(kinds) > 0 {
+		kinds = append(kinds, pendingKindAuditExport)
 	}
 	return kinds
 }
@@ -293,6 +299,8 @@ func (p *Plugin) summarize(config *configuration, kind string, rec storedRequest
 		s.Summary = fmt.Sprintf("Bot **@%s**%s", escapeMarkdown(req.Username), awaitingStep(req.twoStepState))
 	case *webhookRequest:
 		s.Summary = fmt.Sprintf("%s webhook **%s** in %s%s", capitalize(req.WebhookType), escapeMarkdown(req.DisplayName), p.channelLabel(req.ChannelID), awaitingStep(req.twoStepState))
+	case *auditExportRequest:
+		s.Summary = fmt.Sprintf("Audit export (%s): %s", strings.ToUpper(req.Filter.Format), p.describeExportFilter(req.Filter))
 	}
 	s.Expired = requestExpired(s.CreatedAt, config.ExpiryDays(), model.GetMillis())
 	if days := config.ExpiryDays(); days > 0 && s.CreatedAt > 0 {

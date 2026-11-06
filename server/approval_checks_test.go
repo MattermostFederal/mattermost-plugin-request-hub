@@ -366,11 +366,12 @@ func TestBotApproveSkipsOwnerCheckWhenRequesterOwnsTheBot(t *testing.T) {
 	stubSystemAdmin(api)
 	stubRequester(api)
 	api.On("KVGet", kvBotRequestPrefix+"r1").Return(raw, nil)
-	api.On("KVCompareAndSet", kvBotRequestPrefix+"r1", raw, mock.Anything).Return(false, nil).Once()
+	// system_admin mode finishes both steps in one click → claim deletes the record.
+	api.On("KVCompareAndDelete", kvBotRequestPrefix+"r1", raw).Return(false, nil).Once()
 
 	resp := runAsAdmin(t, p, botActionHandler, true)
 
-	require.Equal(t, "This request was just updated by someone else. Please try again.", resp.EphemeralText)
+	require.Equal(t, "This request was just updated. Please click Approve or Deny again.", resp.EphemeralText)
 	api.AssertNumberOfCalls(t, "GetUser", 2) // admin1 and the requester only
 }
 

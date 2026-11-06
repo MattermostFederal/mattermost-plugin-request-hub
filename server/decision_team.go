@@ -58,6 +58,7 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 	teamRef := teamDisplayRef(team, teamErr, req.TeamID)
 
 	p.refreshTicketThread(ticketThread{
+		RequestID:         req.ID,
 		ApprovalPostID:    req.ApprovalPostID,
 		ApprovalChannelID: req.ApprovalChannelID,
 		DMRootPostID:      req.DMRootPostID,
@@ -65,7 +66,8 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 		Kind:              requestTypeTeamAdmin,
 	})
 
-	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID)
+	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID).
+		withSubject(pendingKindTeamAdmin, req.RequesterID, actingUser, req, req.Exercise)
 
 	if days := p.getConfiguration().ExpiryDays(); requestExpired(req.CreatedAt, days, model.GetMillis()) {
 		requester, _ := p.API.GetUser(req.RequesterID)
@@ -81,7 +83,7 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 			days:        days,
 			cardTitle:   exerciseLabel(req.Exercise) + "Team Admin Request Expired",
 			cardText:    fmt.Sprintf("Your request to make %s Team Admin in %s expired before it was reviewed. Submit it again if you still need it.", nominees, teamRef),
-			audit: exerciseLabel(req.Exercise) + fmt.Sprintf("@%s closed the Team Admin request for %s in %s from %s, which was not reviewed within %d days",
+			audit: fmt.Sprintf("@%s closed the Team Admin request for %s in %s from %s, which was not reviewed within %d days",
 				actingUser.Username, nominees, teamRef, requesterUsername(requester, req.RequesterID), days),
 		})
 	}
@@ -104,10 +106,14 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 	nominees := p.mentionList(req.NomineeIDs)
 
 	if approve {
-		p.promoteTeamAdmins(req)
+		event, problems := eventApproved, ""
+		failed := p.promoteTeamAdmins(req)
+		if len(failed) > 0 {
+			event, problems = eventApprovedPartial, "; promotion failed for "+p.mentionList(failed)
+		}
 		outcome := fmt.Sprintf("✅ Approved by @%s for %s. %s promoted to Team Admin in %s.", actingUser.Username, requesterUsername(requester, req.RequesterID), nominees, teamRef)
-		p.logAudit(auditApproved, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s promoted %s to Team Admin in %s (requested by %s)",
-			actingUser.Username, nominees, teamRef, requesterUsername(requester, req.RequesterID)), cards.cardPostID)
+		p.decisionEvent(cards, event, fmt.Sprintf("@%s promoted %s to Team Admin in %s (requested by %s)%s",
+			actingUser.Username, nominees, teamRef, requesterUsername(requester, req.RequesterID), problems), map[string]any{"failed_ids": failed})
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: true, ApproverUsername: actingUser.Username,
@@ -117,8 +123,8 @@ func (p *Plugin) decideTeamAdminRequest(actingUserID, requestID, clickedPostID s
 		})
 	}
 	outcome := fmt.Sprintf("❌ Denied by @%s for %s. Team Admin for %s in %s.", actingUser.Username, requesterUsername(requester, req.RequesterID), nominees, teamRef)
-	p.logAudit(auditDenied, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s denied a Team Admin request for %s in %s",
-		actingUser.Username, nominees, teamRef), cards.cardPostID)
+	p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied a Team Admin request for %s in %s",
+		actingUser.Username, nominees, teamRef), nil)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: false, ApproverUsername: actingUser.Username,
@@ -152,6 +158,7 @@ func (p *Plugin) decideTeamMemberRequest(actingUserID, requestID, clickedPostID 
 	teamRef := teamDisplayRef(team, teamErr, req.TeamID)
 
 	p.refreshTicketThread(ticketThread{
+		RequestID:         req.ID,
 		ApprovalPostID:    req.ApprovalPostID,
 		ApprovalChannelID: req.ApprovalChannelID,
 		DMRootPostID:      req.DMRootPostID,
@@ -159,7 +166,8 @@ func (p *Plugin) decideTeamMemberRequest(actingUserID, requestID, clickedPostID 
 		Kind:              requestTypeTeamMember,
 	})
 
-	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID)
+	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID).
+		withSubject(pendingKindTeamMember, req.RequesterID, actingUser, req, req.Exercise)
 
 	if days := p.getConfiguration().ExpiryDays(); requestExpired(req.CreatedAt, days, model.GetMillis()) {
 		requester, _ := p.API.GetUser(req.RequesterID)
@@ -175,7 +183,7 @@ func (p *Plugin) decideTeamMemberRequest(actingUserID, requestID, clickedPostID 
 			days:        days,
 			cardTitle:   exerciseLabel(req.Exercise) + "Team Member Request Expired",
 			cardText:    fmt.Sprintf("Your request to add %s to %s expired before it was reviewed. Submit it again if you still need it.", nominees, teamRef),
-			audit: exerciseLabel(req.Exercise) + fmt.Sprintf("@%s closed the request to add %s to %s from %s, which was not reviewed within %d days",
+			audit: fmt.Sprintf("@%s closed the request to add %s to %s from %s, which was not reviewed within %d days",
 				actingUser.Username, nominees, teamRef, requesterUsername(requester, req.RequesterID), days),
 		})
 	}
@@ -217,12 +225,20 @@ func (p *Plugin) decideTeamMemberRequest(actingUserID, requestID, clickedPostID 
 			outcome = fmt.Sprintf("✅ Approved by @%s for %s. No users were added to %s.",
 				actingUser.Username, requesterUsername(requester, req.RequesterID), teamRef)
 		}
-		if len(added) > 0 {
-			p.logAudit(auditApproved, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s added %s to %s (requested by %s)",
-				actingUser.Username, addedMentions, teamRef, requesterUsername(requester, req.RequesterID)), cards.cardPostID)
-		} else if len(failed) > 0 {
-			p.logAudit(auditApproved, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s approved team member request for %s but adds failed for %s",
-				actingUser.Username, teamRef, failedMentions), cards.cardPostID)
+		detail := map[string]any{"added_ids": added, "failed_ids": failed}
+		switch {
+		case len(failed) > 0 && len(added) > 0:
+			p.decisionEvent(cards, eventApprovedPartial, fmt.Sprintf("@%s added %s to %s (requested by %s); adds failed for %s",
+				actingUser.Username, addedMentions, teamRef, requesterUsername(requester, req.RequesterID), failedMentions), detail)
+		case len(failed) > 0:
+			p.decisionEvent(cards, eventApprovedPartial, fmt.Sprintf("@%s approved team member request for %s but adds failed for %s",
+				actingUser.Username, teamRef, failedMentions), detail)
+		case len(added) > 0:
+			p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s added %s to %s (requested by %s)",
+				actingUser.Username, addedMentions, teamRef, requesterUsername(requester, req.RequesterID)), detail)
+		default:
+			p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s approved adding users to %s (requested by %s); nobody needed adding",
+				actingUser.Username, teamRef, requesterUsername(requester, req.RequesterID)), detail)
 		}
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
@@ -233,8 +249,8 @@ func (p *Plugin) decideTeamMemberRequest(actingUserID, requestID, clickedPostID 
 		})
 	}
 	outcome := fmt.Sprintf("❌ Denied by @%s for %s. Team member add for %s in %s.", actingUser.Username, requesterUsername(requester, req.RequesterID), nominees, teamRef)
-	p.logAudit(auditDenied, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s denied adding %s to %s",
-		actingUser.Username, nominees, teamRef), cards.cardPostID)
+	p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied adding %s to %s",
+		actingUser.Username, nominees, teamRef), nil)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: false, ApproverUsername: actingUser.Username,
@@ -269,6 +285,7 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 	teamRef := teamDisplayRef(team, teamErr, req.TeamID)
 
 	p.refreshTicketThread(ticketThread{
+		RequestID:         req.ID,
 		ApprovalPostID:    req.ApprovalPostID,
 		ApprovalChannelID: req.ApprovalChannelID,
 		DMRootPostID:      req.DMRootPostID,
@@ -276,7 +293,8 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 		Kind:              requestTypeTeamGuest,
 	})
 
-	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID)
+	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID).
+		withSubject(pendingKindTeamGuest, req.RequesterID, actingUser, req, req.Exercise)
 
 	if days := p.getConfiguration().ExpiryDays(); requestExpired(req.CreatedAt, days, model.GetMillis()) {
 		requester, _ := p.API.GetUser(req.RequesterID)
@@ -291,7 +309,7 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 			days:        days,
 			cardTitle:   exerciseLabel(req.Exercise) + "Guest Invite Request Expired",
 			cardText:    fmt.Sprintf("Your request to invite **%s** to %s as a guest expired before it was reviewed. Submit it again if you still need it.", escapeMarkdown(req.Email), teamRef),
-			audit: exerciseLabel(req.Exercise) + fmt.Sprintf("@%s closed the guest invite request for %s from %s, which was not reviewed within %d days",
+			audit: fmt.Sprintf("@%s closed the guest invite request for %s from %s, which was not reviewed within %d days",
 				actingUser.Username, teamRef, requesterUsername(requester, req.RequesterID), days),
 		})
 	}
@@ -317,12 +335,13 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 				return p.lostRequest(cards, pendingKindTeamGuest, req.RequesterID, actingUser.Username,
 					fulfillErr.Error()+" The pending request could not be saved either; ask the requester to submit it again.")
 			}
-			return decisionResult{Reply: fulfillErr.Error()}
+			p.approveFailed(cards, fmt.Sprintf("@%s approved the guest invite for %s, but it failed", actingUser.Username, teamRef), fulfillErr)
+			return decisionResult{audited: true, Reply: fulfillErr.Error()}
 		}
 		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
 		outcome := fmt.Sprintf("✅ Approved by @%s for %s. Guest invitation emailed to %s for %s.", actingUser.Username, requesterUsername(requester, req.RequesterID), escapeMarkdown(req.Email), teamRef)
-		p.logAudit(auditApproved, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s guest invite for %s email \"%s\" (requested by %s)",
-			actingUser.Username, teamRef, escapeMarkdown(req.Email), requesterUsername(requester, req.RequesterID)), cards.cardPostID)
+		p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s guest invite for %s email \"%s\" (requested by %s)",
+			actingUser.Username, teamRef, escapeMarkdown(req.Email), requesterUsername(requester, req.RequesterID)), nil)
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: true, ApproverUsername: actingUser.Username,
@@ -333,8 +352,8 @@ func (p *Plugin) decideTeamGuestRequest(actingUserID, requestID, clickedPostID s
 	}
 	p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
 	outcome := fmt.Sprintf("❌ Denied by @%s for %s. Guest invite for %s.", actingUser.Username, requesterUsername(requester, req.RequesterID), teamRef)
-	p.logAudit(auditDenied, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s denied guest invite for %s",
-		actingUser.Username, teamRef), cards.cardPostID)
+	p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied guest invite for %s",
+		actingUser.Username, teamRef), nil)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: false, ApproverUsername: actingUser.Username,
@@ -372,6 +391,7 @@ func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string
 	}
 
 	p.refreshTicketThread(ticketThread{
+		RequestID:         req.ID,
 		ApprovalPostID:    req.ApprovalPostID,
 		ApprovalChannelID: req.ApprovalChannelID,
 		DMRootPostID:      req.DMRootPostID,
@@ -379,7 +399,8 @@ func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string
 		Kind:              requestTypeTeam,
 	})
 
-	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID)
+	cards := newDecisionCards(req.ID, clickedPostID, req.ApprovalPostID).
+		withSubject(pendingKindTeam, req.RequesterID, actingUser, req, req.Exercise)
 
 	if days := p.getConfiguration().ExpiryDays(); requestExpired(req.CreatedAt, days, model.GetMillis()) {
 		requester, _ := p.API.GetUser(req.RequesterID)
@@ -394,7 +415,7 @@ func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string
 			days:        days,
 			cardTitle:   exerciseLabel(req.Exercise) + "Team Creation Request Expired",
 			cardText:    fmt.Sprintf("Your request to create team **%s** expired before it was reviewed. Submit it again if you still need it.", escapeMarkdown(req.DisplayName)),
-			audit: exerciseLabel(req.Exercise) + fmt.Sprintf("@%s closed the team creation request for %s from %s, which was not reviewed within %d days",
+			audit: fmt.Sprintf("@%s closed the team creation request for %s from %s, which was not reviewed within %d days",
 				actingUser.Username, escapeMarkdown(req.DisplayName), requesterUsername(requester, req.RequesterID), days),
 		})
 	}
@@ -420,19 +441,20 @@ func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string
 				return p.lostRequest(cards, pendingKindTeam, req.RequesterID, actingUser.Username,
 					fmt.Sprintf("Could not create the team (%s), and the pending request could not be saved — ask the requester to resubmit.", createErr.Error()))
 			}
-			return decisionResult{Reply: fmt.Sprintf("Could not create the team: %s. The request is still pending.", createErr.Error())}
+			p.approveFailed(cards, fmt.Sprintf("@%s approved team %s, but it could not be created", actingUser.Username, escapeMarkdown(req.DisplayName)), createErr)
+			return decisionResult{audited: true, Reply: fmt.Sprintf("Could not create the team: %s. The request is still pending.", createErr.Error())}
 		}
 		p.releasePending(pendingKindTeam, req.RequesterID, req.ID)
 		if req.Exercise && !p.recordExerciseTeam(req.ExerciseTeamID, team) {
-			return p.closeRemovedExerciseRequest(cards, req.RequesterID, req.DMRootPostID, req.DMChannelID)
+			return p.closeAfterTeardown(cards, req.RequesterID, req.DMRootPostID, req.DMChannelID)
 		}
 		adminNote := ""
 		if req.RequestTeamAdmin {
 			adminNote = " Requester promoted to Team Admin."
 		}
 		outcome := fmt.Sprintf("✅ Approved by @%s for %s. Team **%s** created.%s", actingUser.Username, requesterUsername(requester, req.RequesterID), escapeMarkdown(team.DisplayName), adminNote)
-		p.logAudit(auditApproved, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s approved team %s (%s) requested by %s",
-			actingUser.Username, escapeMarkdown(req.DisplayName), team.Name, requesterUsername(requester, req.RequesterID)), cards.cardPostID)
+		p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s approved team %s (%s) requested by %s",
+			actingUser.Username, escapeMarkdown(req.DisplayName), team.Name, requesterUsername(requester, req.RequesterID)), nil)
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: true, ApproverUsername: actingUser.Username,
@@ -443,8 +465,8 @@ func (p *Plugin) decideTeamRequest(actingUserID, requestID, clickedPostID string
 	}
 	p.releasePending(pendingKindTeam, req.RequesterID, req.ID)
 	outcome := fmt.Sprintf("❌ Denied by @%s for %s. Team **%s** (`/%s`).", actingUser.Username, requesterUsername(requester, req.RequesterID), escapeMarkdown(req.DisplayName), req.Name)
-	p.logAudit(auditDenied, exerciseLabel(req.Exercise)+fmt.Sprintf("@%s denied a team creation request for %s",
-		actingUser.Username, escapeMarkdown(req.DisplayName)), cards.cardPostID)
+	p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied a team creation request for %s",
+		actingUser.Username, escapeMarkdown(req.DisplayName)), nil)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: false, ApproverUsername: actingUser.Username,

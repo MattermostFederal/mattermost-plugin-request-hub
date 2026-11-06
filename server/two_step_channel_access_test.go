@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -51,7 +52,6 @@ func TestSyncTwoStepApproverChannels_SeedsSecurityGroupMembers(t *testing.T) {
 		ApprovalTeam:          "appteam",
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	secName := "security-approvers"
@@ -100,7 +100,47 @@ func TestListApproverGroupMemberIDs_IgnoresCustomGroups(t *testing.T) {
 
 	require.Empty(t, p.listApproverGroupMemberIDs("@security-approvers"))
 	api.AssertNotCalled(t, "GetGroupMemberUsers", mock.Anything, mock.Anything, mock.Anything)
-	api.AssertNotCalled(t, "GetUsers", mock.Anything)
+}
+
+func TestListApproverGroupMemberIDs_UsesCustomGroupsWhenAllowed(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{AllowCustomApproverGroups: true})
+
+	secName := "security-approvers"
+	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
+	api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+	api.On("GetGroupMemberUsers", "g-custom", 0, 100).Return([]*model.User{{Id: "u1"}}, nil)
+
+	require.Equal(t, []string{"u1"}, p.listApproverGroupMemberIDs("@security-approvers"))
+}
+
+func TestResolveApproverGroup_UsesCustomGroupsWhenAllowed(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{AllowCustomApproverGroups: true})
+
+	secName := "security-approvers"
+	custom := &model.Group{Id: "g-custom", Name: &secName, Source: model.GroupSourceCustom}
+	api.On("GetGroupByName", "security-approvers").Return(custom, nil)
+
+	group, err := p.resolveApproverGroup("@security-approvers")
+	require.NoError(t, err)
+	require.Equal(t, "g-custom", group.Id)
+}
+
+func TestTwoStepPoolFingerprint_ChangesWithSecurityGroup(t *testing.T) {
+	a := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "a"}
+	b := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "b"}
+	require.NotEqual(t, twoStepPoolFingerprint(a), twoStepPoolFingerprint(b))
+}
+
+func TestTwoStepPoolFingerprint_ChangesWithCustomGroupSetting(t *testing.T) {
+	off := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s"}
+	on := &configuration{TwoStepApproverMode: twoStepModeUserGroup, SecurityApproverGroup: "s", AllowCustomApproverGroups: true}
+	require.NotEqual(t, twoStepPoolFingerprint(off), twoStepPoolFingerprint(on))
 }
 
 func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
@@ -112,7 +152,6 @@ func TestReconcileTwoStepApproverChannels_UsesGroupMembersOnly(t *testing.T) {
 		ApprovalTeam:          "appteam",
 		TwoStepApproverMode:   twoStepModeUserGroup,
 		SecurityApproverGroup: "security-approvers",
-		SystemApproverGroup:   "system-approvers",
 	})
 
 	secName := "security-approvers"
@@ -302,4 +341,50 @@ func TestListApproverAttributeUserIDs_AffirmativeOnly(t *testing.T) {
 
 	ids := p.listApproverAttributeUserIDs("security_approver")
 	require.Equal(t, []string{"uyes01aaaaaaaaaaaaaaaaaaaa"}, ids)
+}
+
+func TestWarnNoSecurityApprovers_PerMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		key  string
+	}{
+		{twoStepModeUserGroup, "group"},
+		{twoStepModeAttribute, "attribute"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			api := &plugintest.API{}
+			p := newTestPlugin(api)
+			p.setConfiguration(&configuration{TwoStepApproverMode: tc.mode})
+			api.On("LogWarn", mock.MatchedBy(func(msg string) bool {
+				return strings.Contains(msg, "can't get a security approval")
+			}), tc.key, mock.Anything).Return().Once()
+			p.warnNoSecurityApprovers()
+			api.AssertExpectations(t)
+		})
+	}
+
+	api := &plugintest.API{}
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeSystemAdmin})
+	p.warnNoSecurityApprovers()
+	api.AssertNotCalled(t, "LogWarn", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestLogRecoveredPanic_LogsAndSurvivesALoggingPanic(t *testing.T) {
+	api := &plugintest.API{}
+	p := newTestPlugin(api)
+	api.On("LogError", mock.Anything, "task", "t", "panic", "boom").Return().Once()
+	require.NotPanics(t, func() {
+		defer p.logRecoveredPanic("t")
+		panic("boom")
+	})
+	api.AssertExpectations(t)
+
+	// A mock with no LogError expectation panics when called; that panic is
+	// swallowed too.
+	quiet := newTestPlugin(&plugintest.API{})
+	require.NotPanics(t, func() {
+		defer quiet.logRecoveredPanic("t")
+		panic("boom")
+	})
 }

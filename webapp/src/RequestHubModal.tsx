@@ -3,8 +3,8 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import type {Action} from 'redux';
 
-import {fetchEnabledRequestTypes} from './client';
-import type {EnabledRequestTypes} from './client';
+import {fetchAuditAccess, fetchEnabledRequestTypes} from './client';
+import type {AuditAccess, EnabledRequestTypes} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {
     closeHubModal,
@@ -14,6 +14,8 @@ import {
     isCurrentUserTeamAdmin,
     isHubModalOpen,
     openAdminRequestModal,
+    openAuditExportRequestModal,
+    openAuditHistoryModal,
     openBotRequestModal,
     openIncomingWebhookModal,
     openOutgoingWebhookModal,
@@ -123,6 +125,10 @@ export const RequestHubModal = () => {
     const inTeamChannel = channelType === 'O' || channelType === 'P';
     const alreadyTeamAdmin = useSelector((state: GlobalState) => isCurrentUserTeamAdmin(state, teamId));
     const [enabled, setEnabled] = useState<EnabledRequestTypes>(defaultEnabled);
+
+    // Hidden until the server says otherwise: System Admins get the audit
+    // history, security approvers the request for a copy of it.
+    const [audit, setAudit] = useState<AuditAccess>({can_view: false, can_request: false, direct_export: false});
     const close = () => dispatch(closeHubModal());
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
@@ -134,6 +140,11 @@ export const RequestHubModal = () => {
         fetchEnabledRequestTypes().then((types) => {
             if (!cancelled) {
                 setEnabled(types);
+            }
+        });
+        fetchAuditAccess().then((access) => {
+            if (!cancelled) {
+                setAudit(access);
             }
         });
         return () => {
@@ -310,6 +321,33 @@ export const RequestHubModal = () => {
                         ))}
                     </div>
                 )}
+
+                {audit.can_view || audit.can_request ? (
+                    <button
+                        style={{...cardStyle, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 14}}
+                        onClick={() => open(audit.can_view ? openAuditHistoryModal : openAuditExportRequestModal)}
+                        onMouseEnter={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.background =
+                                'var(--center-channel-color-08, rgba(61,60,64,0.08))';
+                        }}
+                        onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                        }}
+                    >
+                        <span
+                            style={iconBoxStyle}
+                            aria-hidden={true}
+                        >{'🗂️'}</span>
+                        <span style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+                            <span style={{fontWeight: 600, fontSize: 14}}>{audit.can_view ? 'Audit history' : 'Request Audit Export'}</span>
+                            <span style={{fontSize: 13, opacity: 0.7, lineHeight: 1.4}}>
+                                {audit.can_view ?
+                                    'Every request and everything that happened to it. Search, review and download.' :
+                                    'Ask a System Admin for a copy of the request audit history.'}
+                            </span>
+                        </span>
+                    </button>
+                ) : null}
 
                 {/* Always shown — docs without needing /mattermost-request-hub slash commands. */}
                 <a

@@ -23,7 +23,7 @@ This guide covers:
 
 - [Requesting a webhook](#requesting-a-webhook): any member
 - [Messaging while a request is pending](#messaging-while-a-request-is-pending): two-way threads
-- [Approving requests](#approving-requests): security + system approvers
+- [Approving requests](#approving-requests): a security approver, then a System Admin
 - [Admin setup](#admin-setup): system admins
 
 ---
@@ -144,7 +144,7 @@ If an incoming webhook URL can't be delivered to the requester, the hook is
 
 Requests from System Admins are queued like any other. Nobody can approve
 either step of their own request, so a System Admin's request needs a security
-approver and a different system approver (or one other System Admin when the
+approver and a different System Admin (or one other System Admin when the
 approver mode is System Admins only).
 
 If webhook creation fails after both steps, the card stays pending with an error
@@ -158,7 +158,7 @@ so the final approver can retry.
 |---------|---------|
 | **Approval team** | Owns `mattermost-webhook-requests`. Required. |
 | **Allow webhook requests** | Enables incoming/outgoing entry points. Default **on**. |
-| **Security / System approver attributes** | Same two-step attributes as bot requests. |
+| **Two-step approver settings** | Same security pool as bot requests; the system step is always a System Admin. |
 
 See the [Admin Guide](admin-guide.md) for attribute setup and the full settings
 reference.

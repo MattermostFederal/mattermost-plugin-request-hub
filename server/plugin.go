@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,10 @@ type Plugin struct {
 	mcpServer     *pluginmcp.Server
 	mcpActive     bool
 
+	// adoptedApprovalChannels holds the IDs of approval channels the plugin
+	// adopted (see adoptApprovalChannel), so each is checked only once.
+	adoptedApprovalChannels sync.Map
+
 	// botUserID is the user ID of the bot account used to post approval requests and notify
 	// requesters of the outcome.
 	botUserID string
@@ -42,6 +47,11 @@ type Plugin struct {
 
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
+
+	// auditSink, when set, receives every audit event instead of the request
+	// history, the server audit log and the audit channel. A test seam: nil
+	// in production.
+	auditSink func(auditEntry, auditEventSpec)
 
 	// Test seams for webhook create/delete side effects (nil in production).
 	createWebhookFn func(req *webhookRequest, adminUserID string) (dmMsg, hookID string, err error)
@@ -149,4 +159,17 @@ func (p *Plugin) readBundleAsset(name string) ([]byte, error) {
 	}
 	// name is validated as a basename above; not attacker-controlled path input.
 	return os.ReadFile(filepath.Join(bundlePath, "assets", name)) //nolint:gosec // G304: basename-only, fixed by caller
+}
+
+// logRecoveredPanic is deferred by background goroutines so a panic there
+// is logged instead of taking down the plugin process. Logging can itself
+// fail once the API is gone (a test's mock torn down mid-run), so that is
+// recovered too.
+func (p *Plugin) logRecoveredPanic(what string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	p.API.LogError("channel-requests: recovered from a panic in a background task", "task", what, "panic", fmt.Sprint(r))
 }

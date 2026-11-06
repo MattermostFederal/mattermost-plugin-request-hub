@@ -282,8 +282,9 @@ func (p *Plugin) teamApprovalBlocker(req *teamCreationRequest) string {
 }
 
 // botApprovalBlocker re-checks a bot request before either step. The owner
-// follows checkBotOwner's rules, and webhook channels the rules
-// requireWebhookTargetChannel applied at submit.
+// follows checkBotOwner's rules, webhook channels the rules
+// requireWebhookTargetChannel applied at submit, and the home team and
+// channel requireBotHome's.
 func (p *Plugin) botApprovalBlocker(req *botRequest, requester *model.User, requesterErr *model.AppError) string {
 	if msg := p.requesterBlocker(req.RequesterID, requester, requesterErr); msg != "" {
 		return msg
@@ -310,7 +311,7 @@ func (p *Plugin) botApprovalBlocker(req *botRequest, requester *model.User, requ
 			return msg
 		}
 	}
-	return ""
+	return p.botHomeBlocker(req, requester)
 }
 
 // webhookCreatorBlocker refuses the final approval when actingUserID can't

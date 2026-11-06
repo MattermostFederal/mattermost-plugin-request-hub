@@ -374,6 +374,7 @@ func stubFinalBotApproval(t *testing.T, api *plugintest.API, req *botRequest) {
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil)
 	api.On("KVGet", kvBotRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvBotRequestPrefix+"r1", raw).Return(true, nil)
+	stubBotIndexWrite(api)
 	api.On("CreateBot", mock.Anything).Return(&model.Bot{UserId: "new-bot-id", Username: "svcbot"}, nil)
 }
 
