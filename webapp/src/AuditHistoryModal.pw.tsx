@@ -143,6 +143,20 @@ updated_at: 3,
         await expect(page.getByRole('alert')).toHaveText('Could not load the audit history: only System Admins can read the audit history');
     });
 
+    test('reopening after Load more starts again from the first page', async ({mount, page}) => {
+        const many = Array.from({length: 30}, (_, i) => ({...ROWS[0], request_id: `r${i}`, title: `bot${i}`}));
+        await routeList(page, many);
+        await mount(<StoreHarness pluginState={open}><AuditHistoryModal/></StoreHarness>);
+        await page.getByRole('button', {name: 'Load more'}).click();
+        await expect(page.getByRole('row')).toHaveCount(31);
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('dialog')).toBeHidden();
+
+        await page.getByRole('button', {name: 'harness: open audit history'}).click();
+        await expect(page.getByRole('row')).toHaveCount(26);
+        await expect(page.getByRole('button', {name: 'Load more'})).toBeVisible();
+    });
+
     test('Escape and the close button close it', async ({mount, page}) => {
         await routeList(page);
         await mount(<StoreHarness pluginState={open}><AuditHistoryModal/></StoreHarness>);

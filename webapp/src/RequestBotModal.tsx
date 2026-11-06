@@ -192,6 +192,25 @@ export const RequestBotModal = () => {
 
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);
 
+    // The architecture confirm and the Terms each trap focus while open.
+    // They render inside the main dialog, so its trap leaves focus with them
+    // and Escape closes only the top one.
+    const termsVisible = termsOpen && botForm !== botFormLoading && Boolean(botForm?.compliance.enabled);
+    const cancelTerms = () => {
+        setTermsOpen(false);
+        setTermsAccepted(false);
+    };
+    const archTrap = useDialogFocusTrap(() => {
+        if (!submitting) {
+            setArchConfirmOpen(false);
+        }
+    }, archConfirmOpen);
+    const termsTrap = useDialogFocusTrap(() => {
+        if (!submitting) {
+            cancelTerms();
+        }
+    }, termsVisible);
+
     useEffect(() => {
         if (!isOpen) {
             return undefined;
@@ -713,106 +732,109 @@ export const RequestBotModal = () => {
                         </div>
                     </div>
                 )}
-            </div>
 
-            {archConfirmOpen ? (
-                <div
-                    style={nestedOverlayStyle}
-                    onClick={(e) => e.stopPropagation()}
-                    data-testid='bot-arch-confirm'
-                >
+                {archConfirmOpen ? (
                     <div
-                        style={nestedDialogStyle}
-                        role='dialog'
-                        aria-modal={true}
-                        aria-labelledby='rb-arch-title'
+                        style={nestedOverlayStyle}
                         onClick={(e) => e.stopPropagation()}
+                        data-testid='bot-arch-confirm'
                     >
-                        <h3
-                            id='rb-arch-title'
-                            style={{marginTop: 0}}
-                        >{'No architecture link'}</h3>
-                        <p>{'You did not include an architecture or design review link. Prefer adding one when you have it. Submit without one?'}</p>
-                        <div style={{textAlign: 'right'}}>
-                            <button
-                                className='btn btn-tertiary'
-                                style={{marginRight: 8}}
-                                onClick={() => setArchConfirmOpen(false)}
-                                disabled={submitting}
-                            >{'Go back'}</button>
-                            <button
-                                className='btn btn-primary'
-                                onClick={continueAfterArch}
-                                disabled={submitting}
-                            >{'Submit without architecture link'}</button>
-                        </div>
-                    </div>
-                </div>
-            ) : null}
-
-            {termsOpen && botForm !== botFormLoading && botForm?.compliance.enabled ? (
-                <div
-                    style={nestedOverlayStyle}
-                    onClick={(e) => e.stopPropagation()}
-                    data-testid='bot-terms-popup'
-                >
-                    <div
-                        style={termsDialogStyle}
-                        role='dialog'
-                        aria-modal={true}
-                        aria-labelledby='rb-terms-title'
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <h3
-                            id='rb-terms-title'
-                            style={{marginTop: 0, marginBottom: 12}}
-                        >{'Terms and Conditions'}</h3>
                         <div
-                            style={statementStyle}
-                            data-testid='bot-compliance-text'
-                        >{botForm.compliance.text}</div>
-                        <label
-                            htmlFor='bot-terms-accept'
-                            style={{display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16, fontWeight: 'normal', cursor: 'pointer'}}
+                            ref={archTrap.dialogRef}
+                            style={nestedDialogStyle}
+                            role='dialog'
+                            aria-modal={true}
+                            aria-labelledby='rb-arch-title'
+                            tabIndex={-1}
+                            onKeyDown={archTrap.onKeyDown}
+                            onClick={(e) => e.stopPropagation()}
                         >
-                            <input
-                                id='bot-terms-accept'
-                                type='checkbox'
-                                checked={termsAccepted}
-                                onChange={(e) => setTermsAccepted(e.target.checked)}
-                                disabled={submitting}
-                                style={{marginTop: 3}}
-                                data-testid='bot-terms-checkbox'
-                            />
-                            <span>{'I have read and agree to the Terms and Conditions above.'}</span>
-                        </label>
-                        <div style={{textAlign: 'right'}}>
-                            <button
-                                className='btn btn-tertiary'
-                                style={{marginRight: 8}}
-                                onClick={() => {
-                                    setTermsOpen(false);
-                                    setTermsAccepted(false);
-                                }}
-                                disabled={submitting}
-                            >{'Cancel'}</button>
-                            <button
-                                className='btn btn-primary'
-                                onClick={() => {
-                                    if (!termsAccepted) {
-                                        setError('Check the box to agree to the Terms and Conditions.');
-                                        return;
-                                    }
-                                    sendRequest();
-                                }}
-                                disabled={submitting || !termsAccepted}
-                            >
-                                {submitting ? 'Submitting…' : 'Agree and submit'}
-                            </button>
+                            <h3
+                                id='rb-arch-title'
+                                style={{marginTop: 0}}
+                            >{'No architecture link'}</h3>
+                            <p>{'You did not include an architecture or design review link. Prefer adding one when you have it. Submit without one?'}</p>
+                            <div style={{textAlign: 'right'}}>
+                                <button
+                                    className='btn btn-tertiary'
+                                    style={{marginRight: 8}}
+                                    onClick={() => setArchConfirmOpen(false)}
+                                    disabled={submitting}
+                                >{'Go back'}</button>
+                                <button
+                                    className='btn btn-primary'
+                                    onClick={continueAfterArch}
+                                    disabled={submitting}
+                                >{'Submit without architecture link'}</button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            ) : null}
+                ) : null}
+
+                {termsVisible && botForm ? (
+                    <div
+                        style={nestedOverlayStyle}
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid='bot-terms-popup'
+                    >
+                        <div
+                            ref={termsTrap.dialogRef}
+                            style={termsDialogStyle}
+                            role='dialog'
+                            aria-modal={true}
+                            aria-labelledby='rb-terms-title'
+                            tabIndex={-1}
+                            onKeyDown={termsTrap.onKeyDown}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <h3
+                                id='rb-terms-title'
+                                style={{marginTop: 0, marginBottom: 12}}
+                            >{'Terms and Conditions'}</h3>
+                            <div
+                                style={statementStyle}
+                                data-testid='bot-compliance-text'
+                            >{botForm.compliance.text}</div>
+                            <label
+                                htmlFor='bot-terms-accept'
+                                style={{display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16, fontWeight: 'normal', cursor: 'pointer'}}
+                            >
+                                <input
+                                    id='bot-terms-accept'
+                                    type='checkbox'
+                                    checked={termsAccepted}
+                                    onChange={(e) => setTermsAccepted(e.target.checked)}
+                                    disabled={submitting}
+                                    style={{marginTop: 3}}
+                                    data-testid='bot-terms-checkbox'
+                                />
+                                <span>{'I have read and agree to the Terms and Conditions above.'}</span>
+                            </label>
+                            <div style={{textAlign: 'right'}}>
+                                <button
+                                    className='btn btn-tertiary'
+                                    style={{marginRight: 8}}
+                                    onClick={cancelTerms}
+                                    disabled={submitting}
+                                >{'Cancel'}</button>
+                                <button
+                                    className='btn btn-primary'
+                                    onClick={() => {
+                                        if (!termsAccepted) {
+                                            setError('Check the box to agree to the Terms and Conditions.');
+                                            return;
+                                        }
+                                        sendRequest();
+                                    }}
+                                    disabled={submitting || !termsAccepted}
+                                >
+                                    {submitting ? 'Submitting…' : 'Agree and submit'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+            </div>
         </div>
     );
 };

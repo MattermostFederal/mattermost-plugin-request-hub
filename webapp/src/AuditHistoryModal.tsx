@@ -179,6 +179,12 @@ export const AuditHistoryModal = () => {
         setKind('');
         setStatus('');
         setError('');
+
+        // Reopening starts again from the first page, so a page loaded
+        // before closing is not appended to rows left over from last time.
+        setPage(0);
+        setRows([]);
+        setTotal(0);
         dispatch(closeAuditHistoryModal());
     };
     const {dialogRef, onKeyDown: onDialogKeyDown} = useDialogFocusTrap(close, isOpen);

@@ -207,9 +207,11 @@
         <p>Events go to three places:</p>
         <ul>
             <li><strong>The request history</strong>, which the plugin keeps for good, after the request is decided.
-                System Admins open <strong>Audit history</strong> in the Request Hub to search it, read any request's
-                timeline and download all or part of it as CSV or JSON. The same is in
-                <a href="slash.html#audit"><code>/mattermost-request-hub audit</code></a>.</li>
+                System Admins open <strong>Audit history</strong> in the Request Hub to search it and read any
+                request's timeline. Exports are requested from there with <strong>Request an export</strong> (see
+                below). Only when a System Admin has turned on <em>Allow direct audit export</em> does the window
+                offer downloads instead: all or part of the history as CSV or JSON, and the bot inventory as PDF, CSV
+                or JSON. The same is in <a href="slash.html#audit"><code>/mattermost-request-hub audit</code></a>.</li>
             <li><strong>The server audit log</strong>, as <code>requesthub_</code> events such as
                 <code>requesthub_approved</code>, when audit logging is turned on for the server (System Console →
                 Compliance → Audit Logging, or <code>ExperimentalAuditSettings</code> in the server configuration; a
@@ -227,11 +229,13 @@
         <p>
             <strong>Security approvers</strong> (the security group or attribute set for bot and webhook approvals)
             who aren't System Admins see <strong>Request Audit Export</strong> in the Request Hub instead. They pick
-            the export (the request histories or the bot inventory) and its format and, if they want, a request
-            type or hosting environment, a requester and a date range, give a
-            reason, and the request goes to the audit channel for a System Admin to approve. Unless a System Admin
-            has turned on <em>Allow direct audit export</em>, System Admins request exports the same way (from
-            <strong>Request an export</strong> in Audit history), and a different System Admin approves them. Approving builds the export and posts it as a file in the
+            the export and its format: the request histories (CSV or JSON), the bot inventory (PDF, CSV or JSON)
+            or bot forensics (one bot's history, teams, channels and posts, JSON only). They narrow it if they want,
+            by request type or hosting environment, a requester and a date range (bot forensics needs the bot and
+            the dates it posted, at most 90 days apart), give a reason, and the request goes to the audit channel
+            for a System Admin to approve. Unless a System Admin has turned on <em>Allow direct audit export</em>,
+            System Admins request exports the same way (from <strong>Request an export</strong> in Audit history),
+            and a different System Admin approves them. Approving builds the export and posts it as a file in the
             requester's request thread with the Request Hub bot. The request and the approval are recorded like any
             other request.
         </p>

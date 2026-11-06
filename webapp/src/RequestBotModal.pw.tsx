@@ -77,6 +77,63 @@ test.describe('RequestBotModal', () => {
         await expect(page.getByTestId('bot-arch-confirm')).toHaveCount(0);
     });
 
+    test('the architecture confirm takes focus, traps Tab and closes alone on Escape', async ({mount, page}) => {
+        await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+        await fillRequired(page);
+        await page.getByLabel('Architecture link (optional)').fill('');
+        const submit = page.getByRole('button', {name: 'Submit request'});
+        await submit.click();
+        await expect(page.getByTestId('bot-arch-confirm')).toBeVisible();
+
+        const goBack = page.getByRole('button', {name: 'Go back'});
+        const without = page.getByRole('button', {name: 'Submit without architecture link'});
+        await expect(goBack).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(without).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(goBack).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(without).toBeFocused();
+
+        await page.keyboard.press('Escape');
+        await expect(page.getByTestId('bot-arch-confirm')).toHaveCount(0);
+        await expect(page.getByText(TITLE)).toBeVisible();
+        await expect(submit).toBeFocused();
+    });
+
+    test('the Terms can be accepted and submitted with the keyboard', async ({mount, page}) => {
+        await page.unroute(`${API}/bot_form`);
+        await stubBotForm(page, {enabled: true, text: 'Be nice.', sha256: 'abc'});
+        let body: Record<string, unknown> | undefined;
+        await page.route(`${API}/submit_bot_request`, async (route) => {
+            body = route.request().postDataJSON();
+            await route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'Sent for approval.'})});
+        });
+        await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
+        await fillRequired(page);
+        const submit = page.getByRole('button', {name: 'Submit request'});
+        await submit.click();
+        await expect(page.getByTestId('bot-terms-popup')).toBeVisible();
+
+        // Escape closes only the Terms, and focus goes back to Submit.
+        const checkbox = page.getByTestId('bot-terms-checkbox');
+        await expect(checkbox).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(page.getByTestId('bot-terms-popup')).toHaveCount(0);
+        await expect(submit).toBeFocused();
+
+        await page.keyboard.press('Enter');
+        await expect(checkbox).toBeFocused();
+        await page.keyboard.press('Space');
+        await page.keyboard.press('Tab');
+        await expect(page.getByRole('button', {name: 'Cancel'}).last()).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(page.getByRole('button', {name: 'Agree and submit'})).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(page.getByText('Sent for approval.')).toBeVisible();
+        expect(body).toMatchObject({compliance_accepted: true, compliance_text_hash: 'abc'});
+    });
+
     test('Other hosting requires a specify field', async ({mount, page}) => {
         await mount(<StoreHarness pluginState={open}><RequestBotModal/></StoreHarness>);
         await fillRequired(page);
