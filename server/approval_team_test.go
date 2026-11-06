@@ -424,9 +424,12 @@ func TestLookupApprovalChannel_ArchivedPluginChannelIsTaken(t *testing.T) {
 }
 
 // stubApprovalTeamLookup lets approvalTeam find "appteam" as t1, already recorded.
+// Also stubs Team Admin listing so channel-create seed paths (SysAdmin + primary
+// Team Admin visibility) can run without each test repeating the mock.
 func stubApprovalTeamLookup(t *testing.T, api *plugintest.API) {
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "t1", Name: "appteam"}, nil)
 	api.On("KVGet", kvApprovalTeamKey).Return(approvalTeamRecordBytes(t, "appteam", "t1"), nil)
+	api.On("GetTeamMembers", "t1", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
 }
 
 func TestEnsureRootApprovalChannel_TakenNameIsNotUsed(t *testing.T) {

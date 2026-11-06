@@ -398,12 +398,21 @@ func (p *Plugin) OnConfigurationChange() error {
 	p.setConfiguration(configuration)
 
 	// A newly selected Approval team is recorded on its next use.
-	if hadPrevConfig && strings.TrimSpace(configuration.ApprovalTeam) != prevApprovalTeam {
+	approvalTeamChanged := hadPrevConfig && strings.TrimSpace(configuration.ApprovalTeam) != prevApprovalTeam
+	if approvalTeamChanged {
 		p.forgetApprovalTeam()
 	}
 
 	if hadPrevConfig && configuration.PerTeamApprovalChannels && !prevPerTeamEnabled {
 		go p.ensureAllTeamApprovalChannels()
+	}
+	// When Approval team is set or changed, ensure primary ticket channels exist
+	// at setup (not on first request) and reseed Team Admin visibility.
+	if approvalTeamChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {
+		go func() {
+			defer p.logRecoveredPanic("primary ticket channel ensure")
+			p.syncPrimaryTeamAdminVisibility()
+		}()
 	}
 	// Reseed bot/webhook channels when two-step pool settings change (mode,
 	// group names, or attribute names) so newly configured security approvers

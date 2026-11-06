@@ -12,16 +12,21 @@ import (
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
 // based on current pool / admin status. Mattermost has no plugin hook for
 // custom-group membership changes, so login + periodic reconcile cover joins
-// and demotions.
+// and demotions. Also reconciles primary-team Team Admin visibility (seed on
+// promote, evict from root/team/audit on demote).
 func (p *Plugin) UserHasLoggedIn(_ *plugin.Context, user *model.User) {
 	if user == nil || user.Id == "" || user.Id == p.botUserID {
 		return
 	}
-	go p.reconcileTwoStepAccessForUser(user)
+	go func() {
+		p.reconcileTwoStepAccessForUser(user)
+		p.reconcilePrimaryTeamAdminVisibilityForUser(user)
+	}()
 }
 
 // startTwoStepChannelReconciler periodically adds current pool members to the
-// bot/webhook channels. Cheap when groups resolve (only lists ~6 members).
+// bot/webhook channels and evicts stale primary Team Admin visibility members
+// from root/team/audit. Cheap when groups resolve (only lists ~6 members).
 func (p *Plugin) startTwoStepChannelReconciler() {
 	p.stopTwoStepChannelReconciler()
 	stop := make(chan struct{})
@@ -32,6 +37,7 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 	go func() {
 		// Run once immediately — NewTicker only fires after the first interval.
 		p.reconcileTwoStepApproverChannels()
+		p.evictStalePrimaryTeamAdminChannelMembers()
 
 		ticker := time.NewTicker(twoStepChannelReconcileInterval)
 		defer ticker.Stop()
@@ -41,6 +47,7 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 				return
 			case <-ticker.C:
 				p.reconcileTwoStepApproverChannels()
+				p.evictStalePrimaryTeamAdminChannelMembers()
 			}
 		}
 	}()
