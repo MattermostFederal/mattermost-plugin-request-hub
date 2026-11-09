@@ -10,7 +10,7 @@ import (
 
 // kvTokenExpiryIndex holds bot_token_expiry_* keys so the hourly reminder job
 // does not scan the entire plugin KV store (histories, anchors, …).
-const kvTokenExpiryIndex = "bot_token_expiry_index_v1"
+const kvTokenExpiryIndex = "bot_token_expiry_index_v1" //nolint:gosec // G101: a KV key, not a credential
 
 const tokenExpiryIndexCASAttempts = 8
 
@@ -63,20 +63,6 @@ func (p *Plugin) loadTokenExpiryIndex() ([]string, bool) {
 		return nil, false
 	}
 	return keys, true
-}
-
-func (p *Plugin) saveTokenExpiryIndex(keys []string) error {
-	if keys == nil {
-		keys = []string{}
-	}
-	data, err := json.Marshal(keys)
-	if err != nil {
-		return err
-	}
-	if appErr := p.API.KVSet(kvTokenExpiryIndex, data); appErr != nil {
-		return appErr
-	}
-	return nil
 }
 
 // persistTokenExpiryIndexFromScan CAS-writes a scan result against prev, then

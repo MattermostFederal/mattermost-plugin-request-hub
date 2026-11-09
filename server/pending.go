@@ -564,4 +564,3 @@ func backfillRequest(key string, raw []byte, now int64) (backfilledRequest, erro
 	b.kind, b.requesterID, b.entry = kind, requesterID, newPendingEntry(record)
 	return b, nil
 }
-

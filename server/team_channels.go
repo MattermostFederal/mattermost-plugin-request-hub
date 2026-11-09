@@ -806,12 +806,13 @@ func (p *Plugin) ensurePrimaryTeamAdminVisibilityForUser(userID string) {
 	}
 }
 
-// reconcilePrimaryTeamAdminVisibilityForUser adds the user when they still
-// qualify as SysAdmin or Approval-team Team Admin, or removes them from
-// visibility-only primary channels (root / team-creation / audit) when demoted.
-// Bot/webhook eviction stays with two-step reconcile so security-pool members
-// are not removed. Skips users who are not on the Approval team and are not
-// System Admins — avoids DeleteChannelMember on every login for unrelated users.
+// reconcilePrimaryTeamAdminVisibilityForUser seeds the user into primary
+// ticket channels when they are a SysAdmin or Approval-team Team Admin.
+// Demotion eviction is the ~2m periodic sweep (evictStalePrimaryTeamAdminChannelMembers),
+// not login: login also runs for non-TA members who were added manually
+// (observers, e2e bystanders), and kicking them mid-request turns Approve into
+// a Mattermost 403 before the plugin can reply. Bot/webhook membership stays
+// with two-step reconcile so security-pool members are not removed.
 func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	if user == nil || user.Id == "" || user.Id == p.botUserID {
 		return
@@ -832,27 +833,11 @@ func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	if appErr != nil || member == nil || member.DeleteAt != 0 {
 		return
 	}
-	if isTeamAdminMember(member) {
-		for _, ch := range p.primaryTicketChannels() {
-			p.addUserToApprovalChannel(ch, user.Id)
-		}
+	if !isTeamAdminMember(member) {
 		return
 	}
-
-	for _, ch := range p.primaryVisibilityChannels() {
-		if ch == nil {
-			continue
-		}
-		if _, getErr := p.API.GetChannelMember(ch.Id, user.Id); getErr != nil {
-			continue
-		}
-		if delErr := p.API.DeleteChannelMember(ch.Id, user.Id); delErr != nil {
-			p.API.LogDebug("primary team admin visibility: evict on login",
-				"channel_id", ch.Id, "user_id", user.Id, "error", delErr.Error())
-			continue
-		}
-		p.API.LogInfo("primary team admin visibility: evicted demoted Team Admin",
-			"user_id", user.Id, "username", user.Username, "channel_id", ch.Id)
+	for _, ch := range p.primaryTicketChannels() {
+		p.addUserToApprovalChannel(ch, user.Id)
 	}
 }
 
@@ -955,7 +940,7 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 		return
 	}
 	const perPage = 100
-	for page := 0; page < 50; page++ {
+	for page := range 50 {
 		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
 		if appErr != nil {
 			p.API.LogWarn("approval channel: GetChannelMembers failed during demotion eviction",
@@ -1158,10 +1143,12 @@ func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, 
 // channel's name that the plugin's bot didn't create, can be used anyway: it
 // must be live (private, or public that we can convert), and either (a) its
 // creator is a System Admin / Request Hub bot, or (b) this plugin's bot is
-// already a member. Crimson had mattermost-channel-requests created as
-// public by the pre-rename bot — those must become private before cards
-// post, or tickets fall back to System Admin DMs. Anyone else's channel
-// stays unused.
+// already a member *and* the creator is gone (re-upload / purged bot). Bot
+// membership alone is not enough while an untrusted creator still exists —
+// that would let a random user pre-create the name, get the bot added, and
+// capture tickets. Crimson had mattermost-channel-requests created as public
+// by the pre-rename bot — those must become private before cards post, or
+// tickets fall back to System Admin DMs.
 func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 	if ch.DeleteAt != 0 {
 		return false
@@ -1173,9 +1160,12 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 		return true
 	}
 	trustedCreator := ch.CreatorId != "" && p.trustedApprovalChannelCreator(ch.CreatorId)
-	alreadyMember := p.botIsChannelMember(ch.Id)
-	if !trustedCreator && !alreadyMember {
-		return false
+	if !trustedCreator {
+		// Membership path only when the creator is gone (re-upload). Avoid
+		// calling GetUser when the creator is already trusted.
+		if !(p.botIsChannelMember(ch.Id) && p.approvalChannelCreatorGone(ch.CreatorId)) {
+			return false
+		}
 	}
 	if ch.Type == model.ChannelTypeOpen {
 		if !p.makeApprovalChannelPrivate(ch) {
@@ -1249,6 +1239,20 @@ const legacyRequestHubBotUsername = "mattermost-requests"
 // that still list this as OwnerId created today's approval channels on
 // upgraded servers; refuse every other owner.
 const legacyRequestHubPluginID = "com.mattermostfederal.channel-requests"
+
+// approvalChannelCreatorGone reports whether creatorID no longer resolves to
+// a live user (missing or deactivated). Used so bot-membership adoption only
+// covers re-upload / purged-creator cases, not a live untrusted owner.
+func (p *Plugin) approvalChannelCreatorGone(creatorID string) bool {
+	if creatorID == "" {
+		return true
+	}
+	creator, appErr := p.API.GetUser(creatorID)
+	if appErr != nil || creator == nil {
+		return true
+	}
+	return creator.DeleteAt != 0
+}
 
 // trustedApprovalChannelCreator reports whether userID may have created an
 // approval channel the plugin adopts: a System Admin, or a Request Hub bot

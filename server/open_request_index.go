@@ -69,20 +69,6 @@ func (p *Plugin) loadOpenRequestIndex() ([]string, bool) {
 	return keys, true
 }
 
-func (p *Plugin) saveOpenRequestIndex(keys []string) error {
-	if keys == nil {
-		keys = []string{}
-	}
-	data, err := json.Marshal(keys)
-	if err != nil {
-		return err
-	}
-	if appErr := p.API.KVSet(kvOpenRequestIndex, data); appErr != nil {
-		return appErr
-	}
-	return nil
-}
-
 // persistOpenRequestIndexFromScan writes a scan result with CAS against prev
 // (the index value observed before the scan). On conflict it unions the scan
 // with the current index and retries, so concurrent track/untrack wins are
@@ -247,8 +233,13 @@ func (p *Plugin) putPendingRequestKV(key string, data []byte) error {
 }
 
 // deletePendingRequestKV deletes a pending request record and drops it from
-// the open-request index. Used for submit rollbacks before a claim.
+// the open-request index. Used for submit rollbacks before a claim. Untrack
+// only after a successful delete so a failed KVDelete cannot hide a live
+// request from the approval queue until the next index rebuild.
 func (p *Plugin) deletePendingRequestKV(key string) {
-	_ = p.API.KVDelete(key)
+	if appErr := p.API.KVDelete(key); appErr != nil {
+		p.API.LogWarn("failed to delete pending request", "key", key, "error", appErr.Error())
+		return
+	}
 	p.untrackOpenRequestKey(key)
 }

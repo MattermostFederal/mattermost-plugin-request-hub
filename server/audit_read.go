@@ -584,12 +584,12 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 		payload := any(capped)
 		if histTruncated || eventsTruncated {
 			payload = map[string]any{
-				"truncated":        true,
-				"history_limit":    historyExportMaxHistories,
-				"event_limit":      historyExportMaxEvents,
-				"histories_cut":    histTruncated,
-				"events_cut":       eventsTruncated,
-				"histories":        capped,
+				"truncated":     true,
+				"history_limit": historyExportMaxHistories,
+				"event_limit":   historyExportMaxEvents,
+				"histories_cut": histTruncated,
+				"events_cut":    eventsTruncated,
+				"histories":     capped,
 			}
 		}
 		if err := json.NewEncoder(&buf).Encode(payload); err != nil {
@@ -649,7 +649,6 @@ func capHistoriesEvents(in []requestHistory, f auditExportFilter, maxEvents int)
 				continue
 			}
 			if events >= maxEvents {
-				eventsTruncated = true
 				if len(clipped.Events) > 0 {
 					out = append(out, clipped)
 				}

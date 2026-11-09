@@ -467,11 +467,11 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	stubApprovalTeamRecord(api)
 
 	channels := map[string]*model.Channel{
-		"mattermost-channel-requests":  {Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-bot-requests":      {Id: "ch-bot", TeamId: "team-hq", Name: "mattermost-bot-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-webhook-requests":  {Id: "ch-wh", TeamId: "team-hq", Name: "mattermost-webhook-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-team-requests":     {Id: "ch-team", TeamId: "team-hq", Name: "mattermost-team-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-audit-requests":    {Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
+		"mattermost-channel-requests": {Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
+		"mattermost-bot-requests":     {Id: "ch-bot", TeamId: "team-hq", Name: "mattermost-bot-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
+		"mattermost-webhook-requests": {Id: "ch-wh", TeamId: "team-hq", Name: "mattermost-webhook-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
+		"mattermost-team-requests":    {Id: "ch-team", TeamId: "team-hq", Name: "mattermost-team-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
+		"mattermost-audit-requests":   {Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 	}
 	for name, ch := range channels {
 		api.On("GetChannelByName", "team-hq", name, true).Return(ch, nil)
@@ -607,7 +607,9 @@ func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
 	api.AssertCalled(t, "DeleteChannelMember", "ch-ops", "demoted")
 }
 
-func TestReconcilePrimaryTeamAdminVisibilityForUser_EvictsDemoted(t *testing.T) {
+func TestReconcilePrimaryTeamAdminVisibilityForUser_DoesNotEvictNonAdminOnLogin(t *testing.T) {
+	// Login must seed TAs only. Evicting every non-TA on login also removes
+	// manually added observers and turns their Approve click into a 403.
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
@@ -616,31 +618,14 @@ func TestReconcilePrimaryTeamAdminVisibilityForUser_EvictsDemoted(t *testing.T) 
 
 	api.On("GetTeamByName", "hq").Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
 	stubApprovalTeamRecord(api)
-
-	root := &model.Channel{Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
-	teamCh := &model.Channel{Id: "ch-team", TeamId: "team-hq", Name: "mattermost-team-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
-	audit := &model.Channel{Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
-	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(root, nil)
-	api.On("GetChannelByName", "team-hq", "mattermost-team-requests", true).Return(teamCh, nil)
-	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(audit, nil)
-	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
-
-	api.On("GetTeamMember", "team-hq", "demoted").Return(&model.TeamMember{
-		UserId: "demoted", Roles: model.TeamUserRoleId,
+	api.On("GetTeamMember", "team-hq", "bystander").Return(&model.TeamMember{
+		UserId: "bystander", Roles: model.TeamUserRoleId,
 	}, nil)
-	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
-		api.On("GetChannelMember", id, "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
-		api.On("DeleteChannelMember", id, "demoted").Return(nil).Once()
-	}
 
-	p.reconcilePrimaryTeamAdminVisibilityForUser(&model.User{Id: "demoted", Username: "ex"})
+	p.reconcilePrimaryTeamAdminVisibilityForUser(&model.User{Id: "bystander", Username: "by"})
 
-	api.AssertCalled(t, "DeleteChannelMember", "ch-root", "demoted")
-	api.AssertCalled(t, "DeleteChannelMember", "ch-team", "demoted")
-	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "demoted")
-	// Must not touch bot/webhook — security-pool members live there.
-	api.AssertNotCalled(t, "GetChannelByName", "team-hq", "mattermost-bot-requests", true)
-	api.AssertNotCalled(t, "GetChannelByName", "team-hq", "mattermost-webhook-requests", true)
+	api.AssertNotCalled(t, "DeleteChannelMember", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }
 
 func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *testing.T) {

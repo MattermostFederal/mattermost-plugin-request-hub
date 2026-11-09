@@ -137,18 +137,6 @@ func (p *Plugin) handleIncomingDMPost(post *model.Post) {
 	p.forwardDMReplyToTicketThread(post, rawAnchor)
 }
 
-// handleIncomingThreadReply handles a non-DM thread reply. If the root post
-// is a known ticket approval post, it forwards the message to the requester's
-// DM thread.
-func (p *Plugin) handleIncomingThreadReply(post *model.Post) {
-	rawAnchor, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId)
-	if appErr != nil || rawAnchor == nil {
-		return
-	}
-
-	p.forwardThreadReplyToRequesterDM(post, rawAnchor)
-}
-
 // forwardDMReplyToTicketThread posts the requester's DM reply as a bot message
 // in the approval thread, attributed to the requester by name.
 func (p *Plugin) forwardDMReplyToTicketThread(post *model.Post, rawAnchor []byte) {

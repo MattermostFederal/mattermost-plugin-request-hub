@@ -968,7 +968,8 @@ test.describe('usergroup mode', () => {
         const member = await hub.createUser({teamAdmin: true});
         const customGroup = await createGroup(hub, [member], 'custom');
         const username = botName();
-        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup}, async () => {
+        // Default AllowCustomApproverGroups is on; pin it off for this case.
+        await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, allowcustomapprovergroups: false}, async () => {
             await joinBotChannel(hub, member);
             const s = await submitOK(hub, requester, {username});
             const before = await storedBotRequest(hub, s.requestId);

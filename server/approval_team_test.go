@@ -461,6 +461,22 @@ func TestLookupApprovalChannel_AdoptsWhenBotAlreadyMemberAfterCreatorGone(t *tes
 	require.False(t, taken)
 }
 
+func TestLookupApprovalChannel_BotMembershipAloneDoesNotAdoptLiveUntrustedCreator(t *testing.T) {
+	// A random user who pre-created the name must not capture tickets just
+	// because the bot was added to their channel.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u_other"), nil)
+	api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other"}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
 func TestLookupApprovalChannel_AdoptsLegacyPluginOwnedBotWithoutMembership(t *testing.T) {
 	// Crimson: mattermost-channel-requests created by the pre-0.5.0 bot
 	// (OwnerId = channel-requests). Current bot is not a member → still adopt

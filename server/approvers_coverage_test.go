@@ -42,7 +42,8 @@ func TestApproverStep_String(t *testing.T) {
 }
 
 func TestApproverPoolNames_UnknownStepIsEmpty(t *testing.T) {
-	cfg := &configuration{TwoStepApproverMode: twoStepModeAttribute, 
+	cfg := &configuration{
+		TwoStepApproverMode:       twoStepModeAttribute,
 		SecurityApproverAttribute: "sec",
 		SecurityApproverGroup:     "@sec-group",
 	}
