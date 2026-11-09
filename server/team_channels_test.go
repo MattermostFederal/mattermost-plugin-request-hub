@@ -452,15 +452,18 @@ func TestUserHasJoinedTeam_NoOpWhenFeatureDisabled(t *testing.T) {
 	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }
 
-// Primary Approval-team Team Admins get watch-only membership on every
-// primary ticket channel (root/bot/webhook/team/audit), even when they
-// cannot approve bot/webhook requests.
+// Primary Approval-team Team Admins get watch-only membership on gated
+// visibility channels (root/team/audit), never bot/webhook pools.
 func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "hq"})
+	p.setConfiguration(&configuration{
+		ApprovalTeam:                           "hq",
+		AllowTeamAdminApprovers:                true,
+		AllowApprovalTeamAdminsForTeamRequests: true,
+	})
 
 	team := &model.Team{Id: "team-hq", Name: "hq"}
 	api.On("GetTeamByName", "hq").Return(team, nil)
@@ -468,8 +471,6 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 
 	channels := map[string]*model.Channel{
 		"mattermost-channel-requests": {Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-bot-requests":     {Id: "ch-bot", TeamId: "team-hq", Name: "mattermost-bot-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-webhook-requests": {Id: "ch-wh", TeamId: "team-hq", Name: "mattermost-webhook-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 		"mattermost-team-requests":    {Id: "ch-team", TeamId: "team-hq", Name: "mattermost-team-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 		"mattermost-audit-requests":   {Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 	}
@@ -483,13 +484,13 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	}, nil)
 
 	api.On("CreateTeamMember", "team-hq", "u_tadmin").Return(&model.TeamMember{}, nil).Maybe()
-	for _, id := range []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"} {
+	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		api.On("AddChannelMember", id, "u_tadmin").Return(&model.ChannelMember{}, nil)
 	}
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
 			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"},
+			Channels:        []string{"ch-root", "ch-team", "ch-audit"},
 		}},
 	}, nil).Maybe()
 	// forceTicketChannelCategory for team-requests walks System Admins.
@@ -501,14 +502,18 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 
 	p.syncPrimaryTeamAdminVisibility()
 
-	for _, id := range []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"} {
+	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		api.AssertCalled(t, "AddChannelMember", id, "u_tadmin")
 	}
+	api.AssertNotCalled(t, "AddChannelMember", "ch-bot", "u_tadmin")
+	api.AssertNotCalled(t, "AddChannelMember", "ch-wh", "u_tadmin")
 	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, "u_member")
 }
 
 func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api := &plugintest.API{}
+	// Seed stub before stubLogs so the specific KVGet wins over the catch-all.
+	stubTAVisibilitySeeded(api, "ch-root", "demoted", "still-admin")
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -539,7 +544,7 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 
 	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
-	api.On("GetUser", "sysadmin").Return(&model.User{Id: "sysadmin", Username: "sa", Roles: model.SystemAdminRoleId}, nil)
+	// sysadmin is not in the seed set — eviction must not even look them up.
 
 	api.On("GetTeamMember", "team-hq", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
 	api.On("GetTeamMember", "team-hq", "still-admin").Return(&model.TeamMember{UserId: "still-admin", SchemeAdmin: true}, nil)
@@ -551,11 +556,34 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.AssertCalled(t, "DeleteChannelMember", "ch-root", "demoted")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "still-admin")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "sysadmin")
+	api.AssertNotCalled(t, "GetUser", "sysadmin")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "bot")
+}
+
+func TestEvictStaleApproversFromApprovalChannel_LeavesHandAddedObservers(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	ch := &model.Channel{Id: "ch-root", TeamId: "team-hq"}
+	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "hand-added"},
+	}, nil)
+	// No seed record for hand-added → eviction must leave them alone.
+	api.On("KVGet", taVisibilitySeededKey("ch-root")).Return(nil, nil)
+
+	p.evictStaleApproversFromApprovalChannel(ch, "team-hq")
+
+	api.AssertNotCalled(t, "GetUser", "hand-added")
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "hand-added")
 }
 
 func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t *testing.T) {
 	api := &plugintest.API{}
+	stubTAVisibilitySeeded(api, "ch-ops", "demoted", "still-admin")
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -589,6 +617,7 @@ func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t
 
 func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
 	api := &plugintest.API{}
+	stubTAVisibilitySeeded(api, "ch-ops", "demoted")
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -605,6 +634,25 @@ func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
 	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "demoted", Username: "ex"})
 
 	api.AssertCalled(t, "DeleteChannelMember", "ch-ops", "demoted")
+}
+
+func TestReconcilePerTeamApprovalAccessForUser_LeavesHandAdded(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: true})
+
+	ops := &model.Team{Id: "team-ops", Name: "ops"}
+	api.On("GetTeamsForUser", "observer").Return([]*model.Team{ops}, nil)
+	opsCh := &model.Channel{Id: "ch-ops", TeamId: "team-ops", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
+	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
+	api.On("GetTeamMember", "team-ops", "observer").Return(&model.TeamMember{UserId: "observer", Roles: model.TeamUserRoleId}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-ops")).Return(nil, nil)
+
+	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "observer", Username: "obs"})
+
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-ops", "observer")
 }
 
 func TestReconcilePrimaryTeamAdminVisibilityForUser_DoesNotEvictNonAdminOnLogin(t *testing.T) {
@@ -634,7 +682,12 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	// Per-team channels off: only primary visibility should run.
-	p.setConfiguration(&configuration{ApprovalTeam: "hq", PerTeamApprovalChannels: false})
+	p.setConfiguration(&configuration{
+		ApprovalTeam:                           "hq",
+		PerTeamApprovalChannels:                false,
+		AllowTeamAdminApprovers:                true,
+		AllowApprovalTeamAdminsForTeamRequests: true,
+	})
 
 	team := &model.Team{Id: "team-hq", Name: "hq"}
 	api.On("GetTeamByName", "hq").Return(team, nil)
@@ -642,8 +695,6 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 
 	channels := map[string]*model.Channel{
 		"mattermost-channel-requests": {Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-bot-requests":     {Id: "ch-bot", TeamId: "team-hq", Name: "mattermost-bot-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
-		"mattermost-webhook-requests": {Id: "ch-wh", TeamId: "team-hq", Name: "mattermost-webhook-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 		"mattermost-team-requests":    {Id: "ch-team", TeamId: "team-hq", Name: "mattermost-team-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 		"mattermost-audit-requests":   {Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"},
 	}
@@ -654,13 +705,13 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 		TeamId: "team-hq", UserId: "u_ta", SchemeAdmin: true,
 	}, nil)
 	api.On("CreateTeamMember", "team-hq", "u_ta").Return(&model.TeamMember{}, nil).Maybe()
-	for _, id := range []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"} {
+	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		api.On("AddChannelMember", id, "u_ta").Return(&model.ChannelMember{}, nil)
 	}
 	api.On("GetChannelSidebarCategories", "u_ta", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
 			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"},
+			Channels:        []string{"ch-root", "ch-team", "ch-audit"},
 		}},
 	}, nil).Maybe()
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
@@ -669,7 +720,7 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 		TeamId: "team-hq", UserId: "u_ta", SchemeAdmin: true,
 	}, &model.User{Id: "u_ta"})
 
-	for _, id := range []string{"ch-root", "ch-bot", "ch-wh", "ch-team", "ch-audit"} {
+	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		api.AssertCalled(t, "AddChannelMember", id, "u_ta")
 	}
 }

@@ -53,20 +53,26 @@ function readSiblingSetting(props: Props, key: string): string {
 
 function normalizeMode(raw: string): Mode {
     switch ((raw || '').toLowerCase().trim()) {
+    case 'usergroup':
+    case 'group':
+    case 'groups':
+    case 'user_group':
+    case 'user-group':
+        return 'usergroup';
+    case 'system_admin':
+    case 'system-admin':
+    case 'sysadmin':
+    case 'admin':
+        return 'system_admin';
     case 'attribute':
     case 'abac':
     case 'cpa':
     case 'user_attribute':
     case 'user-attribute':
         return 'attribute';
-    case 'system_admin':
-    case 'system-admin':
-    case 'sysadmin':
-    case 'admin':
-        return 'system_admin';
     default:
-        // Empty / usergroup aliases / unknown → shipped default.
-        return 'usergroup';
+        // Empty / unknown → shipped default (User Attributes).
+        return 'attribute';
     }
 }
 

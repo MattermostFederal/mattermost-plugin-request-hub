@@ -20,6 +20,7 @@ func (p *Plugin) UserHasLoggedIn(_ *plugin.Context, user *model.User) {
 		return
 	}
 	go func() {
+		defer p.logRecoveredPanic("login access reconcile")
 		p.reconcileTwoStepAccessForUser(user)
 		p.reconcilePrimaryTeamAdminVisibilityForUser(user)
 		p.reconcilePerTeamApprovalAccessForUser(user)
@@ -37,6 +38,7 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 	p.configurationLock.Unlock()
 
 	go func() {
+		defer p.logRecoveredPanic("two-step channel reconciler")
 		// Run once immediately — NewTicker only fires after the first interval.
 		p.reconcileTwoStepApproverChannels()
 		p.evictStalePrimaryTeamAdminChannelMembers()

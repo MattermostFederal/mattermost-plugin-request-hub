@@ -76,3 +76,33 @@ func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	require.Equal(t, []string{kvTeamRequestPrefix + "a"}, keys)
 	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
 }
+
+func TestTrackOpenRequestKey_MissingIndexDoesNotInventOneKey(t *testing.T) {
+	api := &plugintest.API{}
+	key := kvBotRequestPrefix + "r1"
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.trackOpenRequestKey(key)
+	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
+	api.AssertNotCalled(t, "KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "KVList", mock.Anything, mock.Anything)
+}
+
+func TestTrackOpenRequestKey_CASGiveUpInvalidates(t *testing.T) {
+	api := &plugintest.API{}
+	key := kvBotRequestPrefix + "r1"
+	existing, _ := json.Marshal([]string{kvBotRequestPrefix + "other"})
+	for range openRequestIndexCASAttempts {
+		api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
+		api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
+	}
+	api.On("KVDelete", kvOpenRequestIndex).Return(nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.trackOpenRequestKey(key)
+}

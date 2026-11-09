@@ -127,8 +127,19 @@ func unionStringKeys(a, b []string) []string {
 	return out
 }
 
+// invalidateOpenRequestIndex deletes the index so the next list rebuilds from
+// a full scan. Used when a track fails part-way and leaving a readable but
+// incomplete index would hide open requests.
+func (p *Plugin) invalidateOpenRequestIndex() {
+	if appErr := p.API.KVDelete(kvOpenRequestIndex); appErr != nil {
+		p.API.LogWarn("open-request index: failed to invalidate", "error", appErr.Error())
+	}
+}
+
 // trackOpenRequestKey adds kvKey to the open-request index after a successful
-// store. Best-effort — a failed update only means the next list rebuilds.
+// store. Best-effort — a failed update invalidates the index so the next list
+// rebuilds rather than trusting a partial blob. Never invents a one-key index
+// when the blob is missing (that would hide every other open request).
 func (p *Plugin) trackOpenRequestKey(kvKey string) {
 	if kvKey == "" {
 		return
@@ -137,14 +148,20 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 		raw, appErr := p.API.KVGet(kvOpenRequestIndex)
 		if appErr != nil {
 			p.API.LogWarn("open-request index: failed to load for add", "key", kvKey, "error", appErr.Error())
+			p.invalidateOpenRequestIndex()
+			return
+		}
+		if raw == nil {
+			// Missing index: do not invent a one-key blob (that would hide
+			// every other open request). Leave it absent so the next list
+			// rebuilds from a full scan that includes this key.
 			return
 		}
 		var keys []string
-		if raw != nil {
-			if err := json.Unmarshal(raw, &keys); err != nil {
-				p.rebuildOpenRequestIndex()
-				continue
-			}
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			p.invalidateOpenRequestIndex()
+			p.rebuildOpenRequestIndex()
+			return
 		}
 		if slices.Contains(keys, kvKey) {
 			return
@@ -152,11 +169,13 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 		next := append(slices.Clone(keys), kvKey)
 		data, err := json.Marshal(next)
 		if err != nil {
+			p.invalidateOpenRequestIndex()
 			return
 		}
 		ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("open-request index: failed to add key", "key", kvKey, "error", casErr.Error())
+			p.invalidateOpenRequestIndex()
 			return
 		}
 		if ok {
@@ -164,6 +183,7 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 		}
 	}
 	p.API.LogWarn("open-request index: gave up adding key after CAS contention", "key", kvKey)
+	p.invalidateOpenRequestIndex()
 }
 
 // untrackOpenRequestKey removes kvKey from the open-request index after the

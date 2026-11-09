@@ -79,9 +79,30 @@ func stubLogs(api *plugintest.API) {
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvOpenRequestIndex).Return(nil).Maybe()
 	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvTokenExpiryIndex).Return(nil).Maybe()
+	// TA visibility seed set — mark/clear during AddChannelMember / eviction.
+	api.On("KVGet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
+	})).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
+	}), mock.Anything, mock.Anything).Return(true, nil).Maybe()
+}
+
+// stubTAVisibilitySeeded pretends the plugin previously seeded userIDs into
+// channelID, so demotion eviction is allowed to remove them.
+func stubTAVisibilitySeeded(api *plugintest.API, channelID string, userIDs ...string) {
+	data, err := json.Marshal(userIDs)
+	if err != nil {
+		panic(err)
+	}
+	key := taVisibilitySeededKey(channelID)
+	api.On("KVGet", key).Return(data, nil)
+	api.On("KVCompareAndSet", key, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 }
 
 // stubLogLines registers only the permissive log expectations, for tests

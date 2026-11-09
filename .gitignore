@@ -24,6 +24,9 @@ go.work.sum
 design-references/notes.md
 HANDOFF.md
 
+# Local SOP / design scratch (not shipped in the plugin repo)
+docs/status-requests/
+
 # Docker development environment
 docker/postgres-data/
 docker/mattermost/
@@ -50,3 +53,4 @@ webapp/.v8-unit-coverage/
 webapp/.v8-merged-coverage/
 
 .coderabbit-reviews/
+.gocache/

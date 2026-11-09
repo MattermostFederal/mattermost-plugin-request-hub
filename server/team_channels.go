@@ -479,6 +479,9 @@ func (p *Plugin) addTeamApproversToChannel(teamID, channelID string) {
 					"channel_id", channelID, "user_id", m.UserId, "error", appErr.Error())
 				continue
 			}
+			if isTeamAdmin {
+				p.markTAVisibilitySeeded(channelID, m.UserId)
+			}
 			p.addChannelToPermissionsCategory(m.UserId, teamID, channelID)
 		}
 		if len(members) < perPage {
@@ -749,14 +752,14 @@ func (p *Plugin) addPrimaryTeamAdminsToChannel(channelID string) {
 				"channel_id", channelID, "user_id", userID, "error", appErr.Error())
 			continue
 		}
+		p.markTAVisibilitySeeded(channelID, userID)
 		p.addChannelToPermissionsCategory(userID, team.Id, channelID)
 	}
 }
 
-// primaryVisibilityChannels are primary ticket channels where membership is
-// SysAdmin + Approval-team Team Admin only (watch-only for Team Admins).
-// Bot/webhook are excluded: security-pool members also belong there, and
-// two-step reconcile already evicts demoted pool members / Team Admins.
+// primaryVisibilityChannels are primary ticket channels where demoted
+// plugin-seeded Team Admins are evicted (root / team-creation / audit).
+// Bot/webhook are excluded: security-pool members also belong there.
 func (p *Plugin) primaryVisibilityChannels() []*model.Channel {
 	var out []*model.Channel
 	for _, ensure := range []func() *model.Channel{
@@ -771,16 +774,49 @@ func (p *Plugin) primaryVisibilityChannels() []*model.Channel {
 	return out
 }
 
+// primaryTAVisibilityChannels returns the primary channels Approval-team Team
+// Admins are seeded into for watch-only visibility. Gated by the same flags
+// that control whether those TAs may approve the related request types.
+func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
+	cfg := p.getConfiguration()
+	var out []*model.Channel
+	if cfg.AllowTeamAdminApprovers {
+		if ch := p.ensureRootApprovalChannel(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	if cfg.AllowApprovalTeamAdminsForTeamRequests {
+		if ch := p.ensureTeamCreationApprovalChannel(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	if cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests {
+		if ch := p.ensureAuditChannel(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// seedTAVisibility adds userID to ch and records that the plugin seeded them
+// so demotion eviction can leave hand-added members alone.
+func (p *Plugin) seedTAVisibility(ch *model.Channel, userID string) {
+	if ch == nil || userID == "" {
+		return
+	}
+	p.addUserToApprovalChannel(ch, userID)
+	p.markTAVisibilitySeeded(ch.Id, userID)
+}
+
 // syncPrimaryTeamAdminVisibility ensures primary ticket channels exist and
-// reseeds Approval-team Team Admins into all of them, then evicts members who
-// no longer qualify. Scoped to the primary Approval team only — never
-// auto-joins Team Admins into other teams' channels.
+// reseeds Approval-team Team Admins into the gated visibility channels, then
+// evicts plugin-seeded members who no longer qualify.
 func (p *Plugin) syncPrimaryTeamAdminVisibility() {
 	team, err := p.approvalTeam()
 	if err != nil || team == nil {
 		return
 	}
-	channels := p.primaryTicketChannels()
+	channels := p.primaryTAVisibilityChannels()
 	if len(channels) == 0 {
 		return
 	}
@@ -789,20 +825,20 @@ func (p *Plugin) syncPrimaryTeamAdminVisibility() {
 		"team_id", team.Id, "admins", len(adminIDs), "channels", len(channels))
 	for _, userID := range adminIDs {
 		for _, ch := range channels {
-			p.addUserToApprovalChannel(ch, userID)
+			p.seedTAVisibility(ch, userID)
 		}
 	}
 	p.evictStalePrimaryTeamAdminChannelMembers()
 }
 
 // ensurePrimaryTeamAdminVisibilityForUser adds one Approval-team Team Admin to
-// every primary ticket channel. No-op when the user is not a Team Admin there.
+// gated primary visibility channels. No-op when the user is not a Team Admin.
 func (p *Plugin) ensurePrimaryTeamAdminVisibilityForUser(userID string) {
 	if userID == "" || userID == p.botUserID || !p.isApprovalTeamAdmin(userID) {
 		return
 	}
-	for _, ch := range p.primaryTicketChannels() {
-		p.addUserToApprovalChannel(ch, userID)
+	for _, ch := range p.primaryTAVisibilityChannels() {
+		p.seedTAVisibility(ch, userID)
 	}
 }
 
@@ -836,8 +872,8 @@ func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	if !isTeamAdminMember(member) {
 		return
 	}
-	for _, ch := range p.primaryTicketChannels() {
-		p.addUserToApprovalChannel(ch, user.Id)
+	for _, ch := range p.primaryTAVisibilityChannels() {
+		p.seedTAVisibility(ch, user.Id)
 	}
 }
 
@@ -918,6 +954,10 @@ func (p *Plugin) reconcilePerTeamApprovalAccessForUser(user *model.User) {
 		if tmErr != nil && !isNotFound(tmErr) {
 			continue
 		}
+		// Only remove members the plugin seeded — leave hand-added observers.
+		if !p.isTAVisibilitySeeded(ch.Id, user.Id) {
+			continue
+		}
 		if _, getErr := p.API.GetChannelMember(ch.Id, user.Id); getErr != nil {
 			continue
 		}
@@ -926,20 +966,22 @@ func (p *Plugin) reconcilePerTeamApprovalAccessForUser(user *model.User) {
 				"channel_id", ch.Id, "user_id", user.Id, "error", delErr.Error())
 			continue
 		}
+		p.clearTAVisibilitySeeded(ch.Id, user.Id)
 		p.API.LogInfo("per-team approval: evicted demoted Team Admin",
 			"user_id", user.Id, "username", user.Username, "team_id", team.Id, "channel_id", ch.Id)
 	}
 }
 
-// evictStaleApproversFromApprovalChannel removes members of an approval
-// channel who are not the bot, not a System Admin, and not a Team Admin of
-// teamID. Used for primary visibility channels (teamID = Approval team) and
-// per-team channel-requests (teamID = that team). Fail-closed on API errors.
+// evictStaleApproversFromApprovalChannel removes plugin-seeded members who are
+// no longer a System Admin or Team Admin of teamID. Hand-added observers and
+// cross-team approvers are left alone. Collects member IDs first so deletes
+// do not skip rows while paging.
 func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamID string) {
 	if ch == nil || teamID == "" {
 		return
 	}
 	const perPage = 100
+	var memberIDs []string
 	for page := range 50 {
 		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
 		if appErr != nil {
@@ -948,38 +990,41 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 			return
 		}
 		for i := range members {
-			m := &members[i]
-			if m.UserId == "" || m.UserId == p.botUserID {
-				continue
+			if id := members[i].UserId; id != "" && id != p.botUserID {
+				memberIDs = append(memberIDs, id)
 			}
-			user, uErr := p.API.GetUser(m.UserId)
-			if uErr != nil || user == nil {
-				continue
-			}
-			if user.IsSystemAdmin() {
-				continue
-			}
-			tm, tmErr := p.API.GetTeamMember(teamID, m.UserId)
-			if tmErr != nil {
-				// Fail closed on API errors so a brief outage does not mass-evict.
-				// Not-found means they are not a Team Admin of this team → evict.
-				if !isNotFound(tmErr) {
-					continue
-				}
-			} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) {
-				continue
-			}
-			if delErr := p.API.DeleteChannelMember(ch.Id, m.UserId); delErr != nil {
-				p.API.LogWarn("approval channel: failed to evict demoted member",
-					"channel_id", ch.Id, "user_id", m.UserId, "error", delErr.Error())
-				continue
-			}
-			p.API.LogInfo("approval channel: evicted demoted Team Admin",
-				"user_id", m.UserId, "username", user.Username, "team_id", teamID, "channel_id", ch.Id)
 		}
 		if len(members) < perPage {
-			return
+			break
 		}
+	}
+	for _, userID := range memberIDs {
+		if !p.isTAVisibilitySeeded(ch.Id, userID) {
+			continue
+		}
+		user, uErr := p.API.GetUser(userID)
+		if uErr != nil || user == nil {
+			continue
+		}
+		if user.IsSystemAdmin() {
+			continue
+		}
+		tm, tmErr := p.API.GetTeamMember(teamID, userID)
+		if tmErr != nil {
+			if !isNotFound(tmErr) {
+				continue
+			}
+		} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) {
+			continue
+		}
+		if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil {
+			p.API.LogWarn("approval channel: failed to evict demoted member",
+				"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
+			continue
+		}
+		p.clearTAVisibilitySeeded(ch.Id, userID)
+		p.API.LogInfo("approval channel: evicted demoted Team Admin",
+			"user_id", userID, "username", user.Username, "team_id", teamID, "channel_id", ch.Id)
 	}
 }
 
@@ -1146,9 +1191,9 @@ func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, 
 // already a member *and* the creator is gone (re-upload / purged bot). Bot
 // membership alone is not enough while an untrusted creator still exists —
 // that would let a random user pre-create the name, get the bot added, and
-// capture tickets. Crimson had mattermost-channel-requests created as public
-// by the pre-rename bot — those must become private before cards post, or
-// tickets fall back to System Admin DMs.
+// capture tickets. Legacy public mattermost-channel-requests channels created
+// by the pre-rename bot must become private before cards post, or tickets
+// fall back to System Admin DMs.
 func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 	if ch.DeleteAt != 0 {
 		return false
@@ -1163,7 +1208,7 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 	if !trustedCreator {
 		// Membership path only when the creator is gone (re-upload). Avoid
 		// calling GetUser when the creator is already trusted.
-		if !(p.botIsChannelMember(ch.Id) && p.approvalChannelCreatorGone(ch.CreatorId)) {
+		if !p.botIsChannelMember(ch.Id) || !p.approvalChannelCreatorGone(ch.CreatorId) {
 			return false
 		}
 	}
@@ -1232,7 +1277,7 @@ func (p *Plugin) botIsChannelMember(channelID string) bool {
 const requestHubBotUsername = "mattermost-request-hub"
 
 // legacyRequestHubBotUsername is the bot username before the Request Hub
-// rename (crimson still has channels created by this account).
+// rename (upgraded installs may still have channels created by this account).
 const legacyRequestHubBotUsername = "mattermost-requests"
 
 // legacyRequestHubPluginID is the plugin ID before the 0.5.0 rename. Bots
@@ -1241,14 +1286,18 @@ const legacyRequestHubBotUsername = "mattermost-requests"
 const legacyRequestHubPluginID = "com.mattermostfederal.channel-requests"
 
 // approvalChannelCreatorGone reports whether creatorID no longer resolves to
-// a live user (missing or deactivated). Used so bot-membership adoption only
-// covers re-upload / purged-creator cases, not a live untrusted owner.
+// a live user (missing or deactivated). Transient GetUser failures must not
+// count as gone — that would adopt a channel while an untrusted creator still
+// exists. Only not-found (and deactivated) are treated as gone.
 func (p *Plugin) approvalChannelCreatorGone(creatorID string) bool {
 	if creatorID == "" {
 		return true
 	}
 	creator, appErr := p.API.GetUser(creatorID)
-	if appErr != nil || creator == nil {
+	if appErr != nil {
+		return isNotFound(appErr)
+	}
+	if creator == nil {
 		return true
 	}
 	return creator.DeleteAt != 0

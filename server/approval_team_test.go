@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -314,7 +315,7 @@ func TestLookupApprovalChannel_OtherChannelWithNameIsTaken(t *testing.T) {
 }
 
 func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testing.T) {
-	// Crimson: mattermost-channel-requests was created as public by the
+	// Legacy: mattermost-channel-requests was created as public by the
 	// pre-rename bot. Convert to private and adopt so tickets stop DMing
 	// System Admins.
 	p, api := newApprovalTeamPlugin(t)
@@ -449,7 +450,7 @@ func TestLookupApprovalChannel_AdoptsWhenBotAlreadyMemberAfterCreatorGone(t *tes
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("old-bot"), nil)
 	api.On("GetBot", "old-bot", true).Return(nil, testAppErr("not found"))
-	api.On("GetUser", "old-bot").Return(nil, testAppErr("not found"))
+	api.On("GetUser", "old-bot").Return(nil, &model.AppError{StatusCode: http.StatusNotFound, Message: "not found"})
 	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
@@ -459,6 +460,22 @@ func TestLookupApprovalChannel_AdoptsWhenBotAlreadyMemberAfterCreatorGone(t *tes
 	require.NotNil(t, ch)
 	require.Equal(t, "c9", ch.Id)
 	require.False(t, taken)
+}
+
+func TestLookupApprovalChannel_NoAdoptionOnTransientCreatorLookupError(t *testing.T) {
+	// A 500 from GetUser must not be treated as "creator gone" — that would
+	// adopt a channel owned by a still-live untrusted user during an outage.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u_other"), nil)
+	api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "u_other").Return(nil, testAppErr("api down"))
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }
 
 func TestLookupApprovalChannel_BotMembershipAloneDoesNotAdoptLiveUntrustedCreator(t *testing.T) {
@@ -478,9 +495,9 @@ func TestLookupApprovalChannel_BotMembershipAloneDoesNotAdoptLiveUntrustedCreato
 }
 
 func TestLookupApprovalChannel_AdoptsLegacyPluginOwnedBotWithoutMembership(t *testing.T) {
-	// Crimson: mattermost-channel-requests created by the pre-0.5.0 bot
-	// (OwnerId = channel-requests). Current bot is not a member → still adopt
-	// and join, otherwise tickets fall back to System Admin DMs.
+	// Legacy pre-0.5.0 bot (OwnerId = channel-requests) created the channel.
+	// Current bot is not a member → still adopt and join, otherwise tickets
+	// fall back to System Admin DMs.
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("legacy-bot"), nil)
 	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{

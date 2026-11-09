@@ -26,9 +26,10 @@ const (
 
 	tokenWeeklyWindow = 30 * 24 * time.Hour
 	tokenDailyWindow  = 7 * 24 * time.Hour
-	// tokenReminderSlack lets a reminder go out up to one job run early, so a
-	// daily job does not push a due reminder to the next calendar day.
-	tokenReminderSlack = tokenReminderJobPeriod
+	// tokenReminderSlack lets a reminder go out up to an hour early so a
+	// daily job that drifts slightly still fires the due reminder same day,
+	// without collapsing the weekly cadence into near-daily sends.
+	tokenReminderSlack = time.Hour
 )
 
 // botTokenExpiry is what the plugin keeps about a token it issued.
@@ -220,6 +221,7 @@ func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string)
 func (p *Plugin) deleteBotTokenExpiry(key string) {
 	if appErr := p.API.KVDelete(key); appErr != nil {
 		p.API.LogWarn("failed to delete bot token expiry", "key", key, "error", appErr.Error())
+		return
 	}
 	p.untrackTokenExpiryKey(key)
 }

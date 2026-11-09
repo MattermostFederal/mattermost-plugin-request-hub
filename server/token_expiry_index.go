@@ -102,6 +102,14 @@ func (p *Plugin) persistTokenExpiryIndexFromScan(prev []byte, scanned []string) 
 	return errors.New("token-expiry index: CAS contention persisting scan")
 }
 
+// invalidateTokenExpiryIndex deletes the index so the next list rebuilds from
+// a full scan. Same rationale as invalidateOpenRequestIndex.
+func (p *Plugin) invalidateTokenExpiryIndex() {
+	if appErr := p.API.KVDelete(kvTokenExpiryIndex); appErr != nil {
+		p.API.LogWarn("token-expiry index: failed to invalidate", "error", appErr.Error())
+	}
+}
+
 func (p *Plugin) trackTokenExpiryKey(key string) {
 	if key == "" {
 		return
@@ -110,14 +118,19 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 		raw, appErr := p.API.KVGet(kvTokenExpiryIndex)
 		if appErr != nil {
 			p.API.LogWarn("token-expiry index: failed to load for add", "key", key, "error", appErr.Error())
+			p.invalidateTokenExpiryIndex()
+			return
+		}
+		if raw == nil {
+			// Missing index: do not invent a one-key blob. Leave it absent so
+			// the next list rebuilds from a full scan that includes this key.
 			return
 		}
 		var keys []string
-		if raw != nil {
-			if err := json.Unmarshal(raw, &keys); err != nil {
-				p.rebuildTokenExpiryIndex()
-				continue
-			}
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			p.invalidateTokenExpiryIndex()
+			p.rebuildTokenExpiryIndex()
+			return
 		}
 		if slices.Contains(keys, key) {
 			return
@@ -125,11 +138,13 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 		next := append(slices.Clone(keys), key)
 		data, err := json.Marshal(next)
 		if err != nil {
+			p.invalidateTokenExpiryIndex()
 			return
 		}
 		ok, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("token-expiry index: failed to add key", "key", key, "error", casErr.Error())
+			p.invalidateTokenExpiryIndex()
 			return
 		}
 		if ok {
@@ -137,6 +152,7 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 		}
 	}
 	p.API.LogWarn("token-expiry index: gave up adding key after CAS contention", "key", key)
+	p.invalidateTokenExpiryIndex()
 }
 
 func (p *Plugin) untrackTokenExpiryKey(key string) {

@@ -968,7 +968,7 @@ test.describe('usergroup mode', () => {
         const member = await hub.createUser({teamAdmin: true});
         const customGroup = await createGroup(hub, [member], 'custom');
         const username = botName();
-        // Default AllowCustomApproverGroups is on; pin it off for this case.
+        // Default AllowCustomApproverGroups is off; pin it explicitly for this case.
         await hub.withPluginConfig({twostepapprovermode: 'usergroup', securityapprovergroup: customGroup, allowcustomapprovergroups: false}, async () => {
             await joinBotChannel(hub, member);
             const s = await submitOK(hub, requester, {username});

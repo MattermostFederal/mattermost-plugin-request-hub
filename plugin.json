@@ -40,7 +40,7 @@
                 "display_name": "Allow team requests",
                 "type": "bool",
                 "default": true,
-                "help_text": "When enabled, users can request the creation of new teams for admin approval. Also shows a + on the team rail for non–System Admins when native Create Team is hidden."
+                "help_text": "When enabled, users can request the creation of new teams for admin approval. Also shows a + on the team rail for non-System Admins when native Create Team is hidden."
             },
             {
                 "key": "AllowTeamAdminRequests",
@@ -95,8 +95,8 @@
                 "key": "TwoStepApproverMode",
                 "display_name": "Bot/webhook two-step approver mode",
                 "type": "custom",
-                "default": "usergroup",
-                "help_text": "Bot/webhook requests need two distinct people: (1) a security reviewer from the pool below, then (2) a System Admin. Default is User Groups (create the security-approvers group and add reviewers). User Attributes is optional for ABAC/CPA. System Admins only is a setup backup where one System Admin can complete both steps."
+                "default": "attribute",
+                "help_text": "Bot/webhook requests need two distinct people: (1) a security reviewer from the pool below, then (2) a System Admin. Default is User Attributes (CPA). User Groups is an alternative when LDAP/synced groups are available. System Admins only is a setup backup where one System Admin can complete both steps."
             },
             {
                 "key": "SecurityApproverAttribute",
@@ -116,8 +116,8 @@
                 "key": "AllowCustomApproverGroups",
                 "display_name": "Allow custom approver groups",
                 "type": "bool",
-                "default": true,
-                "help_text": "Used when mode is User Groups. On by default so a custom security-approvers group works without LDAP. Anyone who can manage that group's members can make themselves a security approver, so lock down Custom Groups permissions (System Console > User Management > Permissions). Off: only LDAP and plugin-synced groups are used."
+                "default": false,
+                "help_text": "Used when mode is User Groups. Off by default: only LDAP and plugin-synced groups are used. When on, a Mattermost custom group can be the security pool: anyone who can manage that group's members can make themselves a security approver, so lock down Custom Groups permissions (System Console > User Management > Permissions)."
             },
             {
                 "key": "ApprovalTeam",

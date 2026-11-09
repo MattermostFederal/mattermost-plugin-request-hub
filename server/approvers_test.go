@@ -374,7 +374,7 @@ func TestApplyTwoStepApproval(t *testing.T) {
 }
 
 func TestTwoStepMode(t *testing.T) {
-	require.Equal(t, twoStepModeUserGroup, (&configuration{}).twoStepMode())
+	require.Equal(t, twoStepModeAttribute, (&configuration{}).twoStepMode())
 	require.Equal(t, twoStepModeAttribute, (&configuration{TwoStepApproverMode: "attribute"}).twoStepMode())
 	require.Equal(t, twoStepModeUserGroup, (&configuration{TwoStepApproverMode: "usergroup"}).twoStepMode())
 	require.Equal(t, twoStepModeUserGroup, (&configuration{TwoStepApproverMode: "group"}).twoStepMode())
