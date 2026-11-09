@@ -296,16 +296,16 @@ func TestSendTokenExpiryReminders_ChecksOnlyTrackedTokensOnEveryPage(t *testing.
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
-	// Missing index → rebuild from KVList, then remind.
-	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Once()
-	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil)
+	// Missing index → rebuild from KVList (CAS persist), then remind.
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil)
 	firstPage := make([]string, 200)
 	for i := range firstPage {
 		firstPage[i] = "pending_x"
 	}
 	firstPage[7] = botTokenExpiryKey("tok1")
 	api.On("KVList", 0, 200).Return(firstPage, nil)
-	api.On("KVList", 1, 200).Return([]string{botTokenExpiryKey("tok2"), "other"}, nil)
+	api.On("KVList", 1, 200).Return([]string{botTokenExpiryKey("tok2"), "other", kvTokenExpiryIndex}, nil)
 	api.On("KVGet", botTokenExpiryKey("tok1")).Return(nil, nil)
 	api.On("KVGet", botTokenExpiryKey("tok2")).Return(nil, nil)
 

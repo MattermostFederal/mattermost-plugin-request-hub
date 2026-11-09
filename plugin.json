@@ -5,7 +5,7 @@
     "homepage_url": "https://github.com/MattermostFederal/mattermost-plugin-request-hub",
     "support_url": "https://github.com/MattermostFederal/mattermost-plugin-request-hub/issues",
     "icon_path": "assets/icon.svg",
-    "version": "0.6.2",
+    "version": "0.6.4",
     "min_server_version": "11.3.0",
     "server": {
         "executables": {
@@ -95,8 +95,8 @@
                 "key": "TwoStepApproverMode",
                 "display_name": "Bot/webhook two-step approver mode",
                 "type": "custom",
-                "default": "attribute",
-                "help_text": "Bot/webhook requests need two distinct people: (1) a security reviewer from the pool below, then (2) a System Admin. Pick how security reviewers are identified. System Admins only is a setup backup where one System Admin can complete both steps."
+                "default": "usergroup",
+                "help_text": "Bot/webhook requests need two distinct people: (1) a security reviewer from the pool below, then (2) a System Admin. Default is User Groups (create the security-approvers group and add reviewers). User Attributes is optional for ABAC/CPA. System Admins only is a setup backup where one System Admin can complete both steps."
             },
             {
                 "key": "SecurityApproverAttribute",
@@ -110,14 +110,14 @@
                 "display_name": "Security approver user group",
                 "type": "custom",
                 "default": "security-approvers",
-                "help_text": "Shown when mode is User Groups. LDAP or plugin-synced Mattermost user group whose members must complete the security review. A custom group is used only when Allow custom approver groups is on. Required: System Admins do not cover this step. Default is security-approvers even if that group is not created yet."
+                "help_text": "Shown when mode is User Groups. Mattermost user group whose members must complete the security review (LDAP/plugin-synced, or a custom group when Allow custom approver groups is on). Required: System Admins do not cover this step. Default is security-approvers even if that group is not created yet."
             },
             {
                 "key": "AllowCustomApproverGroups",
                 "display_name": "Allow custom approver groups",
                 "type": "bool",
-                "default": false,
-                "help_text": "Used when mode is User Groups. When on, the security approver group may be a custom group, for servers without LDAP. Anyone who can manage a custom group's members can make themselves a security approver, so turn this on only when you control who manages those groups (System Console > User Management > Permissions > Custom Groups). Off: only LDAP and plugin-synced groups are used."
+                "default": true,
+                "help_text": "Used when mode is User Groups. On by default so a custom security-approvers group works without LDAP. Anyone who can manage that group's members can make themselves a security approver, so lock down Custom Groups permissions (System Console > User Management > Permissions). Off: only LDAP and plugin-synced groups are used."
             },
             {
                 "key": "ApprovalTeam",

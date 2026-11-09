@@ -20,11 +20,12 @@ func (p *Plugin) listTokenExpiryKeys() ([]string, error) {
 	if keys, ok := p.loadTokenExpiryIndex(); ok {
 		return keys, nil
 	}
+	prev, _ := p.API.KVGet(kvTokenExpiryIndex)
 	keys, err := p.scanTokenExpiryKeys()
 	if err != nil {
 		return nil, err
 	}
-	if saveErr := p.saveTokenExpiryIndex(keys); saveErr != nil {
+	if saveErr := p.persistTokenExpiryIndexFromScan(prev, keys); saveErr != nil {
 		p.API.LogWarn("failed to persist token-expiry index; list still returned",
 			"error", saveErr.Error(), "count", len(keys))
 	}
@@ -40,7 +41,8 @@ func (p *Plugin) scanTokenExpiryKeys() ([]string, error) {
 			return nil, errors.Wrap(appErr, "failed to list bot token expiries")
 		}
 		for _, key := range batch {
-			if strings.HasPrefix(key, botTokenExpiryKeyPrefix) {
+			// Index key shares the bot_token_expiry_ prefix; never treat it as a token.
+			if key != kvTokenExpiryIndex && strings.HasPrefix(key, botTokenExpiryKeyPrefix) {
 				keys = append(keys, key)
 			}
 		}
@@ -75,6 +77,43 @@ func (p *Plugin) saveTokenExpiryIndex(keys []string) error {
 		return appErr
 	}
 	return nil
+}
+
+// persistTokenExpiryIndexFromScan CAS-writes a scan result against prev, then
+// unions with the live index on conflict (same race as open-request index).
+func (p *Plugin) persistTokenExpiryIndexFromScan(prev []byte, scanned []string) error {
+	keys := scanned
+	if keys == nil {
+		keys = []string{}
+	}
+	expected := prev
+	for range tokenExpiryIndexCASAttempts {
+		data, err := json.Marshal(keys)
+		if err != nil {
+			return err
+		}
+		ok, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, expected, data)
+		if casErr != nil {
+			return casErr
+		}
+		if ok {
+			return nil
+		}
+		raw, appErr := p.API.KVGet(kvTokenExpiryIndex)
+		if appErr != nil {
+			return appErr
+		}
+		var current []string
+		if raw != nil {
+			if err := json.Unmarshal(raw, &current); err != nil {
+				expected = raw
+				continue
+			}
+		}
+		keys = unionStringKeys(scanned, current)
+		expected = raw
+	}
+	return errors.New("token-expiry index: CAS contention persisting scan")
 }
 
 func (p *Plugin) trackTokenExpiryKey(key string) {
@@ -153,12 +192,13 @@ func (p *Plugin) untrackTokenExpiryKey(key string) {
 }
 
 func (p *Plugin) rebuildTokenExpiryIndex() {
+	prev, _ := p.API.KVGet(kvTokenExpiryIndex)
 	keys, err := p.scanTokenExpiryKeys()
 	if err != nil {
 		p.API.LogWarn("token-expiry index: rebuild scan failed", "error", err.Error())
 		return
 	}
-	if err := p.saveTokenExpiryIndex(keys); err != nil {
+	if err := p.persistTokenExpiryIndexFromScan(prev, keys); err != nil {
 		p.API.LogWarn("token-expiry index: rebuild save failed", "error", err.Error())
 		return
 	}

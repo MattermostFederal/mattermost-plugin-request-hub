@@ -571,54 +571,48 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 // and every detail. Caps histories/events so a full-store export cannot
 // load the whole node into memory.
 func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*auditExport, error) {
-	histories, err := p.listHistories()
+	filtered, histTruncated, err := p.listHistoriesForExport(f)
 	if err != nil {
 		return nil, err
-	}
-	filtered := make([]requestHistory, 0, len(histories))
-	truncated := false
-	for _, h := range histories {
-		if (f.RequestID != "" && h.RequestID != f.RequestID) || (f.Kind != "" && h.Kind != f.Kind) ||
-			(f.Requester != "" && h.RequesterID != f.Requester) ||
-			(f.Since > 0 && h.UpdatedAt < f.Since) || (f.Until > 0 && h.CreatedAt > f.Until) {
-			continue
-		}
-		if len(filtered) >= historyExportMaxHistories {
-			truncated = true
-			break
-		}
-		filtered = append(filtered, h)
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt < filtered[j].CreatedAt })
 
 	out := &auditExport{count: len(filtered), filename: filename}
 	var buf bytes.Buffer
 	if f.Format == "json" {
-		payload := any(filtered)
-		if truncated {
+		capped, eventsTruncated := capHistoriesEvents(filtered, f, historyExportMaxEvents)
+		payload := any(capped)
+		if histTruncated || eventsTruncated {
 			payload = map[string]any{
-				"truncated": true,
-				"limit":     historyExportMaxHistories,
-				"histories": filtered,
+				"truncated":        true,
+				"history_limit":    historyExportMaxHistories,
+				"event_limit":      historyExportMaxEvents,
+				"histories_cut":    histTruncated,
+				"events_cut":       eventsTruncated,
+				"histories":        capped,
 			}
 		}
 		if err := json.NewEncoder(&buf).Encode(payload); err != nil {
 			return nil, err
 		}
+		out.count = len(capped)
 		out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".json", "application/json"
 		return out, nil
 	}
 	cw := csv.NewWriter(&buf)
 	_ = cw.Write(csvRecord("request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"))
 	events := 0
+	eventsTruncated := false
+eventLoop:
 	for _, h := range filtered {
 		for _, ev := range h.Events {
 			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
 				continue
 			}
+			// Cap reached: another eligible event proves truncation.
 			if events >= historyExportMaxEvents {
-				truncated = true
-				break
+				eventsTruncated = true
+				break eventLoop
 			}
 			message, details := csvDetail(ev.Detail)
 			_ = cw.Write(csvRecord(
@@ -628,11 +622,8 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 			))
 			events++
 		}
-		if events >= historyExportMaxEvents {
-			break
-		}
 	}
-	if truncated {
+	if histTruncated || eventsTruncated {
 		_ = cw.Write(csvRecord("TRUNCATED", "", "", "", "", "", "", "", "",
 			fmt.Sprintf("export capped at %d histories / %d events", historyExportMaxHistories, historyExportMaxEvents), "", ""))
 	}
@@ -642,6 +633,34 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	}
 	out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".csv", "text/csv; charset=utf-8"
 	return out, nil
+}
+
+// capHistoriesEvents returns histories with at most maxEvents eligible events
+// total (same since/until rules as the CSV export). eventsTruncated is true
+// when a further eligible event existed beyond the cap.
+func capHistoriesEvents(in []requestHistory, f auditExportFilter, maxEvents int) (out []requestHistory, eventsTruncated bool) {
+	out = make([]requestHistory, 0, len(in))
+	events := 0
+	for _, h := range in {
+		clipped := h
+		clipped.Events = nil
+		for _, ev := range h.Events {
+			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
+				continue
+			}
+			if events >= maxEvents {
+				eventsTruncated = true
+				if len(clipped.Events) > 0 {
+					out = append(out, clipped)
+				}
+				return out, true
+			}
+			clipped.Events = append(clipped.Events, ev)
+			events++
+		}
+		out = append(out, clipped)
+	}
+	return out, false
 }
 
 // parseExportFilter reads an export filter from query parameters.

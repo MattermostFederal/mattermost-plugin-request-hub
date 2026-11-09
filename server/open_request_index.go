@@ -21,11 +21,14 @@ func (p *Plugin) listRequestKeys() ([]string, error) {
 	if keys, ok := p.loadOpenRequestIndex(); ok {
 		return keys, nil
 	}
+	// Snapshot before the slow scan so a concurrent track/untrack is not
+	// clobbered by an unconditional KVSet of a stale scan result.
+	prev, _ := p.API.KVGet(kvOpenRequestIndex)
 	keys, err := p.scanAllRequestKeys()
 	if err != nil {
 		return nil, err
 	}
-	if saveErr := p.saveOpenRequestIndex(keys); saveErr != nil {
+	if saveErr := p.persistOpenRequestIndexFromScan(prev, keys); saveErr != nil {
 		p.API.LogWarn("failed to persist open-request index; list still returned",
 			"error", saveErr.Error(), "count", len(keys))
 	}
@@ -78,6 +81,64 @@ func (p *Plugin) saveOpenRequestIndex(keys []string) error {
 		return appErr
 	}
 	return nil
+}
+
+// persistOpenRequestIndexFromScan writes a scan result with CAS against prev
+// (the index value observed before the scan). On conflict it unions the scan
+// with the current index and retries, so concurrent track/untrack wins are
+// not wiped by a slower rebuild.
+func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) error {
+	keys := scanned
+	if keys == nil {
+		keys = []string{}
+	}
+	expected := prev
+	for range openRequestIndexCASAttempts {
+		data, err := json.Marshal(keys)
+		if err != nil {
+			return err
+		}
+		ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, expected, data)
+		if casErr != nil {
+			return casErr
+		}
+		if ok {
+			return nil
+		}
+		raw, appErr := p.API.KVGet(kvOpenRequestIndex)
+		if appErr != nil {
+			return appErr
+		}
+		var current []string
+		if raw != nil {
+			if err := json.Unmarshal(raw, &current); err != nil {
+				// Unreadable competing value — keep trying to replace it.
+				expected = raw
+				continue
+			}
+		}
+		keys = unionStringKeys(scanned, current)
+		expected = raw
+	}
+	return errors.New("open-request index: CAS contention persisting scan")
+}
+
+func unionStringKeys(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, keys := range [][]string{a, b} {
+		for _, k := range keys {
+			if k == "" {
+				continue
+			}
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // trackOpenRequestKey adds kvKey to the open-request index after a successful
@@ -162,12 +223,13 @@ func (p *Plugin) untrackOpenRequestKey(kvKey string) {
 // rebuildOpenRequestIndex rescans the store and replaces the index. Used on
 // activate so upgrades pick up requests stored before indexing existed.
 func (p *Plugin) rebuildOpenRequestIndex() {
+	prev, _ := p.API.KVGet(kvOpenRequestIndex)
 	keys, err := p.scanAllRequestKeys()
 	if err != nil {
 		p.API.LogWarn("open-request index: rebuild scan failed", "error", err.Error())
 		return
 	}
-	if err := p.saveOpenRequestIndex(keys); err != nil {
+	if err := p.persistOpenRequestIndexFromScan(prev, keys); err != nil {
 		p.API.LogWarn("open-request index: rebuild save failed", "error", err.Error())
 		return
 	}

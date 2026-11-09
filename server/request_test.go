@@ -544,7 +544,8 @@ func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 
 func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testing.T) {
 	for _, taken := range []*model.Channel{
-		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypeOpen, CreatorId: "bot-user-id"},
+		// Foreign creator + bot not a member → adopt refuses (open or private).
+		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypeOpen, CreatorId: "u_other"},
 		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "u_other"},
 	} {
 		t.Run("type "+string(taken.Type), func(t *testing.T) {
@@ -564,8 +565,10 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
-			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: "system_user"}, nil).Maybe()
+			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other", Roles: "system_user"}, nil).Maybe()
 			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(taken, nil)
+			api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+			api.On("GetChannelMember", "taken-ch", mock.Anything).Return(nil, testAppErr("not a member")).Maybe()
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 			api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)
 			api.On("GetDirectChannel", mock.Anything, "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)

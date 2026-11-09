@@ -354,7 +354,9 @@ func TestEnsureTeamApprovalChannel_NameTakenByPrivateChannelOfSomeoneElse(t *tes
 
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "theirs", Type: model.ChannelTypePrivate, CreatorId: "u_other"}, nil)
+	api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot"))
 	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "theirs", mock.Anything).Return(nil, testAppErr("not a member"))
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
 	require.Error(t, err)
@@ -550,6 +552,59 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "still-admin")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "sysadmin")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "bot")
+}
+
+func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: true, ApprovalTeam: "hq"})
+
+	api.On("GetTeams").Return([]*model.Team{
+		{Id: "team-hq", Name: "hq"},
+		{Id: "team-ops", Name: "ops"},
+	}, nil)
+	opsCh := &model.Channel{Id: "ch-ops", TeamId: "team-ops", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot"}
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(nil, testAppErr("missing"))
+	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
+
+	api.On("GetChannelMembers", "ch-ops", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "demoted"},
+		{UserId: "still-admin"},
+	}, nil)
+	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
+	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
+	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
+	api.On("GetTeamMember", "team-ops", "still-admin").Return(&model.TeamMember{UserId: "still-admin", SchemeAdmin: true}, nil)
+	api.On("DeleteChannelMember", "ch-ops", "demoted").Return(nil).Once()
+
+	p.evictStalePerTeamApprovalChannelMembers()
+
+	api.AssertCalled(t, "DeleteChannelMember", "ch-ops", "demoted")
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-ops", "still-admin")
+}
+
+func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: true})
+
+	ops := &model.Team{Id: "team-ops", Name: "ops"}
+	api.On("GetTeamsForUser", "demoted").Return([]*model.Team{ops}, nil)
+	opsCh := &model.Channel{Id: "ch-ops", TeamId: "team-ops", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
+	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
+	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("DeleteChannelMember", "ch-ops", "demoted").Return(nil).Once()
+
+	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "demoted", Username: "ex"})
+
+	api.AssertCalled(t, "DeleteChannelMember", "ch-ops", "demoted")
 }
 
 func TestReconcilePrimaryTeamAdminVisibilityForUser_EvictsDemoted(t *testing.T) {

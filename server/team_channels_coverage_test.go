@@ -33,6 +33,13 @@ func takenChannel(id string) *model.Channel {
 	return &model.Channel{Id: id, Type: model.ChannelTypeOpen, CreatorId: "u-other"}
 }
 
+// stubRefuseAdopt stubs the adopt probes so takenChannel(id) stays unused.
+func stubRefuseAdopt(api *plugintest.API, channelID string) {
+	api.On("GetBot", "u-other", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "u-other").Return(&model.User{Id: "u-other", Username: "other"}, nil).Maybe()
+	api.On("GetChannelMember", channelID, mock.Anything).Return(nil, testAppErr("not a member")).Maybe()
+}
+
 // repeated returns n copies of v.
 func repeated[T any](v T, n int) []T {
 	out := make([]T, n)
@@ -405,6 +412,7 @@ func TestEnsureAllTeamApprovalChannels_CountsEnsuredAndSkipped(t *testing.T) {
 	api.On("GetChannelByName", "ops", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("opsch", "mattermost-channel-requests", "ops"), nil)
 	api.On("GetChannelByName", "town", "mattermost-channel-requests", true).Return(takenChannel("townch"), nil)
+	stubRefuseAdopt(api, "townch")
 	api.On("GetTeamMembers", "town", 0, 200).Return(admin, nil)
 
 	p.ensureAllTeamApprovalChannels()
@@ -458,6 +466,7 @@ func TestMigrateTicketChannelsToManagedCategory_PlacesEachChannelOnce(t *testing
 		Return(pluginChannelIn("teamch", "mattermost-team-requests", "t1"), nil)
 	// The audit name is held by someone else's channel, so it is left out.
 	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).Return(takenChannel("other"), nil)
+	stubRefuseAdopt(api, "other")
 	api.On("GetChannelByName", "t2", "mattermost-channel-requests", false).Return(nil, testAppErr("not found"))
 	// forceTicketChannelCategory for the team-requests channel: no System Admins.
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
@@ -527,6 +536,7 @@ func TestSyncTeamApprovalChannelAfterAdminChange_EnsureFailureStops(t *testing.T
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
 	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{{UserId: "ta1", SchemeAdmin: true}}, nil)
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(takenChannel("x"), nil)
+	stubRefuseAdopt(api, "x")
 
 	p.syncTeamApprovalChannelAfterAdminChange("team1")
 
@@ -541,6 +551,7 @@ func TestUserHasJoinedTeam_LooksUpSystemAdminWithoutActor(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
 	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: "system_user system_admin"}, nil)
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(takenChannel("x"), nil)
+	stubRefuseAdopt(api, "x")
 
 	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{TeamId: "team1", UserId: "sa1", Roles: "team_user"}, nil)
 

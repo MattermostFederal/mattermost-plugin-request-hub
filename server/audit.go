@@ -663,3 +663,57 @@ func (p *Plugin) listHistories() ([]requestHistory, error) {
 		}
 	}
 }
+
+// historyMatchesExportFilter reports whether h belongs in a histories export
+// for filter f (request/kind/requester/time window on the history record).
+func historyMatchesExportFilter(h requestHistory, f auditExportFilter) bool {
+	if f.RequestID != "" && h.RequestID != f.RequestID {
+		return false
+	}
+	if f.Kind != "" && h.Kind != f.Kind {
+		return false
+	}
+	if f.Requester != "" && h.RequesterID != f.Requester {
+		return false
+	}
+	if f.Since > 0 && h.UpdatedAt < f.Since {
+		return false
+	}
+	if f.Until > 0 && h.CreatedAt > f.Until {
+		return false
+	}
+	return true
+}
+
+// listHistoriesForExport pages history keys and keeps at most
+// historyExportMaxHistories matches. truncated is set when one more match
+// exists beyond the cap, without retaining that extra history.
+func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []requestHistory, truncated bool, err error) {
+	filtered = make([]requestHistory, 0, 64)
+	for page := 0; ; page++ {
+		keys, appErr := p.API.KVList(page, historyListPageSize)
+		if appErr != nil {
+			return nil, false, appErr
+		}
+		for _, key := range keys {
+			if !strings.HasPrefix(key, kvHistoryPrefix) {
+				continue
+			}
+			h, loadErr := p.loadHistory(strings.TrimPrefix(key, kvHistoryPrefix))
+			if loadErr != nil {
+				p.API.LogWarn("skipping unreadable request history", "key", key, "error", loadErr.Error())
+				continue
+			}
+			if h == nil || !historyMatchesExportFilter(*h, f) {
+				continue
+			}
+			if len(filtered) >= historyExportMaxHistories {
+				return filtered, true, nil
+			}
+			filtered = append(filtered, *h)
+		}
+		if len(keys) < historyListPageSize {
+			return filtered, truncated, nil
+		}
+	}
+}

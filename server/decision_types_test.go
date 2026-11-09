@@ -430,10 +430,9 @@ func TestNewerTypeCardsShowTheRequestID(t *testing.T) {
 
 func TestListRequestKeys_Pages(t *testing.T) {
 	api := &plugintest.API{}
-	p := newTestPlugin(api)
-	// No index yet — rebuild from a full scan, then persist.
+	// No index yet: rebuild from a full scan, then CAS-persist.
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil)
-	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil)
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil)
 	page := make([]string, 200)
 	for i := range page {
 		page[i] = "pending_channel_u" + model.NewId()
@@ -441,6 +440,7 @@ func TestListRequestKeys_Pages(t *testing.T) {
 	page[0] = kvTeamRequestPrefix + "a"
 	api.On("KVList", 0, 200).Return(page, nil)
 	api.On("KVList", 1, 200).Return([]string{kvBotRequestPrefix + "b", "unrelated"}, nil)
+	p := newTestPlugin(api)
 
 	keys, err := p.listRequestKeys()
 
@@ -493,7 +493,7 @@ func TestListApprovableRequests_LoadFailure(t *testing.T) {
 	stubSystemAdmin(api)
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil)
 	api.On("KVList", 0, 200).Return([]string{kvTeamRequestPrefix + "r1"}, nil)
-	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVGet", kvTeamRequestPrefix+"r1").Return(nil, testAppErr("kv down"))
 
 	_, _, err := p.listApprovableRequests("admin1", 10)

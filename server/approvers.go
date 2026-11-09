@@ -39,15 +39,16 @@ const (
 	twoStepModeSystemAdmin = "system_admin"
 )
 
-// twoStepMode returns the normalized approver mode. Unknown / empty → attribute.
+// twoStepMode returns the normalized approver mode. Unknown / empty →
+// usergroup (shipped default: staff security-approvers, not ABAC).
 func (c *configuration) twoStepMode() string {
 	switch strings.ToLower(strings.TrimSpace(c.TwoStepApproverMode)) {
-	case twoStepModeUserGroup, "group", "groups", "user_group", "user-group":
-		return twoStepModeUserGroup
+	case twoStepModeAttribute, "abac", "cpa", "user_attribute", "user-attribute":
+		return twoStepModeAttribute
 	case twoStepModeSystemAdmin, "system-admin", "sysadmin", "admin":
 		return twoStepModeSystemAdmin
 	default:
-		return twoStepModeAttribute
+		return twoStepModeUserGroup
 	}
 }
 

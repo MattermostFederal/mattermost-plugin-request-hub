@@ -678,6 +678,9 @@ func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
 		return
 	}
 	p.addTeamApproversToChannel(teamID, ch.Id)
+	// Demotions via the plugin path land here; console demotions are covered
+	// by login + the periodic reconciler.
+	p.evictStaleApproversFromApprovalChannel(ch, teamID)
 	p.placeChannelMembersInManagedCategory(ch)
 }
 
@@ -865,19 +868,97 @@ func (p *Plugin) evictStalePrimaryTeamAdminChannelMembers() {
 		if ch == nil {
 			continue
 		}
-		p.evictStaleMembersFromPrimaryVisibilityChannel(ch, team.Id)
+		p.evictStaleApproversFromApprovalChannel(ch, team.Id)
 	}
 }
 
-func (p *Plugin) evictStaleMembersFromPrimaryVisibilityChannel(ch *model.Channel, approvalTeamID string) {
-	if ch == nil || approvalTeamID == "" {
+// evictStalePerTeamApprovalChannelMembers removes demoted Team Admins from
+// each team's mattermost-channel-requests channel (keep bot, System Admins,
+// and current Team Admins of that team). Console demotions have no plugin
+// hook; this runs on the same ~2m ticker as primary visibility eviction.
+func (p *Plugin) evictStalePerTeamApprovalChannelMembers() {
+	if !p.getConfiguration().PerTeamApprovalChannels {
+		return
+	}
+	teams, appErr := p.API.GetTeams()
+	if appErr != nil {
+		p.API.LogWarn("per-team approval: failed to list teams for demotion eviction",
+			"error", appErr.Error())
+		return
+	}
+	channelName := p.getConfiguration().TeamChannelName()
+	for _, team := range teams {
+		if team == nil || team.Id == "" || team.DeleteAt != 0 {
+			continue
+		}
+		ch, _ := p.lookupApprovalChannel(team.Id, channelName)
+		if ch == nil {
+			continue
+		}
+		p.evictStaleApproversFromApprovalChannel(ch, team.Id)
+	}
+}
+
+// reconcilePerTeamApprovalAccessForUser removes the user from any per-team
+// channel-requests channel where they are no longer a Team Admin (and not a
+// System Admin). Used on login so demotions take effect without waiting for
+// the periodic sweep.
+func (p *Plugin) reconcilePerTeamApprovalAccessForUser(user *model.User) {
+	if user == nil || user.Id == "" || user.Id == p.botUserID {
+		return
+	}
+	if !p.getConfiguration().PerTeamApprovalChannels {
+		return
+	}
+	if user.IsSystemAdmin() {
+		return
+	}
+	teams, appErr := p.API.GetTeamsForUser(user.Id)
+	if appErr != nil {
+		return
+	}
+	channelName := p.getConfiguration().TeamChannelName()
+	for _, team := range teams {
+		if team == nil || team.Id == "" {
+			continue
+		}
+		ch, _ := p.lookupApprovalChannel(team.Id, channelName)
+		if ch == nil {
+			continue
+		}
+		tm, tmErr := p.API.GetTeamMember(team.Id, user.Id)
+		if tmErr == nil && tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) {
+			continue
+		}
+		if tmErr != nil && !isNotFound(tmErr) {
+			continue
+		}
+		if _, getErr := p.API.GetChannelMember(ch.Id, user.Id); getErr != nil {
+			continue
+		}
+		if delErr := p.API.DeleteChannelMember(ch.Id, user.Id); delErr != nil {
+			p.API.LogDebug("per-team approval: evict on login",
+				"channel_id", ch.Id, "user_id", user.Id, "error", delErr.Error())
+			continue
+		}
+		p.API.LogInfo("per-team approval: evicted demoted Team Admin",
+			"user_id", user.Id, "username", user.Username, "team_id", team.Id, "channel_id", ch.Id)
+	}
+}
+
+// evictStaleApproversFromApprovalChannel removes members of an approval
+// channel who are not the bot, not a System Admin, and not a Team Admin of
+// teamID. Used for primary visibility channels (teamID = Approval team) and
+// per-team channel-requests (teamID = that team). Fail-closed on API errors.
+func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamID string) {
+	if ch == nil || teamID == "" {
 		return
 	}
 	const perPage = 100
 	for page := 0; page < 50; page++ {
 		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
 		if appErr != nil {
-			p.API.LogWarn("primary team admin visibility: GetChannelMembers failed",
+			p.API.LogWarn("approval channel: GetChannelMembers failed during demotion eviction",
 				"channel_id", ch.Id, "error", appErr.Error())
 			return
 		}
@@ -893,10 +974,10 @@ func (p *Plugin) evictStaleMembersFromPrimaryVisibilityChannel(ch *model.Channel
 			if user.IsSystemAdmin() {
 				continue
 			}
-			tm, tmErr := p.API.GetTeamMember(approvalTeamID, m.UserId)
+			tm, tmErr := p.API.GetTeamMember(teamID, m.UserId)
 			if tmErr != nil {
 				// Fail closed on API errors so a brief outage does not mass-evict.
-				// Not-found means they are not an Approval-team Team Admin → evict.
+				// Not-found means they are not a Team Admin of this team → evict.
 				if !isNotFound(tmErr) {
 					continue
 				}
@@ -904,12 +985,12 @@ func (p *Plugin) evictStaleMembersFromPrimaryVisibilityChannel(ch *model.Channel
 				continue
 			}
 			if delErr := p.API.DeleteChannelMember(ch.Id, m.UserId); delErr != nil {
-				p.API.LogWarn("primary team admin visibility: failed to evict demoted member",
+				p.API.LogWarn("approval channel: failed to evict demoted member",
 					"channel_id", ch.Id, "user_id", m.UserId, "error", delErr.Error())
 				continue
 			}
-			p.API.LogInfo("primary team admin visibility: evicted demoted Team Admin",
-				"user_id", m.UserId, "username", user.Username, "channel_id", ch.Id)
+			p.API.LogInfo("approval channel: evicted demoted Team Admin",
+				"user_id", m.UserId, "username", user.Username, "team_id", teamID, "channel_id", ch.Id)
 		}
 		if len(members) < perPage {
 			return
@@ -1075,19 +1156,31 @@ func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, 
 
 // adoptApprovalChannel reports whether ch, a channel with an approval
 // channel's name that the plugin's bot didn't create, can be used anyway: it
-// must be live and private, its creator a System Admin or a bot this plugin
-// owns, and the plugin's bot must be able to join it. Anyone else's channel
-// stays unused, so a user or another plugin's bot can't pre-create the name
-// and read the approval cards.
+// must be live (private, or public that we can convert), and either (a) its
+// creator is a System Admin / Request Hub bot, or (b) this plugin's bot is
+// already a member. Crimson had mattermost-channel-requests created as
+// public by the pre-rename bot — those must become private before cards
+// post, or tickets fall back to System Admin DMs. Anyone else's channel
+// stays unused.
 func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
-	if ch.Type != model.ChannelTypePrivate || ch.DeleteAt != 0 || ch.CreatorId == "" {
+	if ch.DeleteAt != 0 {
+		return false
+	}
+	if ch.Type != model.ChannelTypePrivate && ch.Type != model.ChannelTypeOpen {
 		return false
 	}
 	if _, adopted := p.adoptedApprovalChannels.Load(ch.Id); adopted {
 		return true
 	}
-	if !p.trustedApprovalChannelCreator(ch.CreatorId) {
+	trustedCreator := ch.CreatorId != "" && p.trustedApprovalChannelCreator(ch.CreatorId)
+	alreadyMember := p.botIsChannelMember(ch.Id)
+	if !trustedCreator && !alreadyMember {
 		return false
+	}
+	if ch.Type == model.ChannelTypeOpen {
+		if !p.makeApprovalChannelPrivate(ch) {
+			return false
+		}
 	}
 	if err := p.ensureTeamMember(ch.TeamId, p.botUserID); err != nil {
 		p.API.LogWarn("could not add the bot to the team of an existing approval channel",
@@ -1100,15 +1193,77 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 		return false
 	}
 	p.adoptedApprovalChannels.Store(ch.Id, true)
-	p.API.LogInfo("adopted an existing approval channel: the name matched and a System Admin or this plugin's bot created it",
-		"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
+	if trustedCreator {
+		p.API.LogInfo("adopted an existing approval channel: the name matched and a System Admin or this plugin's bot created it",
+			"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
+	} else {
+		p.API.LogInfo("adopted an existing approval channel: the bot was already a member (creator no longer trusted — e.g. after a plugin re-upload)",
+			"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
+	}
 	return true
 }
 
+// makeApprovalChannelPrivate converts a public approval channel to private so
+// tickets are not visible to the whole team. Updates ch.Type on success.
+func (p *Plugin) makeApprovalChannelPrivate(ch *model.Channel) bool {
+	if ch == nil || ch.Type == model.ChannelTypePrivate {
+		return true
+	}
+	private := ch.DeepCopy()
+	private.Type = model.ChannelTypePrivate
+	updated, appErr := p.API.UpdateChannel(private)
+	if appErr != nil {
+		p.API.LogWarn("could not convert a public approval channel to private",
+			"channel_id", ch.Id, "channel_name", ch.Name, "error", appErr.Error())
+		return false
+	}
+	if updated != nil {
+		ch.Type = updated.Type
+	} else {
+		ch.Type = model.ChannelTypePrivate
+	}
+	p.API.LogInfo("converted a public approval channel to private",
+		"channel_id", ch.Id, "channel_name", ch.Name)
+	return true
+}
+
+// botIsChannelMember reports whether the plugin bot is an active member of
+// channelID. Used to re-adopt approval channels after the creating bot user
+// was replaced or purged.
+func (p *Plugin) botIsChannelMember(channelID string) bool {
+	if channelID == "" || p.botUserID == "" {
+		return false
+	}
+	m, appErr := p.API.GetChannelMember(channelID, p.botUserID)
+	return appErr == nil && m != nil
+}
+
+// requestHubBotUsername is the EnsureBotUser username.
+const requestHubBotUsername = "mattermost-request-hub"
+
+// legacyRequestHubBotUsername is the bot username before the Request Hub
+// rename (crimson still has channels created by this account).
+const legacyRequestHubBotUsername = "mattermost-requests"
+
+// legacyRequestHubPluginID is the plugin ID before the 0.5.0 rename. Bots
+// that still list this as OwnerId created today's approval channels on
+// upgraded servers; refuse every other owner.
+const legacyRequestHubPluginID = "com.mattermostfederal.channel-requests"
+
 // trustedApprovalChannelCreator reports whether userID may have created an
-// approval channel the plugin adopts: a System Admin, or a bot this plugin
-// owns (its bot before the account was recreated). Other bots are refused.
+// approval channel the plugin adopts: a System Admin, or a Request Hub bot
+// (current or legacy plugin ID / username). Other bots are refused.
 func (p *Plugin) trustedApprovalChannelCreator(userID string) bool {
+	if userID == "" {
+		return false
+	}
+	// Check bot ownership first so a deactivated / renamed-plugin creator
+	// still counts — GetUser alone is not enough after a re-upload.
+	if bot, appErr := p.API.GetBot(userID, true); appErr == nil && bot != nil {
+		if isRequestHubBotOwner(bot.OwnerId) {
+			return true
+		}
+	}
 	creator, appErr := p.API.GetUser(userID)
 	if appErr != nil || creator == nil {
 		return false
@@ -1116,11 +1271,13 @@ func (p *Plugin) trustedApprovalChannelCreator(userID string) bool {
 	if creator.IsSystemAdmin() {
 		return true
 	}
-	if !creator.IsBot {
-		return false
-	}
-	bot, appErr := p.API.GetBot(userID, true)
-	return appErr == nil && bot != nil && bot.OwnerId == manifest.Id
+	// Username check covers bots whose OwnerId we already matched above, and
+	// the rare case GetBot failed but GetUser still returns the bot user.
+	return creator.IsBot && (creator.Username == requestHubBotUsername || creator.Username == legacyRequestHubBotUsername)
+}
+
+func isRequestHubBotOwner(ownerID string) bool {
+	return ownerID == manifest.Id || ownerID == legacyRequestHubPluginID
 }
 
 // ensureTeamMember adds userID to the team unless they're already an active

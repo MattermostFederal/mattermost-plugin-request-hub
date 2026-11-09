@@ -53,19 +53,20 @@ function readSiblingSetting(props: Props, key: string): string {
 
 function normalizeMode(raw: string): Mode {
     switch ((raw || '').toLowerCase().trim()) {
-    case 'usergroup':
-    case 'group':
-    case 'groups':
-    case 'user_group':
-    case 'user-group':
-        return 'usergroup';
+    case 'attribute':
+    case 'abac':
+    case 'cpa':
+    case 'user_attribute':
+    case 'user-attribute':
+        return 'attribute';
     case 'system_admin':
     case 'system-admin':
     case 'sysadmin':
     case 'admin':
         return 'system_admin';
     default:
-        return 'attribute';
+        // Empty / usergroup aliases / unknown → shipped default.
+        return 'usergroup';
     }
 }
 
@@ -141,8 +142,8 @@ export const TwoStepApproverModeSetting: React.FC<Props> = (props) => {
                 onChange={(e) => commit(props, e.target.value)}
                 aria-label='Bot/webhook two-step approver mode'
             >
-                <option value='attribute'>{'User Attributes (ABAC / CPA)'}</option>
                 <option value='usergroup'>{'User Groups'}</option>
+                <option value='attribute'>{'User Attributes (ABAC / CPA)'}</option>
                 <option value='system_admin'>{'System Admins only'}</option>
             </select>
             <p className='help-text'>

@@ -124,8 +124,8 @@ type configuration struct {
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how the security reviewer is identified:
-	//   "attribute"    — User Attributes / ABAC (CPA); default
-	//   "usergroup"    — Mattermost user groups (LDAP/synced, or custom when allowed) by name
+	//   "usergroup"    — Mattermost user groups by name (shipped default)
+	//   "attribute"    — User Attributes / ABAC (CPA)
 	//   "system_admin" — System Admins only (setup backup; one admin can do both steps)
 	// The system step is always System Admins — there is no system pool setting.
 	TwoStepApproverMode string
@@ -141,8 +141,8 @@ type configuration struct {
 	SecurityApproverGroup string
 
 	// AllowCustomApproverGroups lets a custom (not LDAP or plugin-synced)
-	// group be the security approver group. Off by default: a custom group's
-	// managers choose its members.
+	// group be the security approver group. On by default so initial setup
+	// can use a custom security-approvers group without LDAP.
 	AllowCustomApproverGroups bool
 
 	// --- 6. Agents ---

@@ -139,6 +139,7 @@ func TestPromoteTeamAdmins_ReseedsPerTeamApprovalChannel(t *testing.T) {
 	existing := &model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-req", TeamId: "team1", Name: "mattermost-channel-requests"}
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(existing, nil)
 	api.On("AddChannelMember", "ch-req", "u1").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "ch-req", 0, 100).Return(model.ChannelMembers{}, nil).Maybe()
 	api.On("GetChannelSidebarCategories", "u1", "team1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
 			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},

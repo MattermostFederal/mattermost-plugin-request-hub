@@ -116,7 +116,7 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("system admin auto-qualifies for the system step", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSystem)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -128,7 +128,7 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("system admin does NOT auto-qualify for the security step", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		// No security attribute value set for this admin.
 		mockApproverAttr(api, "security_approver", "a", []*model.PropertyValue{})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSecurity)
@@ -139,7 +139,7 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("non-admin with the security attribute qualifies for the security step", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		mockApproverAttr(api, "security_approver", "u2", []*model.PropertyValue{{Value: json.RawMessage(`"yes"`)}})
 		ok, err := p.canApproveStep(&model.User{Id: "u2"}, stepSecurity)
 		require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("missing CPA field: configured security pool still blocks system admin", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 		api.On("GetPropertyFieldByName", "grp", "", "security_approver").Return(
 			nil, model.NewAppError("GetPropertyFieldByName", "app.property_field.get_by_name.app_error", nil, "not found", 404),
@@ -164,7 +164,7 @@ func TestCanApproveStep(t *testing.T) {
 	t.Run("blank security attribute uses default and still blocks system admin", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute})
 		mockApproverAttr(api, defaultSecurityApproverAttribute, "a", []*model.PropertyValue{})
 		ok, err := p.canApproveStep(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSecurity)
 		require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestCanApproveStep(t *testing.T) {
 		api := &plugintest.API{}
 		api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe()
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(
 			nil, model.NewAppError("GetPropertyGroup", "app.error", nil, "unavailable", 500),
 		)
@@ -311,7 +311,7 @@ func TestApplyTwoStepApproval(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		// Empty security attribute used to solo-complete; that was the dual-role bug.
-		p.setConfiguration(&configuration{SecurityApproverAttribute: ""})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: ""})
 
 		admin := &model.User{Id: "admin", Roles: model.SystemAdminRoleId}
 		state := p.applyTwoStepApproval(twoStepState{}, stepSecurity, admin, 100)
@@ -338,7 +338,7 @@ func TestApplyTwoStepApproval(t *testing.T) {
 	t.Run("configured security attribute keeps two-person rule for system admin", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 
 		admin := &model.User{Id: "admin", Roles: model.SystemAdminRoleId}
 		state := p.applyTwoStepApproval(twoStepState{}, stepSecurity, admin, 100)
@@ -350,7 +350,7 @@ func TestApplyTwoStepApproval(t *testing.T) {
 	t.Run("healthy security pool keeps two-person rule", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "security_approver"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "security_approver"})
 		mockApproverAttr(api, "security_approver", "sec", []*model.PropertyValue{{Value: json.RawMessage(`"yes"`)}})
 
 		sec := &model.User{Id: "sec"}
@@ -374,7 +374,7 @@ func TestApplyTwoStepApproval(t *testing.T) {
 }
 
 func TestTwoStepMode(t *testing.T) {
-	require.Equal(t, twoStepModeAttribute, (&configuration{}).twoStepMode())
+	require.Equal(t, twoStepModeUserGroup, (&configuration{}).twoStepMode())
 	require.Equal(t, twoStepModeAttribute, (&configuration{TwoStepApproverMode: "attribute"}).twoStepMode())
 	require.Equal(t, twoStepModeUserGroup, (&configuration{TwoStepApproverMode: "usergroup"}).twoStepMode())
 	require.Equal(t, twoStepModeUserGroup, (&configuration{TwoStepApproverMode: "group"}).twoStepMode())

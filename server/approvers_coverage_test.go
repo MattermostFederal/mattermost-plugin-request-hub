@@ -42,7 +42,7 @@ func TestApproverStep_String(t *testing.T) {
 }
 
 func TestApproverPoolNames_UnknownStepIsEmpty(t *testing.T) {
-	cfg := &configuration{
+	cfg := &configuration{TwoStepApproverMode: twoStepModeAttribute, 
 		SecurityApproverAttribute: "sec",
 		SecurityApproverGroup:     "@sec-group",
 	}
@@ -103,7 +103,7 @@ func TestCanApproveStepViaGroup_BlankConfigUsesDefaultAndBlocksSystemAdmin(t *te
 func TestCanApproveStepViaAttribute_SystemStepIsNeverViaAttribute(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "sec"})
 
 	ok, err := p.canApproveStepViaAttribute(&model.User{Id: "a", Roles: model.SystemAdminRoleId}, stepSystem)
 	require.NoError(t, err)
@@ -420,7 +420,7 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 	t.Run("attribute holder is kept", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "sec"})
 		mockApproverAttr(api, "sec", "u1", []*model.PropertyValue{{Value: json.RawMessage(`"yes"`)}})
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
 		require.True(t, retain)
@@ -430,7 +430,7 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 	t.Run("attribute non-holder is dropped", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "sec"})
 		mockApproverAttr(api, "sec", "u1", nil)
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
 		require.False(t, retain)
@@ -440,7 +440,7 @@ func TestShouldRetainTwoStepApprovalChannelAccess_Cases(t *testing.T) {
 	t.Run("attribute lookup failure is not confident", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "sec"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "sec"})
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, testAppErr("unavailable"))
 		retain, confident := p.shouldRetainTwoStepApprovalChannelAccess(&model.User{Id: "u1"}, "")
 		require.False(t, retain)
@@ -547,7 +547,8 @@ func TestListGroupMemberIDsByGroupID_FailureKeepsEarlierPages(t *testing.T) {
 	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(page, nil)
 	api.On("GetGroupMemberUsers", "gid", 1, 100).Return(nil, testAppErr("failed"))
 	ids := p.listGroupMemberIDsByGroupID("gid", "label")
-	require.Len(t, ids, 99)
+	// Cap is 75; first page had 99 usable IDs but listing stops at the cap.
+	require.Len(t, ids, 75)
 }
 
 func TestEvictStaleMembersFromTwoStepChannel_FailurePaths(t *testing.T) {
@@ -650,7 +651,7 @@ func TestReconcileTwoStepAccessForUser_LookupFailureKeepsMembership(t *testing.T
 	api := &plugintest.API{}
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", SecurityApproverAttribute: "sec"})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, ApprovalTeam: "appteam", SecurityApproverAttribute: "sec"})
 	approvalChannels(api)
 	api.On("GetTeamMember", "tid", "u1").Return(nil, testAppErr("missing"))
 	api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(nil, testAppErr("unavailable"))
@@ -687,7 +688,7 @@ func TestListTwoStepApproverUserIDs_DedupesAndSkipsBlank(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
 		// Both pools read the same attribute, so every holder appears twice.
-		p.setConfiguration(&configuration{SecurityApproverAttribute: "shared"})
+		p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, SecurityApproverAttribute: "shared"})
 		api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 		api.On("GetPropertyFieldByName", "grp", "", "shared").Return(adminField("fld", "grp"), nil)
 		api.On("SearchPropertyValues", "grp", mock.Anything).Return([]*model.PropertyValue{
@@ -710,7 +711,7 @@ func TestReconcileTwoStepApproverChannels_SkipsBotUser(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	p.setConfiguration(&configuration{ApprovalTeam: "appteam", SecurityApproverAttribute: "sec"})
+	p.setConfiguration(&configuration{TwoStepApproverMode: twoStepModeAttribute, ApprovalTeam: "appteam", SecurityApproverAttribute: "sec"})
 	approvalChannels(api)
 	api.On("GetPropertyGroup", model.AccessControlPropertyGroupName).Return(&model.PropertyGroup{ID: "grp"}, nil)
 	api.On("GetPropertyFieldByName", "grp", "", "sec").Return(adminField("fld", "grp"), nil)
