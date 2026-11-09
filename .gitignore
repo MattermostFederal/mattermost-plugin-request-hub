@@ -49,6 +49,4 @@ webapp/.v8-ct-coverage/
 webapp/.v8-unit-coverage/
 webapp/.v8-merged-coverage/
 
-# Local-only status/SOP drafts (do not commit)
-docs/status-requests/
 .coderabbit-reviews/

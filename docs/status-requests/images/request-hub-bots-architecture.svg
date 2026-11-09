@@ -1,0 +1,346 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1980" viewBox="0 0 1400 1980" role="img" aria-label="Request Hub and bots architecture with information direction tables">
+  <defs>
+    <style>
+      .title { font: 700 28px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+      .subtitle { font: 400 14px system-ui, -apple-system, Segoe UI, sans-serif; fill: #555; }
+      .h2 { font: 700 16px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+      .lane { font: 700 13px system-ui, -apple-system, Segoe UI, sans-serif; fill: #333; }
+      .box { font: 600 13px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+      .box-sub { font: 400 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #555; }
+      .arrow-lbl { font: 500 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #333; }
+      .step { font: 700 12px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+      .legend { font: 500 12px system-ui, -apple-system, Segoe UI, sans-serif; fill: #333; }
+      .th { font: 700 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+      .td { font: 400 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #222; }
+      .footer { font: 500 13px system-ui, -apple-system, Segoe UI, sans-serif; fill: #1a1a1a; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="1980" fill="#ffffff"/>
+  <rect x="24" y="24" width="1352" height="1932" rx="8" fill="#ffffff" stroke="#d0d0d0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="48" y="64" class="title">Request Hub + bots  architecture &amp; information directions</text>
+  <text x="48" y="88" class="subtitle">SOP / Security review picture · who talks to whom · which way information moves</text>
+
+  <!-- ========== SECTION 1: WHERE THINGS LIVE ========== -->
+  <text x="48" y="128" class="h2">1. Where things live</text>
+
+  <!-- People lane -->
+  <rect x="48" y="144" width="300" height="280" rx="6" fill="#eef6ff" stroke="#8ab4e0"/>
+  <text x="64" y="168" class="lane">PEOPLE</text>
+  <rect x="68" y="184" width="260" height="48" rx="4" fill="#ffffff" stroke="#5b8fc7"/>
+  <text x="198" y="213" text-anchor="middle" class="box">Requester / owner</text>
+  <rect x="68" y="248" width="260" height="48" rx="4" fill="#ffffff" stroke="#5b8fc7"/>
+  <text x="198" y="277" text-anchor="middle" class="box">Security approver</text>
+  <rect x="68" y="312" width="260" height="48" rx="4" fill="#ffffff" stroke="#5b8fc7"/>
+  <text x="198" y="341" text-anchor="middle" class="box">System Admin</text>
+
+  <!-- Mattermost lane -->
+  <rect x="420" y="144" width="360" height="280" rx="6" fill="#eefaf4" stroke="#7cbc9a"/>
+  <text x="436" y="168" class="lane">MATTERMOST SERVER</text>
+  <rect x="440" y="190" width="320" height="72" rx="4" fill="#ffffff" stroke="#3d9b6e"/>
+  <text x="600" y="220" text-anchor="middle" class="box">Request Hub plugin</text>
+  <text x="600" y="240" text-anchor="middle" class="box-sub">forms · two-step · tickets · history · exports</text>
+  <rect x="440" y="286" width="320" height="96" rx="4" fill="#ffffff" stroke="#3d9b6e"/>
+  <text x="600" y="320" text-anchor="middle" class="box">Mattermost core</text>
+  <text x="600" y="340" text-anchor="middle" class="box-sub">bots · tokens · webhooks</text>
+  <text x="600" y="358" text-anchor="middle" class="box-sub">teams · channels · audit log</text>
+
+  <!-- Outside lane -->
+  <rect x="860" y="144" width="492" height="280" rx="6" fill="#f4f4f4" stroke="#b0b0b0"/>
+  <text x="876" y="168" class="lane">OUTSIDE MATTERMOST</text>
+  <rect x="880" y="184" width="220" height="48" rx="4" fill="#ffffff" stroke="#888"/>
+  <text x="990" y="213" text-anchor="middle" class="box">Integration / script</text>
+  <rect x="1120" y="184" width="212" height="48" rx="4" fill="#ffffff" stroke="#888"/>
+  <text x="1226" y="213" text-anchor="middle" class="box">Secrets vault / CI</text>
+  <rect x="880" y="256" width="220" height="48" rx="4" fill="#ffffff" stroke="#888"/>
+  <text x="990" y="285" text-anchor="middle" class="box">SIEM</text>
+  <rect x="1120" y="256" width="212" height="48" rx="4" fill="#ffffff" stroke="#888"/>
+  <text x="1226" y="285" text-anchor="middle" class="box">Groups / IdP</text>
+  <text x="1106" y="360" text-anchor="middle" class="box-sub">RH does not see vault contents or app API calls</text>
+
+  <!-- Arrows people -> RH -->
+  <path d="M328 208 H420" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="374" y="200" text-anchor="middle" class="arrow-lbl">form + T&amp;Cs</text>
+  <path d="M328 272 H420" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="374" y="264" text-anchor="middle" class="arrow-lbl">security decide</text>
+  <path d="M328 336 H420" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="374" y="328" text-anchor="middle" class="arrow-lbl">final decide</text>
+
+  <!-- RH -> MM core -->
+  <path d="M600 262 V286" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="612" y="278" class="arrow-lbl">create / join / token</text>
+
+  <!-- RH -> requester (secret DM) curved left -->
+  <path d="M440 210 C380 210 360 150 198 184" stroke="#3d9b6e" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="300" y="158" class="arrow-lbl" fill="#2d7a54">secret DM (~72h)</text>
+
+  <!-- IdP -> Security -->
+  <path d="M1120 280 C900 300 500 300 328 272" stroke="#888" stroke-width="1.25" stroke-dasharray="4 3" fill="none" marker-end="url(#arrow)"/>
+  <text x="720" y="308" class="arrow-lbl" fill="#666">who can approve</text>
+
+  <!-- MM -> SIEM -->
+  <path d="M760 334 H880" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="820" y="326" text-anchor="middle" class="arrow-lbl">audit forward</text>
+
+  <!-- Requester -> Vault -->
+  <path d="M198 184 C198 120 1226 100 1226 184" stroke="#888" stroke-width="1.25" stroke-dasharray="4 3" fill="none" marker-end="url(#arrow)"/>
+  <text x="700" y="118" text-anchor="middle" class="arrow-lbl" fill="#666">store secret (process)</text>
+
+  <!-- App -> MM -->
+  <path d="M880 208 C780 208 780 360 760 360" stroke="#888" stroke-width="1.25" stroke-dasharray="4 3" fill="none" marker-end="url(#arrow)"/>
+  <text x="820" y="250" class="arrow-lbl" fill="#666">API + token</text>
+
+  <!-- ========== SECTION 2: FLOW ========== -->
+  <text x="48" y="468" class="h2">2. Bot request flow (left ’ right)</text>
+
+  <!-- Step boxes -->
+  <!-- 1 -->
+  <rect x="48" y="488" width="148" height="70" rx="6" fill="#e8f4ff" stroke="#5b8fc7"/>
+  <text x="122" y="518" text-anchor="middle" class="step">1. Form + T&amp;Cs</text>
+  <text x="122" y="538" text-anchor="middle" class="box-sub">Requester ’ RH</text>
+  <!-- 2 -->
+  <path d="M196 523 H214" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="214" y="488" width="148" height="70" rx="6" fill="#e8f4ff" stroke="#5b8fc7"/>
+  <text x="288" y="518" text-anchor="middle" class="step">2. Ticket card</text>
+  <text x="288" y="538" text-anchor="middle" class="box-sub">RH ’ channel</text>
+  <!-- 3 -->
+  <path d="M362 523 H380" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="380" y="488" width="148" height="70" rx="6" fill="#fff4e0" stroke="#d4a04a"/>
+  <text x="454" y="518" text-anchor="middle" class="step">3. Security</text>
+  <text x="454" y="538" text-anchor="middle" class="box-sub">Approve ’ RH</text>
+  <!-- 4 -->
+  <path d="M528 523 H546" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="546" y="488" width="148" height="70" rx="6" fill="#fff4e0" stroke="#d4a04a"/>
+  <text x="620" y="518" text-anchor="middle" class="step">4. SysAdmin</text>
+  <text x="620" y="538" text-anchor="middle" class="box-sub">different person</text>
+  <!-- 5 -->
+  <path d="M694 523 H712" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="712" y="488" width="148" height="70" rx="6" fill="#e8ffe8" stroke="#3d9b6e"/>
+  <text x="786" y="518" text-anchor="middle" class="step">5. Create bot</text>
+  <text x="786" y="538" text-anchor="middle" class="box-sub">RH ’ Mattermost</text>
+  <!-- 6 -->
+  <path d="M860 523 H878" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="878" y="488" width="148" height="70" rx="6" fill="#e8ffe8" stroke="#3d9b6e"/>
+  <text x="952" y="518" text-anchor="middle" class="step">6. Secret DM</text>
+  <text x="952" y="538" text-anchor="middle" class="box-sub">RH ’ requester</text>
+  <!-- 7 -->
+  <path d="M1026 523 H1044" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="1044" y="488" width="148" height="70" rx="6" fill="#eeeeee" stroke="#999"/>
+  <text x="1118" y="518" text-anchor="middle" class="step">7. Vault secret</text>
+  <text x="1118" y="538" text-anchor="middle" class="box-sub">owner process</text>
+  <!-- 8 -->
+  <path d="M1192 523 H1210" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="1210" y="488" width="142" height="70" rx="6" fill="#eeeeee" stroke="#999"/>
+  <text x="1281" y="518" text-anchor="middle" class="step">8. App API</text>
+  <text x="1281" y="538" text-anchor="middle" class="box-sub">RH does not see</text>
+
+  <!-- Legend -->
+  <rect x="48" y="576" width="14" height="14" fill="#e8f4ff" stroke="#5b8fc7"/>
+  <text x="70" y="588" class="legend">Request / ticket</text>
+  <rect x="200" y="576" width="14" height="14" fill="#fff4e0" stroke="#d4a04a"/>
+  <text x="222" y="588" class="legend">Human approval</text>
+  <rect x="360" y="576" width="14" height="14" fill="#e8ffe8" stroke="#3d9b6e"/>
+  <text x="382" y="588" class="legend">Create / deliver</text>
+  <rect x="520" y="576" width="14" height="14" fill="#eeeeee" stroke="#999"/>
+  <text x="542" y="588" class="legend">After Request Hub</text>
+
+  <!-- ========== SECTION 3: FLOW TABLE ========== -->
+  <text x="48" y="630" class="h2">3. Flow steps  direction of information</text>
+
+  <!-- Table header -->
+  <rect x="48" y="646" width="1304" height="28" fill="#e8e8e8" stroke="#bbb"/>
+  <text x="60" y="665" class="th">Step</text>
+  <text x="120" y="665" class="th">Who ’ Whom</text>
+  <text x="420" y="665" class="th">Direction</text>
+  <text x="560" y="665" class="th">What moves</text>
+
+  <!-- Rows -->
+  <g>
+    <rect x="48" y="674" width="1304" height="26" fill="#f7fbff" stroke="#ddd"/>
+    <text x="60" y="692" class="td">1</text>
+    <text x="120" y="692" class="td">Requester ’ Request Hub</text>
+    <text x="420" y="692" class="td">In</text>
+    <text x="560" y="692" class="td">Purpose, endpoint, hosting/location, home team/channel, T&amp;Cs accept</text>
+  </g>
+  <g>
+    <rect x="48" y="700" width="1304" height="26" fill="#ffffff" stroke="#ddd"/>
+    <text x="60" y="718" class="td">2</text>
+    <text x="120" y="718" class="td">Request Hub ’ approval channel</text>
+    <text x="420" y="718" class="td">Out (ticket)</text>
+    <text x="560" y="718" class="td">Approval card + declaration (no secrets)</text>
+  </g>
+  <g>
+    <rect x="48" y="726" width="1304" height="26" fill="#fffaf0" stroke="#ddd"/>
+    <text x="60" y="744" class="td">3</text>
+    <text x="120" y="744" class="td">Security ’ Request Hub</text>
+    <text x="420" y="744" class="td">In</text>
+    <text x="560" y="744" class="td">Security decision</text>
+  </g>
+  <g>
+    <rect x="48" y="752" width="1304" height="26" fill="#fffaf0" stroke="#ddd"/>
+    <text x="60" y="770" class="td">4</text>
+    <text x="120" y="770" class="td">Different SysAdmin ’ Request Hub</text>
+    <text x="420" y="770" class="td">In</text>
+    <text x="560" y="770" class="td">Final decision</text>
+  </g>
+  <g>
+    <rect x="48" y="778" width="1304" height="26" fill="#f3faf3" stroke="#ddd"/>
+    <text x="60" y="796" class="td">5</text>
+    <text x="120" y="796" class="td">Request Hub ’ Mattermost</text>
+    <text x="420" y="796" class="td">Out (API)</text>
+    <text x="560" y="796" class="td">Create member bot, join home, optional token/webhooks</text>
+  </g>
+  <g>
+    <rect x="48" y="804" width="1304" height="26" fill="#f3faf3" stroke="#ddd"/>
+    <text x="60" y="822" class="td">6</text>
+    <text x="120" y="822" class="td">Request Hub ’ requester DM</text>
+    <text x="420" y="822" class="td">Out (secret)</text>
+    <text x="560" y="822" class="td">Token / webhook URLs; message deleted ~72h</text>
+  </g>
+  <g>
+    <rect x="48" y="830" width="1304" height="26" fill="#f5f5f5" stroke="#ddd"/>
+    <text x="60" y="848" class="td">7</text>
+    <text x="120" y="848" class="td">Requester ’ vault / CI</text>
+    <text x="420" y="848" class="td">Out of MM</text>
+    <text x="560" y="848" class="td">Secret storage (RH does not see vault)</text>
+  </g>
+  <g>
+    <rect x="48" y="856" width="1304" height="26" fill="#f5f5f5" stroke="#ddd"/>
+    <text x="60" y="874" class="td">8</text>
+    <text x="120" y="874" class="td">App ’ Mattermost</text>
+    <text x="420" y="874" class="td">Out of RH path</text>
+    <text x="560" y="874" class="td">API calls with token (RH blind; SIEM may see)</text>
+  </g>
+
+  <!-- ========== SECTION 4: EVIDENCE ========== -->
+  <text x="48" y="922" class="h2">4. Evidence / audit directions</text>
+
+  <rect x="48" y="940" width="220" height="64" rx="6" fill="#fff4e0" stroke="#d4a04a"/>
+  <text x="158" y="968" text-anchor="middle" class="box">RH event</text>
+  <text x="158" y="986" text-anchor="middle" class="box-sub">submit · step · approve · &</text>
+
+  <path d="M268 960 H310" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="289" y="952" text-anchor="middle" class="arrow-lbl">write</text>
+  <rect x="310" y="940" width="200" height="64" rx="6" fill="#eef6ff" stroke="#5b8fc7"/>
+  <text x="410" y="968" text-anchor="middle" class="box">Plugin history</text>
+  <text x="410" y="986" text-anchor="middle" class="box-sub">KV store</text>
+
+  <path d="M268 984 H310" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="530" y="940" width="200" height="64" rx="6" fill="#eefaf4" stroke="#3d9b6e"/>
+  <path d="M268 972 C400 1010 480 972 530 972" stroke="#333" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="410" y="1008" text-anchor="middle" class="arrow-lbl">write</text>
+  <text x="630" y="968" text-anchor="middle" class="box">Server audit log</text>
+  <text x="630" y="986" text-anchor="middle" class="box-sub">requesthub_*</text>
+
+  <path d="M730 972 H772" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="751" y="964" text-anchor="middle" class="arrow-lbl">forward</text>
+  <rect x="772" y="940" width="160" height="64" rx="6" fill="#f4f4f4" stroke="#888"/>
+  <text x="852" y="976" text-anchor="middle" class="box">SIEM</text>
+
+  <path d="M410 1004 V1030" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="420" y="1024" class="arrow-lbl">export</text>
+  <rect x="310" y="1030" width="200" height="48" rx="6" fill="#ffffff" stroke="#5b8fc7"/>
+  <text x="410" y="1050" text-anchor="middle" class="box">Export working copy</text>
+  <text x="410" y="1066" text-anchor="middle" class="box-sub">histories · inventory · forensics</text>
+
+  <path d="M510 1054 H560" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="560" y="1030" width="200" height="48" rx="6" fill="#ffffff" stroke="#888"/>
+  <text x="660" y="1059" text-anchor="middle" class="box">SysAdmin / Security</text>
+
+  <!-- Evidence table -->
+  <rect x="48" y="1100" width="1304" height="28" fill="#e8e8e8" stroke="#bbb"/>
+  <text x="60" y="1119" class="th">Path</text>
+  <text x="320" y="1119" class="th">Direction</text>
+  <text x="460" y="1119" class="th">Carries</text>
+  <text x="920" y="1119" class="th">Does not carry</text>
+
+  <rect x="48" y="1128" width="1304" height="26" fill="#ffffff" stroke="#ddd"/>
+  <text x="60" y="1146" class="td">RH ’ plugin history</text>
+  <text x="320" y="1146" class="td">Write</text>
+  <text x="460" y="1146" class="td">Events, declaration, compliance hash/time</text>
+  <text x="920" y="1146" class="td">Token / webhook secrets</text>
+
+  <rect x="48" y="1154" width="1304" height="26" fill="#f9f9f9" stroke="#ddd"/>
+  <text x="60" y="1172" class="td">RH ’ server audit log</text>
+  <text x="320" y="1172" class="td">Write</text>
+  <text x="460" y="1172" class="td">requesthub_* events</text>
+  <text x="920" y="1172" class="td">Secrets</text>
+
+  <rect x="48" y="1180" width="1304" height="26" fill="#ffffff" stroke="#ddd"/>
+  <text x="60" y="1198" class="td">Audit log ’ SIEM</text>
+  <text x="320" y="1198" class="td">Forward (env)</text>
+  <text x="460" y="1198" class="td">Same audit records (system of record)</text>
+  <text x="920" y="1198" class="td">Secrets</text>
+
+  <rect x="48" y="1206" width="1304" height="26" fill="#f9f9f9" stroke="#ddd"/>
+  <text x="60" y="1224" class="td">RH ’ export</text>
+  <text x="320" y="1224" class="td">Pull on request</text>
+  <text x="460" y="1224" class="td">Histories, inventory, forensics snapshot</text>
+  <text x="920" y="1224" class="td">Full token API call stream</text>
+
+  <!-- ========== SECTION 5: MASTER DIRECTION TABLE ========== -->
+  <text x="48" y="1270" class="h2">5. All major arrows</text>
+
+  <rect x="48" y="1286" width="1304" height="28" fill="#e8e8e8" stroke="#bbb"/>
+  <text x="60" y="1305" class="th">From</text>
+  <text x="240" y="1305" class="th">To</text>
+  <text x="460" y="1305" class="th">Dir</text>
+  <text x="520" y="1305" class="th">Info / action</text>
+  <text x="1000" y="1305" class="th">Enforced by</text>
+
+  <!-- rows compressed -->
+  <g font-size="11">
+    <rect x="48" y="1314" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1330" class="td">Requester</text><text x="240" y="1330" class="td">Request Hub</text><text x="460" y="1330" class="td">’</text><text x="520" y="1330" class="td">Bot form + T&amp;Cs</text><text x="1000" y="1330" class="td">RH</text>
+    <rect x="48" y="1338" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1354" class="td">IdP / groups</text><text x="240" y="1354" class="td">Security pool</text><text x="460" y="1354" class="td">’</text><text x="520" y="1354" class="td">Who may do security step</text><text x="1000" y="1354" class="td">Config + staffing</text>
+    <rect x="48" y="1362" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1378" class="td">Security</text><text x="240" y="1378" class="td">Request Hub</text><text x="460" y="1378" class="td">’</text><text x="520" y="1378" class="td">Security Approve / Refuse</text><text x="1000" y="1378" class="td">RH two-step</text>
+    <rect x="48" y="1386" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1402" class="td">SysAdmin</text><text x="240" y="1402" class="td">Request Hub</text><text x="460" y="1402" class="td">’</text><text x="520" y="1402" class="td">Final Approve (different person)</text><text x="1000" y="1402" class="td">RH two-step</text>
+    <rect x="48" y="1410" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1426" class="td">Request Hub</text><text x="240" y="1426" class="td">Approval channel</text><text x="460" y="1426" class="td">’</text><text x="520" y="1426" class="td">Ticket card + thread</text><text x="1000" y="1426" class="td">RH</text>
+    <rect x="48" y="1434" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1450" class="td">Request Hub</text><text x="240" y="1450" class="td">Mattermost APIs</text><text x="460" y="1450" class="td">’</text><text x="520" y="1450" class="td">Create bot, membership, token, webhooks</text><text x="1000" y="1450" class="td">RH on final approve</text>
+    <rect x="48" y="1458" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1474" class="td">Mattermost</text><text x="240" y="1474" class="td">Bot principal</text><text x="460" y="1474" class="td">’</text><text x="520" y="1474" class="td">Bot user, roles, token object</text><text x="1000" y="1474" class="td">Mattermost</text>
+    <rect x="48" y="1482" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1498" class="td">Request Hub</text><text x="240" y="1498" class="td">Requester DM</text><text x="460" y="1498" class="td">’</text><text x="520" y="1498" class="td">Secret delivery (short-lived)</text><text x="1000" y="1498" class="td">RH</text>
+    <rect x="48" y="1506" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1522" class="td">Requester</text><text x="240" y="1522" class="td">Vault / CI</text><text x="460" y="1522" class="td">’</text><text x="520" y="1522" class="td">Store secret</text><text x="1000" y="1522" class="td">Process / owners</text>
+    <rect x="48" y="1530" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1546" class="td">App / script</text><text x="240" y="1546" class="td">Mattermost API</text><text x="460" y="1546" class="td">’</text><text x="520" y="1546" class="td">Runtime use of token</text><text x="1000" y="1546" class="td">Owners; RH blind</text>
+    <rect x="48" y="1554" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1570" class="td">Request Hub</text><text x="240" y="1570" class="td">History + audit</text><text x="460" y="1570" class="td">’</text><text x="520" y="1570" class="td">Evidence trail</text><text x="1000" y="1570" class="td">RH (+ audit on)</text>
+    <rect x="48" y="1578" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1594" class="td">Audit log</text><text x="240" y="1594" class="td">SIEM</text><text x="460" y="1594" class="td">’</text><text x="520" y="1594" class="td">Long-term record</text><text x="1000" y="1594" class="td">Environment / Security</text>
+    <rect x="48" y="1602" width="1304" height="24" fill="#ffffff" stroke="#ddd"/><text x="60" y="1618" class="td">SysAdmin</text><text x="240" y="1618" class="td">Export request</text><text x="460" y="1618" class="td">”</text><text x="520" y="1618" class="td">Inventory / forensics / histories</text><text x="1000" y="1618" class="td">RH (prefer 2nd SA)</text>
+    <rect x="48" y="1626" width="1304" height="24" fill="#f9f9f9" stroke="#ddd"/><text x="60" y="1642" class="td">SysAdmin Console</text><text x="240" y="1642" class="td">Mattermost</text><text x="460" y="1642" class="td">’</text><text x="520" y="1642" class="td">Break-glass bot create (bypasses RH)</text><text x="1000" y="1642" class="td">Process only</text>
+  </g>
+
+  <!-- ========== SECTION 6: OWNERSHIP ========== -->
+  <text x="48" y="1690" class="h2">6. What each box owns</text>
+
+  <rect x="48" y="1706" width="1304" height="28" fill="#e8e8e8" stroke="#bbb"/>
+  <text x="60" y="1725" class="th">Box</text>
+  <text x="240" y="1725" class="th">Owns</text>
+  <text x="860" y="1725" class="th">Does not own</text>
+
+  <rect x="48" y="1734" width="1304" height="36" fill="#ffffff" stroke="#ddd"/>
+  <text x="60" y="1756" class="td">Request Hub</text>
+  <text x="240" y="1756" class="td">Gate, two-step, declaration, ticket, create-on-approve, secret DM, history/exports</text>
+  <text x="860" y="1756" class="td">Runtime API, vault, SIEM, blocking Console create</text>
+
+  <rect x="48" y="1770" width="1304" height="36" fill="#f9f9f9" stroke="#ddd"/>
+  <text x="60" y="1792" class="td">Mattermost</text>
+  <text x="240" y="1792" class="td">Bot identity, tokens, webhooks, teams/channels, server audit log</text>
+  <text x="860" y="1792" class="td">Purpose / T&amp;Cs / ARB judgement</text>
+
+  <rect x="48" y="1806" width="1304" height="36" fill="#ffffff" stroke="#ddd"/>
+  <text x="60" y="1828" class="td">Security</text>
+  <text x="240" y="1828" class="td">Pool staffing, security review, policy text, SIEM as record, offboarding</text>
+  <text x="860" y="1828" class="td">Day-to-day app code</text>
+
+  <rect x="48" y="1842" width="1304" height="36" fill="#f9f9f9" stroke="#ddd"/>
+  <text x="60" y="1864" class="td">Owners / Devs</text>
+  <text x="240" y="1864" class="td">Accurate form, vaulting, app behaviour, footprint, rotate/retire</text>
+  <text x="860" y="1864" class="td">Approving their own request</text>
+
+  <!-- One-liner -->
+  <rect x="48" y="1900" width="1304" height="40" rx="6" fill="#eef6ff" stroke="#5b8fc7"/>
+  <text x="700" y="1925" text-anchor="middle" class="footer">Form in ’ security in ’ SysAdmin in ’ Mattermost create out ’ secret DM out ’ vault out ’ app API out (RH stops at the DM)</text>
+</svg>
