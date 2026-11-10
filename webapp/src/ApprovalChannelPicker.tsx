@@ -146,7 +146,7 @@ export const TeamPicker: React.FC<Props> = (props) => {
                     </option>
                 ))}
             </select>
-            <small style={{opacity: 0.6}}>{'Team where the plugin creates approval channels (channel, bot, webhook, team, audit). Required for the approval workflow. Blank = tickets fall back to System Admin DMs.'}</small>
+            <small style={{opacity: 0.6}}>{'Team where the plugin creates approval channels (channel, bot, webhook, team, audit). Required for bot, webhook, team, and audit tickets. Blank = those fall back to System Admin DMs. Channel / Channel Admin requests can still use a per-team mattermost-channel-requests channel when Per-team approval channels is on.'}</small>
         </div>
     );
 };

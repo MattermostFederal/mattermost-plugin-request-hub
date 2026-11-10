@@ -36,6 +36,45 @@ func TestCapHistoriesEvents_StopsAtLimitAndMarksTruncation(t *testing.T) {
 	require.Len(t, exact[1].Events, 2)
 }
 
+func TestCapHistoriesEvents_MarksTruncationAtHistoryBoundary(t *testing.T) {
+	// Cap lands on the last event of history a; history b still has eligible events.
+	in := []requestHistory{
+		{RequestID: "a", Events: []auditEvent{{At: 1}, {At: 2}}},
+		{RequestID: "b", Events: []auditEvent{{At: 3}}},
+	}
+	out, truncated := capHistoriesEvents(in, auditExportFilter{}, 2)
+	require.True(t, truncated)
+	require.Len(t, out, 1)
+	require.Equal(t, "a", out[0].RequestID)
+	require.Len(t, out[0].Events, 2)
+}
+
+func TestBuildHistoryExport_CSVMarksTruncationAtHistoryBoundary(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	prevH, prevE := historyExportMaxHistories, historyExportMaxEvents
+	historyExportMaxHistories = 10
+	historyExportMaxEvents = 2
+	t.Cleanup(func() {
+		historyExportMaxHistories = prevH
+		historyExportMaxEvents = prevE
+	})
+
+	h1, _ := json.Marshal(requestHistory{RequestID: "r1", Kind: "bot", CreatedAt: 1, UpdatedAt: 2, Events: []auditEvent{{At: 1}, {At: 2}}})
+	h2, _ := json.Marshal(requestHistory{RequestID: "r2", Kind: "bot", CreatedAt: 3, UpdatedAt: 4, Events: []auditEvent{{At: 3}}})
+	api.On("KVList", 0, historyListPageSize).Return([]string{kvHistoryPrefix + "r1", kvHistoryPrefix + "r2"}, nil)
+	api.On("KVGet", kvHistoryPrefix+"r1").Return(h1, nil)
+	api.On("KVGet", kvHistoryPrefix+"r2").Return(h2, nil)
+
+	exp, err := p.buildHistoryExport(auditExportFilter{Format: "csv", Kind: "bot"}, "test")
+	require.NoError(t, err)
+	require.Equal(t, true, exp.detail["truncated"])
+	require.Contains(t, string(exp.data), "TRUNCATED")
+}
+
 func TestListHistoriesForExport_KeepsNewestAndMarksTruncation(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)

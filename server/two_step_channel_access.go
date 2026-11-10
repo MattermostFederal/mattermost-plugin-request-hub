@@ -46,7 +46,10 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 		p.evictStalePrimaryTeamAdminChannelMembers()
 		p.evictStalePerTeamApprovalChannelMembers()
 	}
-	// Run once now — Schedule waits for the first interval.
+	// Immediate pass on every node at activation (Schedule waits for the first
+	// interval). Overlap with the cluster job and OnActivate sync is intentional:
+	// those paths are idempotent (CAS seed ledger) and we prefer a fresh pass
+	// over delaying until the first interval on a single node.
 	go run()
 	job, err := cluster.Schedule(p.API, twoStepChannelReconcileJobKey, cluster.MakeWaitForInterval(twoStepChannelReconcileInterval), run)
 	if err != nil {
@@ -342,6 +345,26 @@ func (p *Plugin) addUserToApprovalChannel(ch *model.Channel, userID string) {
 				"team_id", ch.TeamId, "user_id", userID, "error", appErr.Error())
 		}
 	}
+	p.addChannelMemberAndCategory(ch, userID)
+}
+
+// addUserToApprovalChannelIfTeamMember adds userID to ch only when they are
+// already an active member of ch's team. Used for SysAdmin visibility on login
+// so we do not silently join them to the Approval team.
+func (p *Plugin) addUserToApprovalChannelIfTeamMember(ch *model.Channel, userID string) {
+	if ch == nil || userID == "" {
+		return
+	}
+	if ch.TeamId != "" {
+		m, appErr := p.API.GetTeamMember(ch.TeamId, userID)
+		if appErr != nil || m == nil || m.DeleteAt != 0 {
+			return
+		}
+	}
+	p.addChannelMemberAndCategory(ch, userID)
+}
+
+func (p *Plugin) addChannelMemberAndCategory(ch *model.Channel, userID string) {
 	if _, appErr := p.API.AddChannelMember(ch.Id, userID); appErr != nil {
 		p.API.LogWarn("two-step channel access: failed to add channel member",
 			"channel_id", ch.Id, "user_id", userID, "error", appErr.Error())

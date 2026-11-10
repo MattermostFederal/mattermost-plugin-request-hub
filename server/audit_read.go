@@ -610,7 +610,8 @@ eventLoop:
 			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
 				continue
 			}
-			// Cap reached: another eligible event proves truncation.
+			// Cap reached only after seeing another eligible event, including
+			// when the cap landed on a history boundary.
 			if events >= historyExportMaxEvents {
 				eventsTruncated = true
 				break eventLoop
@@ -627,6 +628,13 @@ eventLoop:
 	if histTruncated || eventsTruncated {
 		_ = cw.Write(csvRecord("TRUNCATED", "", "", "", "", "", "", "", "",
 			fmt.Sprintf("export capped at %d histories / %d events", historyExportMaxHistories, historyExportMaxEvents), "", ""))
+		out.detail = map[string]any{
+			"truncated":     true,
+			"history_limit": historyExportMaxHistories,
+			"event_limit":   historyExportMaxEvents,
+			"histories_cut": histTruncated,
+			"events_cut":    eventsTruncated,
+		}
 	}
 	cw.Flush()
 	if err := cw.Error(); err != nil {

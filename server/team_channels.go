@@ -656,14 +656,19 @@ func (p *Plugin) placeChannelMembersInManagedCategory(ch *model.Channel) int {
 // per-team channel-requests channel when PerTeamApprovalChannels is on and the
 // team has at least one local approver. Used after team create and after Team
 // Admin promotion — both paths where membership/roles change without a join hook.
-// When the team is the primary Approval team, also reseeds Team Admin visibility
-// across all primary ticket channels (bot/webhook/team/audit included).
+// When the team is the primary Approval team, a full primary visibility resync
+// runs in the background so approval responses are not blocked on a full team
+// scan. Callers that promote specific users should also seed those users
+// synchronously via ensurePrimaryTeamAdminVisibilityForUser.
 func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
 	if teamID == "" {
 		return
 	}
 	if approval, err := p.approvalTeam(); err == nil && approval != nil && approval.Id == teamID {
-		p.syncPrimaryTeamAdminVisibility()
+		go func() {
+			defer p.logRecoveredPanic("primary team admin visibility sync after admin change")
+			p.syncPrimaryTeamAdminVisibility()
+		}()
 	}
 	if !p.getConfiguration().PerTeamApprovalChannels {
 		return
@@ -689,7 +694,8 @@ func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
 
 // primaryTicketChannels returns the shared ticket channels on the primary
 // Approval team (root, bot, webhook, team-creation, audit), creating them if
-// needed. Used for setup-time ensure and Team Admin visibility seeding.
+// needed. Used for setup-time ensure. Prefer primaryTicketChannelsForVisibility
+// on login/join paths to avoid the System Admin sidebar sweep.
 func (p *Plugin) primaryTicketChannels() []*model.Channel {
 	var out []*model.Channel
 	for _, ensure := range []func() *model.Channel{
@@ -697,6 +703,24 @@ func (p *Plugin) primaryTicketChannels() []*model.Channel {
 		p.ensureBotApprovalChannel,
 		p.ensureWebhookApprovalChannel,
 		p.ensureTeamCreationApprovalChannel,
+		p.ensureAuditChannel,
+	} {
+		if ch := ensure(); ch != nil {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// primaryTicketChannelsForVisibility is the login/join SysAdmin path: ensures
+// channels exist without forceTicketChannelCategory on team-requests.
+func (p *Plugin) primaryTicketChannelsForVisibility() []*model.Channel {
+	var out []*model.Channel
+	for _, ensure := range []func() *model.Channel{
+		p.ensureRootApprovalChannel,
+		p.ensureBotApprovalChannel,
+		p.ensureWebhookApprovalChannel,
+		p.ensureTeamCreationApprovalChannelForVisibility,
 		p.ensureAuditChannel,
 	} {
 		if ch := ensure(); ch != nil {
@@ -760,14 +784,26 @@ func (p *Plugin) addPrimaryTeamAdminsToChannel(channelID string) {
 // primaryVisibilityChannels are primary ticket channels where demoted
 // plugin-seeded Team Admins are evicted (root / team-creation / audit).
 // Bot/webhook are excluded: security-pool members also belong there.
+// Lookup-only: eviction must not create channels or run the System Admin
+// sidebar sweep that ensureTeamCreationApprovalChannel triggers.
 func (p *Plugin) primaryVisibilityChannels() []*model.Channel {
+	return p.lookupPrimaryNamedChannels([]string{
+		"mattermost-channel-requests",
+		"mattermost-team-requests",
+		"mattermost-audit-requests",
+	})
+}
+
+// lookupPrimaryNamedChannels returns existing primary-team approval channels
+// by name without creating them.
+func (p *Plugin) lookupPrimaryNamedChannels(names []string) []*model.Channel {
+	team, err := p.approvalTeam()
+	if err != nil || team == nil {
+		return nil
+	}
 	var out []*model.Channel
-	for _, ensure := range []func() *model.Channel{
-		p.ensureRootApprovalChannel,
-		p.ensureTeamCreationApprovalChannel,
-		p.ensureAuditChannel,
-	} {
-		if ch := ensure(); ch != nil {
+	for _, name := range names {
+		if ch, _ := p.lookupApprovalChannel(team.Id, name); ch != nil {
 			out = append(out, ch)
 		}
 	}
@@ -777,6 +813,8 @@ func (p *Plugin) primaryVisibilityChannels() []*model.Channel {
 // primaryTAVisibilityChannels returns the primary channels Approval-team Team
 // Admins are seeded into for watch-only visibility. Gated by the same flags
 // that control whether those TAs may approve the related request types.
+// Uses ensure without the System Admin sidebar sweep on team-requests —
+// placement for the seeded user is handled by seedTAVisibility.
 func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
 	cfg := p.getConfiguration()
 	var out []*model.Channel
@@ -786,7 +824,7 @@ func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
 		}
 	}
 	if cfg.AllowApprovalTeamAdminsForTeamRequests {
-		if ch := p.ensureTeamCreationApprovalChannel(); ch != nil {
+		if ch := p.ensureTeamCreationApprovalChannelForVisibility(); ch != nil {
 			out = append(out, ch)
 		}
 	}
@@ -796,6 +834,17 @@ func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
 		}
 	}
 	return out
+}
+
+// ensureTeamCreationApprovalChannelForVisibility ensures the team-requests
+// channel exists for membership seeding without forceTicketChannelCategory
+// (which scans every System Admin's sidebar).
+func (p *Plugin) ensureTeamCreationApprovalChannelForVisibility() *model.Channel {
+	return p.ensureNamedApprovalChannel(
+		"mattermost-team-requests",
+		"Mattermost: Team Requests",
+		"Team creation requests — System Admin review required.",
+	)
 }
 
 // seedTAVisibility adds userID to ch and records that the plugin seeded them
@@ -859,8 +908,11 @@ func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	}
 
 	if user.IsSystemAdmin() {
-		for _, ch := range p.primaryTicketChannels() {
-			p.addUserToApprovalChannel(ch, user.Id)
+		// Visibility only: add to existing ticket channels when already on the
+		// Approval team. Do not CreateTeamMember here — joining SysAdmins to
+		// the Approval team is not part of this login path.
+		for _, ch := range p.primaryTicketChannelsForVisibility() {
+			p.addUserToApprovalChannelIfTeamMember(ch, user.Id)
 		}
 		return
 	}

@@ -166,6 +166,15 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) (failed []string) {
 		if _, appErr := p.API.UpdateTeamMemberRoles(req.TeamID, userID, teamAdminRoles); appErr != nil {
 			p.API.LogWarn("failed to promote nominee to team admin", "team_id", req.TeamID, "user_id", userID, "error", appErr.Error())
 			failed = append(failed, userID)
+			continue
+		}
+		// When promoting on the Approval team, seed this admin into primary
+		// visibility channels immediately. Full resync (including eviction)
+		// runs in the background from syncTeamApprovalChannelAfterAdminChange.
+		if approval, err := p.approvalTeam(); err == nil && approval != nil && approval.Id == req.TeamID {
+			for _, ch := range p.primaryTAVisibilityChannels() {
+				p.seedTAVisibility(ch, userID)
+			}
 		}
 	}
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)

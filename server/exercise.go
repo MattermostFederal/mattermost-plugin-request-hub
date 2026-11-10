@@ -1864,6 +1864,7 @@ func (p *Plugin) removeExerciseRequest(kind, requestID string) (bool, error) {
 		}
 		return false, nil
 	}
+	p.untrackOpenRequestKey(key)
 	p.releasePending(kind, rec.RequesterID, requestID)
 	p.recordEvent(auditEntry{
 		Event: eventExerciseRemoved, Kind: kind, RequestID: requestID, RequesterID: rec.RequesterID, Exercise: true,

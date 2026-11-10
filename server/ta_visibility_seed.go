@@ -99,11 +99,18 @@ func (p *Plugin) loadTAVisibilitySeededSet(channelID string) map[string]struct{}
 		return out
 	}
 	raw, appErr := p.API.KVGet(taVisibilitySeededKey(channelID))
-	if appErr != nil || raw == nil {
+	if appErr != nil {
+		p.API.LogWarn("TA visibility seed: failed to load ledger",
+			"channel_id", channelID, "error", appErr.Error())
+		return out
+	}
+	if raw == nil {
 		return out
 	}
 	var ids []string
 	if err := json.Unmarshal(raw, &ids); err != nil {
+		p.API.LogWarn("TA visibility seed: unreadable ledger",
+			"channel_id", channelID, "error", err.Error())
 		return out
 	}
 	for _, id := range ids {

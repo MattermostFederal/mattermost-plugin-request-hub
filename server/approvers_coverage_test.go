@@ -540,17 +540,17 @@ func TestListGroupMemberIDsByGroupID_FailureKeepsEarlierPages(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	// Stay under securityPoolMaxMembers so the second-page failure path is
-	// reached (a full 100-user page would hit the cap first).
-	page := make([]*model.User, 40)
-	for i := range page {
+	// Full page so pagination continues, but fewer than securityPoolMaxMembers
+	// non-nil users so the page-one failure path is reached (not the member cap).
+	page := make([]*model.User, 100)
+	for i := 0; i < 50; i++ {
 		page[i] = &model.User{Id: "u"}
 	}
-	page[0] = nil
 	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(page, nil)
 	api.On("GetGroupMemberUsers", "gid", 1, 100).Return(nil, testAppErr("failed"))
 	ids := p.listGroupMemberIDsByGroupID("gid", "label")
-	require.Len(t, ids, 39)
+	require.Len(t, ids, 50)
+	api.AssertCalled(t, "GetGroupMemberUsers", "gid", 1, 100)
 }
 
 func TestListGroupMemberIDsByGroupID_HitsMemberCap(t *testing.T) {
