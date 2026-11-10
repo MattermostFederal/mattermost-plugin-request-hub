@@ -105,16 +105,8 @@ func (p *Plugin) OnActivate() error {
 		// Re-sync System Admins into every approval channel on activation so
 		// admins promoted after initial install are added without manual
 		// intervention. addSystemAdminsToChannel is idempotent.
-		for _, ensure := range []func() *model.Channel{
-			p.ensureRootApprovalChannel,
-			p.ensureBotApprovalChannel,
-			p.ensureWebhookApprovalChannel,
-			p.ensureTeamCreationApprovalChannel,
-			p.ensureAuditChannel,
-		} {
-			if ch := ensure(); ch != nil {
-				p.addSystemAdminsToChannel(ch.Id)
-			}
+		for _, ch := range p.primaryTicketChannels() {
+			p.addSystemAdminsToChannel(ch.Id)
 		}
 		// Security / system pool members (usergroup or ABAC) into bot + webhook
 		// private channels so they can see and click Approve.

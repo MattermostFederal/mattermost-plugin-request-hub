@@ -543,7 +543,7 @@ func TestListGroupMemberIDsByGroupID_FailureKeepsEarlierPages(t *testing.T) {
 	// Full page so pagination continues, but fewer than securityPoolMaxMembers
 	// non-nil users so the page-one failure path is reached (not the member cap).
 	page := make([]*model.User, 100)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		page[i] = &model.User{Id: "u"}
 	}
 	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(page, nil)
