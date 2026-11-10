@@ -345,6 +345,41 @@ func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testin
 	api.AssertCalled(t, "UpdateChannel", mock.Anything)
 }
 
+func TestLookupApprovalChannel_NoAdoptionWhenPublicToPrivateFails(t *testing.T) {
+	p, api := newApprovalTeamPlugin(t)
+	open := &model.Channel{
+		Id: "c9", TeamId: "t1", Name: "approvals",
+		Type: model.ChannelTypeOpen, CreatorId: "legacy-bot",
+	}
+	api.On("GetChannelByName", "t1", "approvals", true).Return(open, nil)
+	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
+		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID,
+	}, nil)
+	api.On("UpdateChannel", mock.Anything).Return(nil, testAppErr("cannot convert"))
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestLookupApprovalChannel_AdoptsWhenCreatorDeactivatedAndBotIsMember(t *testing.T) {
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("old-user"), nil)
+	api.On("GetBot", "old-user", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "old-user").Return(&model.User{Id: "old-user", DeleteAt: 1}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
+	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.NotNil(t, ch)
+	require.Equal(t, "c9", ch.Id)
+	require.False(t, taken)
+}
+
 // otherApprovalChannel is a live private channel named like an approval
 // channel that the plugin's bot didn't create.
 func otherApprovalChannel(creatorID string) *model.Channel {

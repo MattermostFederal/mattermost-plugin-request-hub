@@ -86,16 +86,30 @@ func (p *Plugin) clearTAVisibilitySeeded(channelID, userID string) {
 }
 
 func (p *Plugin) isTAVisibilitySeeded(channelID, userID string) bool {
-	if channelID == "" || userID == "" {
-		return false
+	_, ok := p.loadTAVisibilitySeededSet(channelID)[userID]
+	return ok
+}
+
+// loadTAVisibilitySeededSet returns the seeded user IDs for channelID as a
+// set. Callers that check many members should load once instead of KVGet
+// per user.
+func (p *Plugin) loadTAVisibilitySeededSet(channelID string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if channelID == "" {
+		return out
 	}
 	raw, appErr := p.API.KVGet(taVisibilitySeededKey(channelID))
 	if appErr != nil || raw == nil {
-		return false
+		return out
 	}
 	var ids []string
 	if err := json.Unmarshal(raw, &ids); err != nil {
-		return false
+		return out
 	}
-	return slices.Contains(ids, userID)
+	for _, id := range ids {
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out
 }

@@ -159,8 +159,9 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 		}
 		var keys []string
 		if err := json.Unmarshal(raw, &keys); err != nil {
+			// Invalidate and return — listRequestKeys rebuilds lazily. Avoid a
+			// second full scan on the store hot path.
 			p.invalidateOpenRequestIndex()
-			p.rebuildOpenRequestIndex()
 			return
 		}
 		if slices.Contains(keys, kvKey) {

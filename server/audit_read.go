@@ -581,21 +581,22 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	var buf bytes.Buffer
 	if f.Format == "json" {
 		capped, eventsTruncated := capHistoriesEvents(filtered, f, historyExportMaxEvents)
-		payload := any(capped)
+		// Always encode a JSON array so consumers can parse histories the same
+		// way whether or not the export was capped. Truncation is flagged in
+		// export.detail (audit event + X-Request-Hub-Export-Truncated header).
+		if err := json.NewEncoder(&buf).Encode(capped); err != nil {
+			return nil, err
+		}
+		out.count = len(capped)
 		if histTruncated || eventsTruncated {
-			payload = map[string]any{
+			out.detail = map[string]any{
 				"truncated":     true,
 				"history_limit": historyExportMaxHistories,
 				"event_limit":   historyExportMaxEvents,
 				"histories_cut": histTruncated,
 				"events_cut":    eventsTruncated,
-				"histories":     capped,
 			}
 		}
-		if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-			return nil, err
-		}
-		out.count = len(capped)
 		out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".json", "application/json"
 		return out, nil
 	}
@@ -712,6 +713,11 @@ func (p *Plugin) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 	})
 	w.Header().Set("Content-Type", export.contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+export.filename+`"`)
+	if export.detail != nil {
+		if truncated, _ := export.detail["truncated"].(bool); truncated {
+			w.Header().Set("X-Request-Hub-Export-Truncated", "true")
+		}
+	}
 	if _, err := w.Write(export.data); err != nil {
 		p.API.LogError("failed to write the audit export", "user_id", user.Id, "error", err.Error())
 	}

@@ -2,12 +2,20 @@ package main
 
 import (
 	"strings"
-	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 )
+
+// twoStepChannelReconcileJobKey is the cluster job name for the periodic
+// two-step / Team Admin visibility reconcile.
+const twoStepChannelReconcileJobKey = "two_step_channel_reconcile"
+
+// securityPoolMaxMembers caps usergroup / attribute security-pool listing so
+// a misconfigured LDAP sync cannot expand into a runaway scan.
+const securityPoolMaxMembers = 75
 
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
 // based on current pool / admin status. Mattermost has no plugin hook for
@@ -29,44 +37,33 @@ func (p *Plugin) UserHasLoggedIn(_ *plugin.Context, user *model.User) {
 
 // startTwoStepChannelReconciler periodically adds current pool members to the
 // bot/webhook channels and evicts demoted Team Admins from primary visibility
-// channels and per-team channel-requests. Cheap when groups resolve.
+// channels and per-team channel-requests. Runs on one cluster node at a time.
 func (p *Plugin) startTwoStepChannelReconciler() {
 	p.stopTwoStepChannelReconciler()
-	stop := make(chan struct{})
-	p.configurationLock.Lock()
-	p.twoStepSyncStop = stop
-	p.configurationLock.Unlock()
-
-	go func() {
-		defer p.logRecoveredPanic("two-step channel reconciler")
-		// Run once immediately — NewTicker only fires after the first interval.
+	run := func() {
+		defer p.logRecoveredPanic("two-step channel reconcile")
 		p.reconcileTwoStepApproverChannels()
 		p.evictStalePrimaryTeamAdminChannelMembers()
 		p.evictStalePerTeamApprovalChannelMembers()
-
-		ticker := time.NewTicker(twoStepChannelReconcileInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				p.reconcileTwoStepApproverChannels()
-				p.evictStalePrimaryTeamAdminChannelMembers()
-				p.evictStalePerTeamApprovalChannelMembers()
-			}
-		}
-	}()
+	}
+	// Run once now — Schedule waits for the first interval.
+	go run()
+	job, err := cluster.Schedule(p.API, twoStepChannelReconcileJobKey, cluster.MakeWaitForInterval(twoStepChannelReconcileInterval), run)
+	if err != nil {
+		p.API.LogError("failed to schedule two-step channel reconcile", "error", err.Error())
+		return
+	}
+	p.twoStepReconcileJob = job
 }
 
 func (p *Plugin) stopTwoStepChannelReconciler() {
-	p.configurationLock.Lock()
-	stop := p.twoStepSyncStop
-	p.twoStepSyncStop = nil
-	p.configurationLock.Unlock()
-	if stop != nil {
-		close(stop)
+	if p.twoStepReconcileJob == nil {
+		return
 	}
+	if err := p.twoStepReconcileJob.Close(); err != nil {
+		p.API.LogWarn("failed to stop two-step channel reconcile", "error", err.Error())
+	}
+	p.twoStepReconcileJob = nil
 }
 
 // reconcileTwoStepApproverChannels is the periodic path: group/attribute member
@@ -465,7 +462,6 @@ func (p *Plugin) listApproverGroupMemberIDs(groupName string) []string {
 
 func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 	const perPage = 100
-	const maxMembers = 75 // security pools are small; refuse runaway LDAP/group misconfig
 	var ids []string
 	for page := 0; ; page++ {
 		users, listErr := p.API.GetGroupMemberUsers(groupID, page, perPage)
@@ -479,10 +475,10 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 				continue
 			}
 			ids = append(ids, u.Id)
-			if len(ids) >= maxMembers {
+			if len(ids) >= securityPoolMaxMembers {
 				p.API.LogWarn("two-step channel access: group member listing hit member cap",
-					"group", label, "members", len(ids), "max_members", maxMembers)
-				return ids[:maxMembers]
+					"group", label, "members", len(ids), "max_members", securityPoolMaxMembers)
+				return ids[:securityPoolMaxMembers]
 			}
 		}
 		if len(users) < perPage {
@@ -514,7 +510,6 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 	}
 
 	const perPage = 100
-	const maxMembers = 75 // same cap as usergroup pools
 	var ids []string
 	var cursor model.PropertyValueSearchCursor
 	for {
@@ -536,10 +531,10 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 			if attributeValueIsSet(v.Value, field) {
 				ids = append(ids, v.TargetID)
-				if len(ids) >= maxMembers {
+				if len(ids) >= securityPoolMaxMembers {
 					p.API.LogWarn("two-step channel access: attribute member listing hit member cap",
-						"attr", attrName, "members", len(ids), "max_members", maxMembers)
-					return ids[:maxMembers]
+						"attr", attrName, "members", len(ids), "max_members", securityPoolMaxMembers)
+					return ids[:securityPoolMaxMembers]
 				}
 			}
 			cursor = model.PropertyValueSearchCursor{

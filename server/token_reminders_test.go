@@ -13,10 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubTokenReminderJob lets the reminder job started by OnActivate take its
-// cluster lock and find nothing to do.
+// stubTokenReminderJob lets cluster jobs started by OnActivate (token
+// reminders + two-step channel reconcile) take their locks and find nothing
+// to do.
 func stubTokenReminderJob(api *plugintest.API) {
-	isJobKey := mock.MatchedBy(func(key string) bool { return strings.HasSuffix(key, tokenReminderJobKey) })
+	isJobKey := mock.MatchedBy(func(key string) bool {
+		return strings.HasSuffix(key, tokenReminderJobKey) || strings.HasSuffix(key, twoStepChannelReconcileJobKey)
+	})
 	api.On("KVSetWithOptions", isJobKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", isJobKey, mock.Anything).Return(nil).Maybe()
 	api.On("KVList", mock.Anything, mock.Anything).Return([]string{}, nil).Maybe()

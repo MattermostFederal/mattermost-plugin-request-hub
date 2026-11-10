@@ -540,7 +540,9 @@ func TestListGroupMemberIDsByGroupID_FailureKeepsEarlierPages(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
 	p := newTestPlugin(api)
-	page := make([]*model.User, 100)
+	// Stay under securityPoolMaxMembers so the second-page failure path is
+	// reached (a full 100-user page would hit the cap first).
+	page := make([]*model.User, 40)
 	for i := range page {
 		page[i] = &model.User{Id: "u"}
 	}
@@ -548,8 +550,21 @@ func TestListGroupMemberIDsByGroupID_FailureKeepsEarlierPages(t *testing.T) {
 	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(page, nil)
 	api.On("GetGroupMemberUsers", "gid", 1, 100).Return(nil, testAppErr("failed"))
 	ids := p.listGroupMemberIDsByGroupID("gid", "label")
-	// Cap is 75; first page had 99 usable IDs but listing stops at the cap.
-	require.Len(t, ids, 75)
+	require.Len(t, ids, 39)
+}
+
+func TestListGroupMemberIDsByGroupID_HitsMemberCap(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	page := make([]*model.User, 100)
+	for i := range page {
+		page[i] = &model.User{Id: "u"}
+	}
+	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(page, nil)
+	ids := p.listGroupMemberIDsByGroupID("gid", "label")
+	require.Len(t, ids, securityPoolMaxMembers)
+	api.AssertNotCalled(t, "GetGroupMemberUsers", "gid", 1, 100)
 }
 
 func TestEvictStaleMembersFromTwoStepChannel_FailurePaths(t *testing.T) {

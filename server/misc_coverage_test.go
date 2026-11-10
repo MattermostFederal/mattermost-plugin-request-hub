@@ -469,8 +469,9 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 
 	// The System Admin is seeded into the approval channel.
 	api.AssertCalled(t, "AddChannelMember", "appch", "sa1")
-	// Per-team sweep, sidebar migration, and demotion eviction each list teams.
-	api.AssertNumberOfCalls(t, "GetTeams", 3)
+	// Per-team sweep, sidebar migration, demotion eviction, and the immediate
+	// two-step reconcile each list teams.
+	api.AssertNumberOfCalls(t, "GetTeams", 4)
 	api.AssertCalled(t, "SetProfileImage", "bot-user-id", icon)
 }
 

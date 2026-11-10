@@ -36,40 +36,59 @@ func TestCapHistoriesEvents_StopsAtLimitAndMarksTruncation(t *testing.T) {
 	require.Len(t, exact[1].Events, 2)
 }
 
-func TestListHistoriesForExport_CapsWithoutLoadingExtraMatch(t *testing.T) {
+func TestListHistoriesForExport_KeepsNewestAndMarksTruncation(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 
-	// Three matching histories; cap is exercised with a tiny helper override via
-	// building keys that loadHistory will miss (nil) except we stub KVGet per id.
-	// Use real loadHistory path: KVGet history_<id>.
-	const oldMax = historyExportMaxHistories
-	// Can't reassign const; instead stub only 2 pages worth and check truncated
-	// by returning 3 history keys while verifying we stop after cap via a
-	// local call with filter that matches all — use KV list of 3 and temporary
-	// approach: call with max by filtering. Cap is 500 so truncated won't trip
-	// with 3 rows. Unit-test the early-return path by checking helper behavior
-	// when filtered length already at cap: inject via listHistoriesForExport
-	// with many keys is heavy. Prefer testing the decision branch by mocking
-	// enough histories... Skip mega stub; capHistoriesEvents + match cover the
-	// export ceilings. Here verify paging + match only.
-	_ = oldMax
+	prev := historyExportMaxHistories
+	historyExportMaxHistories = 2
+	t.Cleanup(func() { historyExportMaxHistories = prev })
 
-	h1, _ := jsonMarshalHistory(t, requestHistory{RequestID: "r1", Kind: "bot", CreatedAt: 1, UpdatedAt: 1})
-	h2, _ := jsonMarshalHistory(t, requestHistory{RequestID: "r2", Kind: "bot", CreatedAt: 2, UpdatedAt: 2})
-	api.On("KVList", 0, historyListPageSize).Return([]string{kvHistoryPrefix + "r1", "noise", kvHistoryPrefix + "r2"}, nil)
+	h1, _ := json.Marshal(requestHistory{RequestID: "r1", Kind: "bot", CreatedAt: 1, UpdatedAt: 10})
+	h2, _ := json.Marshal(requestHistory{RequestID: "r2", Kind: "bot", CreatedAt: 2, UpdatedAt: 30})
+	h3, _ := json.Marshal(requestHistory{RequestID: "r3", Kind: "bot", CreatedAt: 3, UpdatedAt: 20})
+	api.On("KVList", 0, historyListPageSize).Return([]string{
+		kvHistoryPrefix + "r1", kvHistoryPrefix + "r2", kvHistoryPrefix + "r3",
+	}, nil)
 	api.On("KVGet", kvHistoryPrefix+"r1").Return(h1, nil)
 	api.On("KVGet", kvHistoryPrefix+"r2").Return(h2, nil)
+	api.On("KVGet", kvHistoryPrefix+"r3").Return(h3, nil)
 
 	got, truncated, err := p.listHistoriesForExport(auditExportFilter{Kind: "bot"})
 	require.NoError(t, err)
-	require.False(t, truncated)
+	require.True(t, truncated)
 	require.Len(t, got, 2)
+	require.Equal(t, "r2", got[0].RequestID) // newest UpdatedAt
+	require.Equal(t, "r3", got[1].RequestID)
 }
 
-func jsonMarshalHistory(t *testing.T, h requestHistory) ([]byte, error) {
-	t.Helper()
-	return json.Marshal(h)
+func TestBuildHistoryExport_JSONStaysArrayWhenTruncated(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	prevH, prevE := historyExportMaxHistories, historyExportMaxEvents
+	historyExportMaxHistories = 1
+	historyExportMaxEvents = 100
+	t.Cleanup(func() {
+		historyExportMaxHistories = prevH
+		historyExportMaxEvents = prevE
+	})
+
+	h1, _ := json.Marshal(requestHistory{RequestID: "r1", Kind: "bot", CreatedAt: 1, UpdatedAt: 1, Events: []auditEvent{{At: 1}}})
+	h2, _ := json.Marshal(requestHistory{RequestID: "r2", Kind: "bot", CreatedAt: 2, UpdatedAt: 2, Events: []auditEvent{{At: 2}}})
+	api.On("KVList", 0, historyListPageSize).Return([]string{kvHistoryPrefix + "r1", kvHistoryPrefix + "r2"}, nil)
+	api.On("KVGet", kvHistoryPrefix+"r1").Return(h1, nil)
+	api.On("KVGet", kvHistoryPrefix+"r2").Return(h2, nil)
+
+	exp, err := p.buildHistoryExport(auditExportFilter{Format: "json", Kind: "bot"}, "test")
+	require.NoError(t, err)
+	require.Equal(t, true, exp.detail["truncated"])
+
+	var decoded []requestHistory
+	require.NoError(t, json.Unmarshal(exp.data, &decoded), "truncated JSON must remain a histories array")
+	require.Len(t, decoded, 1)
 }

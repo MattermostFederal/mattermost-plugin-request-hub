@@ -42,8 +42,10 @@ type Plugin struct {
 	// requesters of the outcome.
 	botUserID string
 
-	// twoStepSyncStop cancels the periodic two-step channel reconciler.
-	twoStepSyncStop chan struct{}
+	// twoStepReconcileJob periodically syncs two-step pool membership and
+	// evicts demoted plugin-seeded Team Admins. Cluster-scheduled so only one
+	// node runs it.
+	twoStepReconcileJob *cluster.Job
 
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job

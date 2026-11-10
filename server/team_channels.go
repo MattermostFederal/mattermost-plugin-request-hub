@@ -998,8 +998,12 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 			break
 		}
 	}
+	seeded := p.loadTAVisibilitySeededSet(ch.Id)
+	if len(seeded) == 0 {
+		return
+	}
 	for _, userID := range memberIDs {
-		if !p.isTAVisibilitySeeded(ch.Id, userID) {
+		if _, ok := seeded[userID]; !ok {
 			continue
 		}
 		user, uErr := p.API.GetUser(userID)
@@ -1074,6 +1078,11 @@ func (p *Plugin) UserHasJoinedTeam(_ *plugin.Context, teamMember *model.TeamMemb
 		p.API.LogWarn("failed to add joining approver to approval channel",
 			"channel_id", ch.Id, "user_id", teamMember.UserId, "error", appErr.Error())
 		return
+	}
+	// Team Admins must be recorded as plugin-seeded so demotion eviction can
+	// remove them later (System Admins are not swept by that path).
+	if isTeamAdmin {
+		p.markTAVisibilitySeeded(ch.Id, teamMember.UserId)
 	}
 	p.addChannelToPermissionsCategory(teamMember.UserId, teamMember.TeamId, ch.Id)
 }

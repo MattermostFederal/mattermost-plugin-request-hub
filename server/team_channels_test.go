@@ -407,6 +407,9 @@ func TestUserHasJoinedTeam_AddsTeamAdminToApprovalChannel(t *testing.T) {
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Type: model.ChannelTypePrivate, CreatorId: "bot-user-id", Id: "ch-team1"}, nil)
 	api.On("AddChannelMember", "ch-team1", "u_ta").Return(&model.ChannelMember{}, nil)
+	// Seed ledger write so demotion eviction can remove this Team Admin later.
+	api.On("KVGet", taVisibilitySeededKey("ch-team1")).Return(nil, nil)
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-team1"), mock.Anything, mock.Anything).Return(true, nil)
 
 	// Already in managed category — no update needed.
 	api.On("GetChannelSidebarCategories", "u_ta", "team1").Return(&model.OrderedSidebarCategories{
@@ -421,6 +424,7 @@ func TestUserHasJoinedTeam_AddsTeamAdminToApprovalChannel(t *testing.T) {
 	}, &model.User{Id: "u_ta"})
 
 	api.AssertCalled(t, "AddChannelMember", "ch-team1", "u_ta")
+	api.AssertCalled(t, "KVCompareAndSet", taVisibilitySeededKey("ch-team1"), mock.Anything, mock.Anything)
 }
 
 func TestUserHasJoinedTeam_IgnoresPlainMember(t *testing.T) {

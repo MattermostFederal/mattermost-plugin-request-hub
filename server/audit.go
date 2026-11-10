@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,7 +31,8 @@ const historyListPageSize = 200
 // historyExportMaxHistories / historyExportMaxEvents bound a single histories
 // export so an unbounded KV store cannot OOM the node on download/approve.
 // Prefer filtering by date/request in the UI; these are hard ceilings only.
-const (
+// Vars (not consts) so unit tests can override the caps.
+var (
 	historyExportMaxHistories = 500
 	historyExportMaxEvents    = 20000
 )
@@ -685,11 +687,11 @@ func historyMatchesExportFilter(h requestHistory, f auditExportFilter) bool {
 	return true
 }
 
-// listHistoriesForExport pages history keys and keeps at most
-// historyExportMaxHistories matches. truncated is set when one more match
-// exists beyond the cap, without retaining that extra history.
+// listHistoriesForExport pages history keys, keeps matching histories, and
+// returns at most historyExportMaxHistories of the newest (by UpdatedAt, then
+// CreatedAt). truncated is true when more matches existed than the cap.
 func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []requestHistory, truncated bool, err error) {
-	filtered = make([]requestHistory, 0, 64)
+	matches := make([]requestHistory, 0, 64)
 	for page := 0; ; page++ {
 		keys, appErr := p.API.KVList(page, historyListPageSize)
 		if appErr != nil {
@@ -707,13 +709,20 @@ func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []request
 			if h == nil || !historyMatchesExportFilter(*h, f) {
 				continue
 			}
-			if len(filtered) >= historyExportMaxHistories {
-				return filtered, true, nil
-			}
-			filtered = append(filtered, *h)
+			matches = append(matches, *h)
 		}
 		if len(keys) < historyListPageSize {
-			return filtered, truncated, nil
+			break
 		}
 	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].UpdatedAt != matches[j].UpdatedAt {
+			return matches[i].UpdatedAt > matches[j].UpdatedAt
+		}
+		return matches[i].CreatedAt > matches[j].CreatedAt
+	})
+	if len(matches) > historyExportMaxHistories {
+		return matches[:historyExportMaxHistories], true, nil
+	}
+	return matches, false, nil
 }

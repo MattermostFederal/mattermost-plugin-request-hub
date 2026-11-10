@@ -129,7 +129,6 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 		var keys []string
 		if err := json.Unmarshal(raw, &keys); err != nil {
 			p.invalidateTokenExpiryIndex()
-			p.rebuildTokenExpiryIndex()
 			return
 		}
 		if slices.Contains(keys, key) {
