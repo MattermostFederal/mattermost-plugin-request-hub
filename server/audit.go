@@ -1,12 +1,12 @@
 package main
 
 import (
+	"container/heap"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"math/rand/v2"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -687,11 +687,14 @@ func historyMatchesExportFilter(h requestHistory, f auditExportFilter) bool {
 	return true
 }
 
-// listHistoriesForExport pages history keys, keeps matching histories, and
-// returns at most historyExportMaxHistories of the newest (by UpdatedAt, then
-// CreatedAt). truncated is true when more matches existed than the cap.
+// listHistoriesForExport pages history keys and keeps at most
+// historyExportMaxHistories newest matches (by UpdatedAt, then CreatedAt) in
+// a bounded min-heap so peak memory stays near the cap, not the full match
+// set. truncated is true when more matches existed than the cap.
 func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []requestHistory, truncated bool, err error) {
-	matches := make([]requestHistory, 0, 64)
+	capN := historyExportMaxHistories
+	kept := &historyExportHeap{}
+	heap.Init(kept)
 	for page := 0; ; page++ {
 		keys, appErr := p.API.KVList(page, historyListPageSize)
 		if appErr != nil {
@@ -709,20 +712,59 @@ func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []request
 			if h == nil || !historyMatchesExportFilter(*h, f) {
 				continue
 			}
-			matches = append(matches, *h)
+			if capN <= 0 {
+				truncated = true
+				continue
+			}
+			if kept.Len() < capN {
+				heap.Push(kept, *h)
+				continue
+			}
+			oldest := (*kept)[0]
+			if historyExportNewer(*h, oldest) {
+				heap.Pop(kept)
+				heap.Push(kept, *h)
+			}
+			truncated = true
 		}
 		if len(keys) < historyListPageSize {
 			break
 		}
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].UpdatedAt != matches[j].UpdatedAt {
-			return matches[i].UpdatedAt > matches[j].UpdatedAt
-		}
-		return matches[i].CreatedAt > matches[j].CreatedAt
-	})
-	if len(matches) > historyExportMaxHistories {
-		return matches[:historyExportMaxHistories], true, nil
+	out := make([]requestHistory, kept.Len())
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(kept).(requestHistory)
 	}
-	return matches, false, nil
+	return out, truncated, nil
+}
+
+// historyExportHeap is a min-heap of requestHistory by UpdatedAt, then
+// CreatedAt — oldest at index 0 so the export can drop it when a newer
+// match arrives past the cap.
+type historyExportHeap []requestHistory
+
+func (h historyExportHeap) Len() int { return len(h) }
+func (h historyExportHeap) Less(i, j int) bool {
+	if h[i].UpdatedAt != h[j].UpdatedAt {
+		return h[i].UpdatedAt < h[j].UpdatedAt
+	}
+	return h[i].CreatedAt < h[j].CreatedAt
+}
+func (h historyExportHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *historyExportHeap) Push(x any) {
+	*h = append(*h, x.(requestHistory))
+}
+func (h *historyExportHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func historyExportNewer(a, b requestHistory) bool {
+	if a.UpdatedAt != b.UpdatedAt {
+		return a.UpdatedAt > b.UpdatedAt
+	}
+	return a.CreatedAt > b.CreatedAt
 }

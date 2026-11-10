@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -455,7 +456,10 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("AddChannelMember", mock.Anything, "sa1").Return(&model.ChannelMember{}, nil).Maybe()
 	api.On("CreateTeamMember", "t1", "sa1").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("GetChannelSidebarCategories", "sa1", "t1").Return(nil, testAppErr("down")).Maybe()
-	api.On("GetTeams").Return([]*model.Team{}, nil)
+	var teamsCalls atomic.Int32
+	api.On("GetTeams").Return([]*model.Team{}, nil).Run(func(mock.Arguments) {
+		teamsCalls.Add(1)
+	})
 	api.On("GetUsersInChannel", "appch", "username", 0, 200).Return([]*model.User{}, nil)
 	// No SiteURL, so the docs bookmark sweep waits for a later activation.
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
@@ -470,8 +474,8 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	// The System Admin is seeded into the approval channel.
 	api.AssertCalled(t, "AddChannelMember", "appch", "sa1")
 	// Per-team sweep, sidebar migration, demotion eviction, and the immediate
-	// two-step reconcile each list teams.
-	api.AssertNumberOfCalls(t, "GetTeams", 4)
+	// two-step reconcile each list teams. Wait for the reconciler goroutine.
+	require.Eventually(t, func() bool { return teamsCalls.Load() >= 4 }, 5*time.Second, 10*time.Millisecond)
 	api.AssertCalled(t, "SetProfileImage", "bot-user-id", icon)
 }
 

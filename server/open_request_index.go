@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"slices"
 
 	"github.com/pkg/errors"
@@ -61,9 +60,14 @@ func (p *Plugin) loadOpenRequestIndex() ([]string, bool) {
 	if appErr != nil || raw == nil {
 		return nil, false
 	}
-	var keys []string
-	if err := json.Unmarshal(raw, &keys); err != nil {
-		p.API.LogWarn("open-request index unreadable; will rebuild", "error", err.Error())
+	keys, complete, ok := parseKeyIndex(raw)
+	if !ok {
+		p.API.LogWarn("open-request index unreadable; will rebuild")
+		return nil, false
+	}
+	// Partial blobs are not readable as a complete index — rebuild so we
+	// never serve a one-key (or otherwise incomplete) view as authoritative.
+	if !complete {
 		return nil, false
 	}
 	return keys, true
@@ -71,8 +75,8 @@ func (p *Plugin) loadOpenRequestIndex() ([]string, bool) {
 
 // persistOpenRequestIndexFromScan writes a scan result with CAS against prev
 // (the index value observed before the scan). On conflict it unions the scan
-// with the current index and retries, so concurrent track/untrack wins are
-// not wiped by a slower rebuild.
+// with the current index (complete or partial) and retries, so concurrent
+// track/untrack wins are not wiped by a slower rebuild.
 func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) error {
 	keys := scanned
 	if keys == nil {
@@ -80,7 +84,7 @@ func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) 
 	}
 	expected := prev
 	for range openRequestIndexCASAttempts {
-		data, err := json.Marshal(keys)
+		data, err := marshalCompleteKeyIndex(keys)
 		if err != nil {
 			return err
 		}
@@ -97,11 +101,13 @@ func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) 
 		}
 		var current []string
 		if raw != nil {
-			if err := json.Unmarshal(raw, &current); err != nil {
+			parsed, _, parseOK := parseKeyIndex(raw)
+			if !parseOK {
 				// Unreadable competing value — keep trying to replace it.
 				expected = raw
 				continue
 			}
+			current = parsed
 		}
 		keys = unionStringKeys(scanned, current)
 		expected = raw
@@ -138,8 +144,9 @@ func (p *Plugin) invalidateOpenRequestIndex() {
 
 // trackOpenRequestKey adds kvKey to the open-request index after a successful
 // store. Best-effort — a failed update invalidates the index so the next list
-// rebuilds rather than trusting a partial blob. Never invents a one-key index
-// when the blob is missing (that would hide every other open request).
+// rebuilds rather than trusting a partial blob. When the complete index is
+// missing, writes a partial blob (complete:false) so a concurrent rebuild
+// unions this key instead of publishing a scan that missed it.
 func (p *Plugin) trackOpenRequestKey(kvKey string) {
 	if kvKey == "" {
 		return
@@ -152,15 +159,24 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 			return
 		}
 		if raw == nil {
-			// Missing index: do not invent a one-key blob (that would hide
-			// every other open request). Leave it absent so the next list
-			// rebuilds from a full scan that includes this key.
-			return
+			data, err := marshalPartialKeyIndex([]string{kvKey})
+			if err != nil {
+				p.invalidateOpenRequestIndex()
+				return
+			}
+			ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, nil, data)
+			if casErr != nil {
+				p.API.LogWarn("open-request index: failed to add key", "key", kvKey, "error", casErr.Error())
+				p.invalidateOpenRequestIndex()
+				return
+			}
+			if ok {
+				return
+			}
+			continue
 		}
-		var keys []string
-		if err := json.Unmarshal(raw, &keys); err != nil {
-			// Invalidate and return — listRequestKeys rebuilds lazily. Avoid a
-			// second full scan on the store hot path.
+		keys, complete, ok := parseKeyIndex(raw)
+		if !ok {
 			p.invalidateOpenRequestIndex()
 			return
 		}
@@ -168,18 +184,24 @@ func (p *Plugin) trackOpenRequestKey(kvKey string) {
 			return
 		}
 		next := append(slices.Clone(keys), kvKey)
-		data, err := json.Marshal(next)
+		var data []byte
+		var err error
+		if complete {
+			data, err = marshalCompleteKeyIndex(next)
+		} else {
+			data, err = marshalPartialKeyIndex(next)
+		}
 		if err != nil {
 			p.invalidateOpenRequestIndex()
 			return
 		}
-		ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
+		casOK, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("open-request index: failed to add key", "key", kvKey, "error", casErr.Error())
 			p.invalidateOpenRequestIndex()
 			return
 		}
-		if ok {
+		if casOK {
 			return
 		}
 	}
@@ -202,8 +224,8 @@ func (p *Plugin) untrackOpenRequestKey(kvKey string) {
 		if raw == nil {
 			return
 		}
-		var keys []string
-		if err := json.Unmarshal(raw, &keys); err != nil {
+		keys, complete, ok := parseKeyIndex(raw)
+		if !ok {
 			return
 		}
 		idx := slices.Index(keys, kvKey)
@@ -211,16 +233,22 @@ func (p *Plugin) untrackOpenRequestKey(kvKey string) {
 			return
 		}
 		next := slices.Delete(slices.Clone(keys), idx, idx+1)
-		data, err := json.Marshal(next)
+		var data []byte
+		var err error
+		if complete {
+			data, err = marshalCompleteKeyIndex(next)
+		} else {
+			data, err = marshalPartialKeyIndex(next)
+		}
 		if err != nil {
 			return
 		}
-		ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
+		casOK, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("open-request index: failed to remove key", "key", kvKey, "error", casErr.Error())
 			return
 		}
-		if ok {
+		if casOK {
 			return
 		}
 	}

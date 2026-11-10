@@ -62,3 +62,43 @@ func TestRebuildTokenExpiryIndex_UsesCAS(t *testing.T) {
 
 	p.rebuildTokenExpiryIndex()
 }
+
+func TestTrackTokenExpiryKey_MissingIndexWritesPartial(t *testing.T) {
+	api := &plugintest.API{}
+	key := botTokenExpiryKey("tok1")
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.False(t, complete)
+			require.Equal(t, []string{key}, keys)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.trackTokenExpiryKey(key)
+}
+
+func TestPersistTokenExpiryIndexFromScan_ConflictMergesPartial(t *testing.T) {
+	api := &plugintest.API{}
+	scanned := []string{botTokenExpiryKey("old")}
+	partial, err := marshalPartialKeyIndex([]string{botTokenExpiryKey("new")})
+	require.NoError(t, err)
+
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
+	api.On("KVGet", kvTokenExpiryIndex).Return(partial, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{botTokenExpiryKey("old"), botTokenExpiryKey("new")}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.persistTokenExpiryIndexFromScan(nil, scanned))
+}

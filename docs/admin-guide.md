@@ -37,8 +37,8 @@ Bot and webhook requests require **two distinct approvals**: a security step, th
 
 | Mode | Security step | System step |
 |------|---------------|-------------|
-| **User Groups** (default) | Members of the **Security approver user group** | A System Admin other than the security approver |
-| **User Attributes** | Holders of the **Security approver attribute** | A System Admin other than the security approver |
+| **User Attributes** (default) | Holders of the **Security approver attribute** | A System Admin other than the security approver |
+| **User Groups** | Members of the **Security approver user group** | A System Admin other than the security approver |
 | **System Admins only** | System Admins | System Admins (one System Admin can complete both steps) |
 
 The System Console shows only the setting for the selected mode.
@@ -47,7 +47,7 @@ The System Console shows only the setting for the selected mode.
 |---------|---------|
 | **Security approver user group** | Used in User Groups mode. Default `security-approvers`; blank uses the default. LDAP and plugin-synced groups always count. A custom group counts only when **Allow custom approver groups** is on. System Admins do **not** cover this step. |
 | **Security approver attribute** | Used in User Attributes mode. User Attribute name (access_control group) that marks security approvers. Default `security_approver`; blank uses the default. System Admins do **not** cover this step. |
-| **Allow custom approver groups** | On by default so a custom `security-approvers` group works without LDAP. Anyone who can manage that group's members can make themselves a security approver, so restrict Custom Groups permissions (System Console > User Management > Permissions). Off: only LDAP and plugin-synced groups. |
+| **Allow custom approver groups** | Off by default: only LDAP and plugin-synced groups count. Turn it on to use a custom `security-approvers` group without LDAP. Anyone who can manage that group's members can then make themselves a security approver, so restrict Custom Groups permissions (System Console > User Management > Permissions). |
 
 Create and assign attributes in **System Console → User Management → Attributes**. If the security attribute or group doesn't exist or has no members, nobody can fill the security step and bot and webhook cards stay pending. The server log then says so (`the security approver group has no usable members` or `nobody holds the security approver attribute`) on activation and whenever the approver settings change.
 

@@ -450,7 +450,8 @@ func TestLookupApprovalChannel_PrivateChannelOfAnotherBotIsTaken(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p, api := newApprovalTeamPlugin(t)
 			api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
-			api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId, IsBot: true}, nil)
+			// GetUser only when GetBot fails; OwnerId mismatch refuses without it.
+			api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId, IsBot: true, Username: requestHubBotUsername}, nil).Maybe()
 			getBot(api)
 			api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 

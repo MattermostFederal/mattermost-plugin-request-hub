@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 
@@ -57,9 +56,12 @@ func (p *Plugin) loadTokenExpiryIndex() ([]string, bool) {
 	if appErr != nil || raw == nil {
 		return nil, false
 	}
-	var keys []string
-	if err := json.Unmarshal(raw, &keys); err != nil {
-		p.API.LogWarn("token-expiry index unreadable; will rebuild", "error", err.Error())
+	keys, complete, ok := parseKeyIndex(raw)
+	if !ok {
+		p.API.LogWarn("token-expiry index unreadable; will rebuild")
+		return nil, false
+	}
+	if !complete {
 		return nil, false
 	}
 	return keys, true
@@ -74,7 +76,7 @@ func (p *Plugin) persistTokenExpiryIndexFromScan(prev []byte, scanned []string) 
 	}
 	expected := prev
 	for range tokenExpiryIndexCASAttempts {
-		data, err := json.Marshal(keys)
+		data, err := marshalCompleteKeyIndex(keys)
 		if err != nil {
 			return err
 		}
@@ -91,10 +93,12 @@ func (p *Plugin) persistTokenExpiryIndexFromScan(prev []byte, scanned []string) 
 		}
 		var current []string
 		if raw != nil {
-			if err := json.Unmarshal(raw, &current); err != nil {
+			parsed, _, parseOK := parseKeyIndex(raw)
+			if !parseOK {
 				expected = raw
 				continue
 			}
+			current = parsed
 		}
 		keys = unionStringKeys(scanned, current)
 		expected = raw
@@ -122,12 +126,24 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 			return
 		}
 		if raw == nil {
-			// Missing index: do not invent a one-key blob. Leave it absent so
-			// the next list rebuilds from a full scan that includes this key.
-			return
+			data, err := marshalPartialKeyIndex([]string{key})
+			if err != nil {
+				p.invalidateTokenExpiryIndex()
+				return
+			}
+			ok, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, nil, data)
+			if casErr != nil {
+				p.API.LogWarn("token-expiry index: failed to add key", "key", key, "error", casErr.Error())
+				p.invalidateTokenExpiryIndex()
+				return
+			}
+			if ok {
+				return
+			}
+			continue
 		}
-		var keys []string
-		if err := json.Unmarshal(raw, &keys); err != nil {
+		keys, complete, ok := parseKeyIndex(raw)
+		if !ok {
 			p.invalidateTokenExpiryIndex()
 			return
 		}
@@ -135,18 +151,24 @@ func (p *Plugin) trackTokenExpiryKey(key string) {
 			return
 		}
 		next := append(slices.Clone(keys), key)
-		data, err := json.Marshal(next)
+		var data []byte
+		var err error
+		if complete {
+			data, err = marshalCompleteKeyIndex(next)
+		} else {
+			data, err = marshalPartialKeyIndex(next)
+		}
 		if err != nil {
 			p.invalidateTokenExpiryIndex()
 			return
 		}
-		ok, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, raw, data)
+		casOK, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("token-expiry index: failed to add key", "key", key, "error", casErr.Error())
 			p.invalidateTokenExpiryIndex()
 			return
 		}
-		if ok {
+		if casOK {
 			return
 		}
 	}
@@ -167,8 +189,8 @@ func (p *Plugin) untrackTokenExpiryKey(key string) {
 		if raw == nil {
 			return
 		}
-		var keys []string
-		if err := json.Unmarshal(raw, &keys); err != nil {
+		keys, complete, ok := parseKeyIndex(raw)
+		if !ok {
 			return
 		}
 		idx := slices.Index(keys, key)
@@ -176,16 +198,22 @@ func (p *Plugin) untrackTokenExpiryKey(key string) {
 			return
 		}
 		next := slices.Delete(slices.Clone(keys), idx, idx+1)
-		data, err := json.Marshal(next)
+		var data []byte
+		var err error
+		if complete {
+			data, err = marshalCompleteKeyIndex(next)
+		} else {
+			data, err = marshalPartialKeyIndex(next)
+		}
 		if err != nil {
 			return
 		}
-		ok, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, raw, data)
+		casOK, casErr := p.API.KVCompareAndSet(kvTokenExpiryIndex, raw, data)
 		if casErr != nil {
 			p.API.LogWarn("token-expiry index: failed to remove key", "key", key, "error", casErr.Error())
 			return
 		}
-		if ok {
+		if casOK {
 			return
 		}
 	}

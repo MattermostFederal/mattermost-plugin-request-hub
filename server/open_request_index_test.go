@@ -77,18 +77,60 @@ func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
 }
 
-func TestTrackOpenRequestKey_MissingIndexDoesNotInventOneKey(t *testing.T) {
+func TestTrackOpenRequestKey_MissingIndexWritesPartialNotComplete(t *testing.T) {
 	api := &plugintest.API{}
 	key := kvBotRequestPrefix + "r1"
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.False(t, complete, "must not invent a complete one-key index")
+			require.Equal(t, []string{key}, keys)
+		}).Return(true, nil).Once()
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 
 	p.trackOpenRequestKey(key)
 	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
-	api.AssertNotCalled(t, "KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything)
 	api.AssertNotCalled(t, "KVList", mock.Anything, mock.Anything)
+}
+
+func TestPersistOpenRequestIndexFromScan_ConflictMergesPartialTrack(t *testing.T) {
+	api := &plugintest.API{}
+	scanned := []string{kvBotRequestPrefix + "old"}
+	partial, err := marshalPartialKeyIndex([]string{kvBotRequestPrefix + "new"})
+	require.NoError(t, err)
+
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
+	api.On("KVGet", kvOpenRequestIndex).Return(partial, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{kvBotRequestPrefix + "old", kvBotRequestPrefix + "new"}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.persistOpenRequestIndexFromScan(nil, scanned))
+}
+
+func TestLoadOpenRequestIndex_PartialIsNotReadable(t *testing.T) {
+	api := &plugintest.API{}
+	partial, err := marshalPartialKeyIndex([]string{kvBotRequestPrefix + "r1"})
+	require.NoError(t, err)
+	api.On("KVGet", kvOpenRequestIndex).Return(partial, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	keys, ok := p.loadOpenRequestIndex()
+	require.False(t, ok)
+	require.Nil(t, keys)
 }
 
 func TestTrackOpenRequestKey_CASGiveUpInvalidates(t *testing.T) {

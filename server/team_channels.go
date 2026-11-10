@@ -1285,13 +1285,10 @@ func (p *Plugin) botIsChannelMember(channelID string) bool {
 // requestHubBotUsername is the EnsureBotUser username.
 const requestHubBotUsername = "mattermost-request-hub"
 
-// legacyRequestHubBotUsername is the bot username before the Request Hub
-// rename (upgraded installs may still have channels created by this account).
-const legacyRequestHubBotUsername = "mattermost-requests"
-
 // legacyRequestHubPluginID is the plugin ID before the 0.5.0 rename. Bots
 // that still list this as OwnerId created today's approval channels on
-// upgraded servers; refuse every other owner.
+// upgraded servers; refuse every other owner. Username alone is never
+// trusted — anyone who can create bots could register a legacy name.
 const legacyRequestHubPluginID = "com.mattermostfederal.channel-requests"
 
 // approvalChannelCreatorGone reports whether creatorID no longer resolves to
@@ -1314,7 +1311,8 @@ func (p *Plugin) approvalChannelCreatorGone(creatorID string) bool {
 
 // trustedApprovalChannelCreator reports whether userID may have created an
 // approval channel the plugin adopts: a System Admin, or a Request Hub bot
-// (current or legacy plugin ID / username). Other bots are refused.
+// (current or legacy plugin OwnerId). Other bots are refused — never by
+// username alone.
 func (p *Plugin) trustedApprovalChannelCreator(userID string) bool {
 	if userID == "" {
 		return false
@@ -1322,20 +1320,13 @@ func (p *Plugin) trustedApprovalChannelCreator(userID string) bool {
 	// Check bot ownership first so a deactivated / renamed-plugin creator
 	// still counts — GetUser alone is not enough after a re-upload.
 	if bot, appErr := p.API.GetBot(userID, true); appErr == nil && bot != nil {
-		if isRequestHubBotOwner(bot.OwnerId) {
-			return true
-		}
+		return isRequestHubBotOwner(bot.OwnerId)
 	}
 	creator, appErr := p.API.GetUser(userID)
 	if appErr != nil || creator == nil {
 		return false
 	}
-	if creator.IsSystemAdmin() {
-		return true
-	}
-	// Username check covers bots whose OwnerId we already matched above, and
-	// the rare case GetBot failed but GetUser still returns the bot user.
-	return creator.IsBot && (creator.Username == requestHubBotUsername || creator.Username == legacyRequestHubBotUsername)
+	return creator.IsSystemAdmin()
 }
 
 func isRequestHubBotOwner(ownerID string) bool {
