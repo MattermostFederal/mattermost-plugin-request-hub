@@ -336,6 +336,9 @@ func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testin
 	}, nil)
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	// Public convert strips non-privileged members after adopt.
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -372,6 +375,9 @@ func TestLookupApprovalChannel_AdoptsWhenCreatorDeactivatedAndBotIsMember(t *tes
 	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	// Untrusted orphan adopt strips non-privileged members.
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -490,6 +496,8 @@ func TestLookupApprovalChannel_AdoptsWhenBotAlreadyMemberAfterCreatorGone(t *tes
 	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 

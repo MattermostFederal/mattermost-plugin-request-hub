@@ -489,7 +489,10 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 
 	api.On("CreateTeamMember", "team-hq", "u_tadmin").Return(&model.TeamMember{}, nil).Maybe()
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
+		// Not a member yet → seed adds and marks; confirm membership after add.
+		api.On("GetChannelMember", id, "u_tadmin").Return(nil, testAppErr("missing")).Once()
 		api.On("AddChannelMember", id, "u_tadmin").Return(&model.ChannelMember{}, nil)
+		api.On("GetChannelMember", id, "u_tadmin").Return(&model.ChannelMember{UserId: "u_tadmin"}, nil).Once()
 	}
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
@@ -499,8 +502,10 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	}, nil).Maybe()
 	// forceTicketChannelCategory for team-requests walks System Admins.
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
-	// Eviction pass after seed: empty membership lists.
+	// Eviction pass after seed: empty ledgers skip member paging.
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
+		api.On("KVGet", taVisibilitySeededKey(id)).Return(nil, nil).Maybe()
+		api.On("KVCompareAndSet", taVisibilitySeededKey(id), mock.Anything, mock.Anything).Return(true, nil).Maybe()
 		api.On("GetChannelMembers", id, 0, 100).Return(model.ChannelMembers{}, nil).Maybe()
 	}
 
@@ -522,7 +527,8 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.botUserID = "bot"
-	p.setConfiguration(&configuration{ApprovalTeam: "hq"})
+	// Toggle on so still-admin (Team Admin) qualifies to stay on root.
+	p.setConfiguration(&configuration{ApprovalTeam: "hq", AllowTeamAdminApprovers: true})
 
 	team := &model.Team{Id: "team-hq", Name: "hq"}
 	api.On("GetTeamByName", "hq").Return(team, nil)
@@ -536,15 +542,15 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(audit, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
 
-	// Only root has a demoted member; team/audit empty.
+	// Only root has a demoted member; team/audit empty ledgers skip paging.
 	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "demoted"},
 		{UserId: "still-admin"},
 		{UserId: "sysadmin"},
 	}, nil)
-	api.On("GetChannelMembers", "ch-team", 0, 100).Return(model.ChannelMembers{}, nil)
-	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return(nil, nil).Maybe()
+	api.On("KVGet", taVisibilitySeededKey("ch-audit")).Return(nil, nil).Maybe()
 
 	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
@@ -564,6 +570,38 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "bot")
 }
 
+func TestEvictStalePrimaryTeamAdminChannelMembers_ToggleOffEvictsSeededTeamAdmins(t *testing.T) {
+	api := &plugintest.API{}
+	stubTAVisibilitySeeded(api, "ch-root", "still-admin")
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	// Defaults: AllowTeamAdminApprovers off → seeded TA must leave root.
+	p.setConfiguration(&configuration{ApprovalTeam: "hq"})
+
+	team := &model.Team{Id: "team-hq", Name: "hq"}
+	api.On("GetTeamByName", "hq").Return(team, nil)
+	stubApprovalTeamRecord(api)
+
+	root := &model.Channel{Id: "ch-root", TeamId: "team-hq", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot"}
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(root, nil)
+	api.On("GetChannelByName", "team-hq", "mattermost-team-requests", true).Return(nil, testAppErr("missing"))
+	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(nil, testAppErr("missing"))
+
+	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "still-admin"},
+	}, nil)
+	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
+	api.On("GetTeamMember", "team-hq", "still-admin").Return(&model.TeamMember{UserId: "still-admin", SchemeAdmin: true}, nil)
+	api.On("DeleteChannelMember", "ch-root", "still-admin").Return(nil).Once()
+
+	p.evictStalePrimaryTeamAdminChannelMembers()
+
+	api.AssertCalled(t, "DeleteChannelMember", "ch-root", "still-admin")
+}
+
 func TestEvictStaleApproversFromApprovalChannel_LeavesHandAddedObservers(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
@@ -572,15 +610,12 @@ func TestEvictStaleApproversFromApprovalChannel_LeavesHandAddedObservers(t *test
 	p.botUserID = "bot"
 
 	ch := &model.Channel{Id: "ch-root", TeamId: "team-hq"}
-	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
-		{UserId: "bot"},
-		{UserId: "hand-added"},
-	}, nil)
-	// No seed record for hand-added → eviction must leave them alone.
+	// Empty ledger → skip member paging entirely (hand-added observers stay).
 	api.On("KVGet", taVisibilitySeededKey("ch-root")).Return(nil, nil)
 
-	p.evictStaleApproversFromApprovalChannel(ch, "team-hq")
+	p.evictStaleApproversFromApprovalChannel(ch, "team-hq", "team-hq")
 
+	api.AssertNotCalled(t, "GetChannelMembers", "ch-root", mock.Anything, mock.Anything)
 	api.AssertNotCalled(t, "GetUser", "hand-added")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "hand-added")
 }
@@ -594,6 +629,8 @@ func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t
 	p.botUserID = "bot"
 	p.setConfiguration(&configuration{PerTeamApprovalChannels: true, ApprovalTeam: "hq"})
 
+	api.On("GetTeamByName", "hq").Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
+	stubApprovalTeamRecord(api)
 	api.On("GetTeams").Return([]*model.Team{
 		{Id: "team-hq", Name: "hq"},
 		{Id: "team-ops", Name: "ops"},
@@ -710,7 +747,11 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 	}, nil)
 	api.On("CreateTeamMember", "team-hq", "u_ta").Return(&model.TeamMember{}, nil).Maybe()
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
+		api.On("GetChannelMember", id, "u_ta").Return(nil, testAppErr("missing")).Once()
 		api.On("AddChannelMember", id, "u_ta").Return(&model.ChannelMember{}, nil)
+		api.On("GetChannelMember", id, "u_ta").Return(&model.ChannelMember{UserId: "u_ta"}, nil).Once()
+		api.On("KVGet", taVisibilitySeededKey(id)).Return(nil, nil).Maybe()
+		api.On("KVCompareAndSet", taVisibilitySeededKey(id), mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	}
 	api.On("GetChannelSidebarCategories", "u_ta", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
@@ -727,6 +768,73 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		api.AssertCalled(t, "AddChannelMember", id, "u_ta")
 	}
+}
+
+func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypeOpen, CreatorId: "sa1", DeleteAt: 0,
+	}
+	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("UpdateChannel", mock.MatchedBy(func(c *model.Channel) bool {
+		return c.Id == "ch-audit" && c.Type == model.ChannelTypePrivate
+	})).Return(&model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "sa1",
+	}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("CreateTeamMember", "team-hq", "bot").Return(&model.TeamMember{}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "observer"},
+		{UserId: "sa2"},
+	}, nil)
+	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetUser", "sa2").Return(&model.User{Id: "sa2", Username: "admin", Roles: model.SystemAdminRoleId}, nil)
+	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+	api.On("KVDelete", taVisibilitySeededKey("ch-audit")).Return(nil)
+
+	require.True(t, p.adoptApprovalChannel(ch))
+	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-audit", "sa2")
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-audit", "bot")
+}
+
+func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "gone", DeleteAt: 0,
+	}
+	api.On("GetBot", "gone", true).Return(nil, testAppErr("not a bot"))
+	// Deactivated creator → membership adoption path (untrusted orphan).
+	api.On("GetUser", "gone").Return(&model.User{Id: "gone", DeleteAt: 1, Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "observer"},
+	}, nil)
+	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
+	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+	api.On("KVDelete", taVisibilitySeededKey("ch-audit")).Return(nil)
+
+	require.True(t, p.adoptApprovalChannel(ch))
+	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
 }
 
 func TestSyncPrimaryTeamAdminVisibility_SkipsOtherTeams(t *testing.T) {

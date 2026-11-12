@@ -389,10 +389,14 @@ func (p *Plugin) OnConfigurationChange() error {
 	prevPerTeamEnabled := false
 	prevTwoStep := ""
 	prevApprovalTeam := ""
+	prevAllowTAApprovers := false
+	prevAllowTATeamRequests := false
 	if hadPrevConfig {
 		prevPerTeamEnabled = p.configuration.PerTeamApprovalChannels
 		prevTwoStep = twoStepPoolFingerprint(p.configuration)
 		prevApprovalTeam = strings.TrimSpace(p.configuration.ApprovalTeam)
+		prevAllowTAApprovers = p.configuration.AllowTeamAdminApprovers
+		prevAllowTATeamRequests = p.configuration.AllowApprovalTeamAdminsForTeamRequests
 	}
 	p.configurationLock.RUnlock()
 
@@ -403,13 +407,16 @@ func (p *Plugin) OnConfigurationChange() error {
 	if approvalTeamChanged {
 		p.forgetApprovalTeam()
 	}
+	taVisibilityTogglesChanged := hadPrevConfig &&
+		(configuration.AllowTeamAdminApprovers != prevAllowTAApprovers ||
+			configuration.AllowApprovalTeamAdminsForTeamRequests != prevAllowTATeamRequests)
 
 	if hadPrevConfig && configuration.PerTeamApprovalChannels && !prevPerTeamEnabled {
 		go p.ensureAllTeamApprovalChannels()
 	}
-	// When Approval team is set or changed, ensure primary ticket channels exist
-	// at setup (not on first request) and reseed Team Admin visibility.
-	if approvalTeamChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {
+	// When Approval team is set/changed or TA visibility toggles flip, ensure
+	// primary ticket channels exist and reseed / evict Team Admin membership.
+	if (approvalTeamChanged || taVisibilityTogglesChanged) && strings.TrimSpace(configuration.ApprovalTeam) != "" {
 		go func() {
 			defer p.logRecoveredPanic("primary ticket channel ensure")
 			p.syncPrimaryTeamAdminVisibility()

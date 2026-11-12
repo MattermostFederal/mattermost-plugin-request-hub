@@ -161,8 +161,10 @@ func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
 			"channel_id", ch.Id, "error", postErr.Error())
 	}
 
+	// System Admins only here. Approval-team Team Admin seeding is owned by
+	// syncPrimaryTeamAdminVisibility / primaryTAVisibilityChannels so the
+	// AllowTeamAdminApprovers toggle is respected (defaults are off).
 	p.addSystemAdminsToChannel(ch.Id)
-	p.addPrimaryTeamAdminsToChannel(ch.Id)
 	p.bookmarkDocs(ch)
 
 	return ch
@@ -323,14 +325,14 @@ func (p *Plugin) ensureNamedApprovalChannel(name, displayName, purpose string) *
 		),
 	})
 
-	// Seed all System Admins immediately so they can see and act on requests
+	// Seed System Admins immediately so they can see and act on requests
 	// without waiting for the next activation cycle. Security/system pool
 	// members are seeded separately via syncTwoStepApproverChannels (activate /
 	// config change / login) to avoid an init cycle with ensure* helpers.
-	// Primary-team Team Admins get watch-only membership (approve rights stay
-	// gated by existing toggles / two-step rules).
+	// Approval-team Team Admin visibility is owned by
+	// syncPrimaryTeamAdminVisibility so AllowTeamAdminApprovers /
+	// AllowApprovalTeamAdminsForTeamRequests gate who lands in which channel.
 	p.addSystemAdminsToChannel(ch.Id)
-	p.addPrimaryTeamAdminsToChannel(ch.Id)
 	p.bookmarkDocs(ch)
 
 	return ch
@@ -688,7 +690,11 @@ func (p *Plugin) syncTeamApprovalChannelAfterAdminChange(teamID string) {
 	p.addTeamApproversToChannel(teamID, ch.Id)
 	// Demotions via the plugin path land here; console demotions are covered
 	// by login + the periodic reconciler.
-	p.evictStaleApproversFromApprovalChannel(ch, teamID)
+	approvalTeamID := ""
+	if approval, aErr := p.approvalTeam(); aErr == nil && approval != nil {
+		approvalTeamID = approval.Id
+	}
+	p.evictStaleApproversFromApprovalChannel(ch, teamID, approvalTeamID)
 	p.placeChannelMembersInManagedCategory(ch)
 }
 
@@ -759,28 +765,6 @@ func (p *Plugin) listTeamAdminIDs(teamID string) []string {
 	return out
 }
 
-// addPrimaryTeamAdminsToChannel adds every Team Admin of the configured
-// Approval team to channelID for watch-only visibility, and places each in the
-// managed sidebar category. No-op when ApprovalTeam is unset.
-func (p *Plugin) addPrimaryTeamAdminsToChannel(channelID string) {
-	if channelID == "" {
-		return
-	}
-	team, err := p.approvalTeam()
-	if err != nil || team == nil {
-		return
-	}
-	for _, userID := range p.listTeamAdminIDs(team.Id) {
-		if _, appErr := p.API.AddChannelMember(channelID, userID); appErr != nil {
-			p.API.LogWarn("failed to add primary Team Admin to ticket channel",
-				"channel_id", channelID, "user_id", userID, "error", appErr.Error())
-			continue
-		}
-		p.markTAVisibilitySeeded(channelID, userID)
-		p.addChannelToPermissionsCategory(userID, team.Id, channelID)
-	}
-}
-
 // primaryVisibilityChannels are primary ticket channels where demoted
 // plugin-seeded Team Admins are evicted (root / team-creation / audit).
 // Bot/webhook are excluded: security-pool members also belong there.
@@ -848,12 +832,21 @@ func (p *Plugin) ensureTeamCreationApprovalChannelForVisibility() *model.Channel
 }
 
 // seedTAVisibility adds userID to ch and records that the plugin seeded them
-// so demotion eviction can leave hand-added members alone.
+// so demotion eviction can leave hand-added members alone. Already-present
+// members are not marked: AddChannelMember succeeds for existing membership,
+// and claiming a hand-added observer as seeded would evict them on demotion.
 func (p *Plugin) seedTAVisibility(ch *model.Channel, userID string) {
 	if ch == nil || userID == "" {
 		return
 	}
+	if _, appErr := p.API.GetChannelMember(ch.Id, userID); appErr == nil {
+		p.addChannelToPermissionsCategory(userID, ch.TeamId, ch.Id)
+		return
+	}
 	p.addUserToApprovalChannel(ch, userID)
+	if _, appErr := p.API.GetChannelMember(ch.Id, userID); appErr != nil {
+		return
+	}
 	p.markTAVisibilitySeeded(ch.Id, userID)
 }
 
@@ -941,7 +934,7 @@ func (p *Plugin) evictStalePrimaryTeamAdminChannelMembers() {
 		if ch == nil {
 			continue
 		}
-		p.evictStaleApproversFromApprovalChannel(ch, team.Id)
+		p.evictStaleApproversFromApprovalChannel(ch, team.Id, team.Id)
 	}
 }
 
@@ -959,6 +952,10 @@ func (p *Plugin) evictStalePerTeamApprovalChannelMembers() {
 			"error", appErr.Error())
 		return
 	}
+	approvalTeamID := ""
+	if approval, err := p.approvalTeam(); err == nil && approval != nil {
+		approvalTeamID = approval.Id
+	}
 	channelName := p.getConfiguration().TeamChannelName()
 	for _, team := range teams {
 		if team == nil || team.Id == "" || team.DeleteAt != 0 {
@@ -968,7 +965,7 @@ func (p *Plugin) evictStalePerTeamApprovalChannelMembers() {
 		if ch == nil {
 			continue
 		}
-		p.evictStaleApproversFromApprovalChannel(ch, team.Id)
+		p.evictStaleApproversFromApprovalChannel(ch, team.Id, approvalTeamID)
 	}
 }
 
@@ -1024,14 +1021,45 @@ func (p *Plugin) reconcilePerTeamApprovalAccessForUser(user *model.User) {
 	}
 }
 
+// keepSeededTeamAdminOnChannel reports whether a Team Admin still qualifies
+// for plugin-seeded membership on ch. Root / team-requests / audit honor
+// AllowTeamAdminApprovers and AllowApprovalTeamAdminsForTeamRequests; per-team
+// mattermost-channel-requests (teamID ≠ approval team) always keep that
+// team's Team Admins. approvalTeamID is the configured Approval team's id.
+func (p *Plugin) keepSeededTeamAdminOnChannel(ch *model.Channel, approvalTeamID string) bool {
+	if ch == nil {
+		return false
+	}
+	cfg := p.getConfiguration()
+	switch ch.Name {
+	case "mattermost-team-requests":
+		return cfg.AllowApprovalTeamAdminsForTeamRequests
+	case "mattermost-audit-requests":
+		return cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests
+	case "mattermost-channel-requests":
+		if approvalTeamID != "" && ch.TeamId == approvalTeamID {
+			return cfg.AllowTeamAdminApprovers
+		}
+		return true
+	default:
+		return true
+	}
+}
+
 // evictStaleApproversFromApprovalChannel removes plugin-seeded members who are
-// no longer a System Admin or Team Admin of teamID. Hand-added observers and
-// cross-team approvers are left alone. Collects member IDs first so deletes
-// do not skip rows while paging.
-func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamID string) {
+// no longer a System Admin or a qualifying Team Admin of teamID (role and
+// visibility toggles). Hand-added observers and cross-team approvers are left
+// alone. Loads the ledger first so an empty set skips member paging.
+// approvalTeamID gates root-channel toggle checks (empty skips the gate).
+func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamID, approvalTeamID string) {
 	if ch == nil || teamID == "" {
 		return
 	}
+	seeded := p.loadTAVisibilitySeededSet(ch.Id)
+	if len(seeded) == 0 {
+		return
+	}
+	keepTeamAdmin := p.keepSeededTeamAdminOnChannel(ch, approvalTeamID)
 	const perPage = 100
 	var memberIDs []string
 	for page := range 50 {
@@ -1050,10 +1078,6 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 			break
 		}
 	}
-	seeded := p.loadTAVisibilitySeededSet(ch.Id)
-	if len(seeded) == 0 {
-		return
-	}
 	for _, userID := range memberIDs {
 		if _, ok := seeded[userID]; !ok {
 			continue
@@ -1070,7 +1094,7 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 			if !isNotFound(tmErr) {
 				continue
 			}
-		} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) {
+		} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) && keepTeamAdmin {
 			continue
 		}
 		if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil {
@@ -1079,6 +1103,13 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 			continue
 		}
 		p.clearTAVisibilitySeeded(ch.Id, userID)
+		// Re-check after clear: a promotion+reseed between Delete and clear can
+		// leave the user unmarked and never evicted on a later demotion.
+		if rem, remErr := p.API.GetTeamMember(teamID, userID); remErr == nil &&
+			rem != nil && rem.DeleteAt == 0 && isTeamAdminMember(rem) && keepTeamAdmin {
+			p.seedTAVisibility(ch, userID)
+			continue
+		}
 		p.API.LogInfo("approval channel: evicted demoted Team Admin",
 			"user_id", userID, "username", user.Username, "team_id", teamID, "channel_id", ch.Id)
 	}
@@ -1273,7 +1304,8 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 			return false
 		}
 	}
-	if ch.Type == model.ChannelTypeOpen {
+	wasPublic := ch.Type == model.ChannelTypeOpen
+	if wasPublic {
 		if !p.makeApprovalChannelPrivate(ch) {
 			return false
 		}
@@ -1288,6 +1320,12 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 			"channel_id", ch.Id, "channel_name", ch.Name, "error", appErr.Error())
 		return false
 	}
+	// Public convert and untrusted-orphan adopt keep prior members unless we
+	// strip them. Trusted private creators (SysAdmin / plugin bot) keep their
+	// membership layout; the other two paths strip to bot + System Admins.
+	if wasPublic || !trustedCreator {
+		p.stripAdoptedApprovalChannelToPrivileged(ch)
+	}
 	p.adoptedApprovalChannels.Store(ch.Id, true)
 	if trustedCreator {
 		p.API.LogInfo("adopted an existing approval channel: the name matched and a System Admin or this plugin's bot created it",
@@ -1297,6 +1335,53 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 			"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
 	}
 	return true
+}
+
+// stripAdoptedApprovalChannelToPrivileged removes everyone except the bot and
+// System Admins after adopting a public or untrusted-orphan channel. Qualifying
+// Team Admins / security-pool members are re-seeded by the normal sync paths.
+func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) {
+	if ch == nil {
+		return
+	}
+	const perPage = 100
+	var memberIDs []string
+	for page := range 50 {
+		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
+		if appErr != nil {
+			p.API.LogWarn("adopted approval channel: failed to list members for reconcile",
+				"channel_id", ch.Id, "error", appErr.Error())
+			return
+		}
+		for i := range members {
+			if id := members[i].UserId; id != "" && id != p.botUserID {
+				memberIDs = append(memberIDs, id)
+			}
+		}
+		if len(members) < perPage {
+			break
+		}
+	}
+	for _, userID := range memberIDs {
+		user, uErr := p.API.GetUser(userID)
+		if uErr != nil || user == nil {
+			continue
+		}
+		if user.IsSystemAdmin() {
+			continue
+		}
+		if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil {
+			p.API.LogWarn("adopted approval channel: failed to remove non-privileged member",
+				"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
+			continue
+		}
+		p.API.LogInfo("adopted approval channel: removed non-privileged member",
+			"channel_id", ch.Id, "user_id", userID, "username", user.Username)
+	}
+	if appErr := p.API.KVDelete(taVisibilitySeededKey(ch.Id)); appErr != nil {
+		p.API.LogWarn("adopted approval channel: failed to clear TA visibility ledger",
+			"channel_id", ch.Id, "error", appErr.Error())
+	}
 }
 
 // makeApprovalChannelPrivate converts a public approval channel to private so

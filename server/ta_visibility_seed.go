@@ -30,7 +30,12 @@ func (p *Plugin) markTAVisibilitySeeded(channelID, userID string) {
 		var ids []string
 		if raw != nil {
 			if err := json.Unmarshal(raw, &ids); err != nil {
-				ids = nil
+				// Refuse to overwrite an unreadable ledger — rewriting with a
+				// single ID would drop every other seeded entry and leave those
+				// users unevictable.
+				p.API.LogWarn("ta visibility seed: refusing to overwrite unreadable ledger",
+					"channel_id", channelID, "user_id", userID, "error", err.Error())
+				return
 			}
 		}
 		if slices.Contains(ids, userID) {
@@ -50,6 +55,8 @@ func (p *Plugin) markTAVisibilitySeeded(channelID, userID string) {
 			return
 		}
 	}
+	p.API.LogWarn("ta visibility seed: mark exhausted CAS retries",
+		"channel_id", channelID, "user_id", userID, "attempts", taVisibilitySeedCASAttempts)
 }
 
 func (p *Plugin) clearTAVisibilitySeeded(channelID, userID string) {
@@ -59,11 +66,18 @@ func (p *Plugin) clearTAVisibilitySeeded(channelID, userID string) {
 	key := taVisibilitySeededKey(channelID)
 	for range taVisibilitySeedCASAttempts {
 		raw, appErr := p.API.KVGet(key)
-		if appErr != nil || raw == nil {
+		if appErr != nil {
+			p.API.LogWarn("ta visibility seed: failed to load for clear",
+				"channel_id", channelID, "user_id", userID, "error", appErr.Error())
+			return
+		}
+		if raw == nil {
 			return
 		}
 		var ids []string
 		if err := json.Unmarshal(raw, &ids); err != nil {
+			p.API.LogWarn("ta visibility seed: refusing to clear unreadable ledger",
+				"channel_id", channelID, "user_id", userID, "error", err.Error())
 			return
 		}
 		idx := slices.Index(ids, userID)
@@ -77,12 +91,16 @@ func (p *Plugin) clearTAVisibilitySeeded(channelID, userID string) {
 		}
 		ok, casErr := p.API.KVCompareAndSet(key, raw, data)
 		if casErr != nil {
+			p.API.LogWarn("ta visibility seed: failed to clear",
+				"channel_id", channelID, "user_id", userID, "error", casErr.Error())
 			return
 		}
 		if ok {
 			return
 		}
 	}
+	p.API.LogWarn("ta visibility seed: clear exhausted CAS retries",
+		"channel_id", channelID, "user_id", userID, "attempts", taVisibilitySeedCASAttempts)
 }
 
 func (p *Plugin) isTAVisibilitySeeded(channelID, userID string) bool {
