@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -14,7 +15,9 @@ import (
 const twoStepChannelReconcileJobKey = "two_step_channel_reconcile"
 
 // securityPoolMaxMembers caps usergroup / attribute security-pool listing so
-// a misconfigured LDAP sync cannot expand into a runaway scan.
+// a misconfigured LDAP sync cannot expand into a runaway scan. Members past
+// this cap can still approve (authz uses pool checks), but are not seeded into
+// bot/webhook channels until login. Documented in docs/admin-guide.md.
 const securityPoolMaxMembers = 75
 
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
@@ -57,6 +60,18 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 		return
 	}
 	p.twoStepReconcileJob = job
+}
+
+// warnSecurityPoolCapOnce logs when listing hits securityPoolMaxMembers, at
+// most once per pool fingerprint until the capped count changes.
+func (p *Plugin) warnSecurityPoolCapOnce(pool string, members int) {
+	fp := fmt.Sprintf("%s:%d", pool, members)
+	if p.securityPoolCapWarned == fp {
+		return
+	}
+	p.securityPoolCapWarned = fp
+	p.API.LogWarn("two-step channel access: security pool listing hit member cap; extra members can still approve but are not seeded into bot/webhook until login",
+		"pool", pool, "members", members, "max_members", securityPoolMaxMembers)
 }
 
 func (p *Plugin) stopTwoStepChannelReconciler() {
@@ -499,8 +514,7 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			}
 			ids = append(ids, u.Id)
 			if len(ids) >= securityPoolMaxMembers {
-				p.API.LogWarn("two-step channel access: group member listing hit member cap",
-					"group", label, "members", len(ids), "max_members", securityPoolMaxMembers)
+				p.warnSecurityPoolCapOnce("group:"+label, len(ids))
 				return ids[:securityPoolMaxMembers]
 			}
 		}
@@ -555,8 +569,7 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			if attributeValueIsSet(v.Value, field) {
 				ids = append(ids, v.TargetID)
 				if len(ids) >= securityPoolMaxMembers {
-					p.API.LogWarn("two-step channel access: attribute member listing hit member cap",
-						"attr", attrName, "members", len(ids), "max_members", securityPoolMaxMembers)
+					p.warnSecurityPoolCapOnce("attr:"+attrName, len(ids))
 					return ids[:securityPoolMaxMembers]
 				}
 			}

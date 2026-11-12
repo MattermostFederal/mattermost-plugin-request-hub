@@ -228,7 +228,12 @@ func (p *Plugin) listApprovableRequests(userID string, limit int) ([]requestSumm
 			}
 			return nil, 0, err
 		}
-		if rec == nil || recordRequesterID(rec) == user.Id || !p.canApproveNow(user, rec, canSec, canSys) {
+		if rec == nil {
+			// Ghost index entry (claimed during a rebuild scan union) — drop it.
+			p.untrackOpenRequestKey(key)
+			continue
+		}
+		if recordRequesterID(rec) == user.Id || !p.canApproveNow(user, rec, canSec, canSys) {
 			continue
 		}
 		out = append(out, p.summarize(config, kind, rec))

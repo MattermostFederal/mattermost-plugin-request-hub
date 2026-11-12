@@ -328,4 +328,7 @@ func TestSendTokenExpiryReminders_ListFailureIsLogged(t *testing.T) {
 	p.sendTokenExpiryReminders(time.Now())
 
 	api.AssertCalled(t, "LogError", "failed to list bot token expiries", "error", mock.Anything)
+	api.AssertNotCalled(t, "KVGet", mock.MatchedBy(func(key string) bool {
+		return key != kvTokenExpiryIndex && strings.HasPrefix(key, botTokenExpiryKeyPrefix)
+	}))
 }

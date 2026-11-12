@@ -75,26 +75,31 @@ func (p *Plugin) storeTicketLookups(anchor threadAnchor) {
 //   - Forwards approval thread replies from reviewers to the requester's DM thread.
 //   - Prompts users who DM the bot outside of any ticket thread.
 //
-// Hot path: almost every post on the server hits this hook. Thread replies are
-// resolved with KV lookups first so busy channels do not pay GetChannel on every
-// message. GetChannel runs only for root-level posts (DM help nudge).
+// Hot path: almost every post on the server hits this hook. Approval-anchor
+// KV is checked first (ticket replies in approval channels). For other thread
+// replies, GetChannel (server-cached) gates the DM-root KV so busy non-DM
+// channels do not pay a second uncached KVGet on every message.
 func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
 	// Never react to our own posts — would create an infinite forwarding loop.
 	if post.UserId == p.botUserID {
 		return
 	}
 
-	// Known ticket threads: KV hit is enough — no channel type lookup.
 	if post.RootId != "" {
-		if raw, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId); appErr == nil && raw != nil {
+		raw, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId)
+		if appErr == nil && raw != nil {
 			p.forwardThreadReplyToRequesterDM(post, raw)
 			return
 		}
-		if raw, appErr := p.API.KVGet(kvDMRootPrefix + post.RootId); appErr == nil && raw != nil {
+		// Approval miss: only DMs can be requester ticket threads.
+		channel, chErr := p.API.GetChannel(post.ChannelId)
+		if chErr != nil || channel == nil || channel.Type != model.ChannelTypeDirect {
+			return
+		}
+		if raw, dmErr := p.API.KVGet(kvDMRootPrefix + post.RootId); dmErr == nil && raw != nil {
 			p.forwardDMReplyToTicketThread(post, raw)
 			return
 		}
-		// Unknown thread reply — not a Request Hub ticket. Done.
 		return
 	}
 
@@ -144,6 +149,9 @@ func (p *Plugin) forwardDMReplyToTicketThread(post *model.Post, rawAnchor []byte
 	if err := json.Unmarshal(rawAnchor, &anchor); err != nil || anchor.ApprovalPostID == "" {
 		return
 	}
+	if anchor.DMChannelID != "" && post.ChannelId != anchor.DMChannelID {
+		return
+	}
 
 	poster, appErr := p.API.GetUser(post.UserId)
 	if appErr != nil {
@@ -172,6 +180,9 @@ func quotedText(msg string) string {
 func (p *Plugin) forwardThreadReplyToRequesterDM(post *model.Post, rawAnchor []byte) {
 	var anchor threadAnchor
 	if err := json.Unmarshal(rawAnchor, &anchor); err != nil || anchor.DMRootPostID == "" {
+		return
+	}
+	if anchor.ApprovalChannelID != "" && post.ChannelId != anchor.ApprovalChannelID {
 		return
 	}
 

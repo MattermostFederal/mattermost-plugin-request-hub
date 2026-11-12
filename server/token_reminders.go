@@ -89,6 +89,11 @@ func (p *Plugin) saveBotTokenExpiry(rec botTokenExpiry) error {
 // on one server at a time.
 func (p *Plugin) startTokenReminderJob() {
 	job, err := cluster.Schedule(p.API, tokenReminderJobKey, cluster.MakeWaitForInterval(tokenReminderJobPeriod), func() {
+		defer p.logRecoveredPanic("bot token reminders")
+		// Daily repair for rolling HA: old-version nodes may write
+		// pending/token records without indexing them.
+		p.rebuildOpenRequestIndex()
+		p.rebuildTokenExpiryIndex()
 		p.sendTokenExpiryReminders(time.Now())
 	})
 	if err != nil {
@@ -144,7 +149,7 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 		}
 		return
 	}
-	if bot.DeleteAt > 0 {
+	if bot == nil || bot.DeleteAt > 0 {
 		p.endTokenTracking(key, rec, "the bot was deactivated")
 		return
 	}
@@ -200,9 +205,13 @@ func (p *Plugin) auditTokenReminder(rec botTokenExpiry, expired bool) {
 }
 
 // endTokenTracking stops the reminders for a token, recording why. rec is
-// empty when its record couldn't be read; key still names the token.
+// empty when its record couldn't be read; key still names the token. The
+// audit event is written only after a successful delete so a failed delete
+// does not claim tracking ended while the daily job would keep reminding.
 func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) {
-	p.deleteBotTokenExpiry(key)
+	if !p.deleteBotTokenExpiry(key) {
+		return
+	}
 	tokenID := rec.TokenID
 	if tokenID == "" {
 		tokenID = strings.TrimPrefix(key, botTokenExpiryKeyPrefix)
@@ -218,12 +227,13 @@ func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string)
 	})
 }
 
-func (p *Plugin) deleteBotTokenExpiry(key string) {
+func (p *Plugin) deleteBotTokenExpiry(key string) bool {
 	if appErr := p.API.KVDelete(key); appErr != nil {
 		p.API.LogWarn("failed to delete bot token expiry", "key", key, "error", appErr.Error())
-		return
+		return false
 	}
 	p.untrackTokenExpiryKey(key)
+	return true
 }
 
 // sendTokenReminder DMs the requester, or every active System Admin when

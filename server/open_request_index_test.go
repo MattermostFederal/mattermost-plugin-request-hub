@@ -141,10 +141,105 @@ func TestTrackOpenRequestKey_CASGiveUpInvalidates(t *testing.T) {
 		api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
 		api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
 	}
-	api.On("KVDelete", kvOpenRequestIndex).Return(nil).Once()
+	// Invalidate writes a partial blob (with the failed key) instead of deleting.
+	api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.False(t, complete)
+			require.Contains(t, keys, key)
+		}).Return(true, nil).Once()
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 
 	p.trackOpenRequestKey(key)
+	api.AssertNotCalled(t, "KVDelete", kvOpenRequestIndex)
+}
+
+func TestUntrackOpenRequestKey_CompletePartialAndMissing(t *testing.T) {
+	t.Run("complete index drops key", func(t *testing.T) {
+		api := &plugintest.API{}
+		key := kvBotRequestPrefix + "r1"
+		existing, _ := json.Marshal([]string{key, kvBotRequestPrefix + "r2"})
+		api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
+		api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+				require.True(t, ok)
+				require.True(t, complete)
+				require.Equal(t, []string{kvBotRequestPrefix + "r2"}, got)
+			}).Return(true, nil).Once()
+		stubLogLevels(api)
+		defer api.AssertExpectations(t)
+		newTestPlugin(api).untrackOpenRequestKey(key)
+	})
+	t.Run("partial index drops key", func(t *testing.T) {
+		api := &plugintest.API{}
+		key := kvBotRequestPrefix + "r1"
+		partial, err := marshalPartialKeyIndex([]string{key})
+		require.NoError(t, err)
+		api.On("KVGet", kvOpenRequestIndex).Return(partial, nil).Once()
+		api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+				require.True(t, ok)
+				require.False(t, complete)
+				require.Empty(t, got)
+			}).Return(true, nil).Once()
+		stubLogLevels(api)
+		defer api.AssertExpectations(t)
+		newTestPlugin(api).untrackOpenRequestKey(key)
+	})
+	t.Run("missing index is a no-op", func(t *testing.T) {
+		api := &plugintest.API{}
+		api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Once()
+		stubLogLevels(api)
+		defer api.AssertExpectations(t)
+		newTestPlugin(api).untrackOpenRequestKey(kvBotRequestPrefix + "r1")
+		api.AssertNotCalled(t, "KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything)
+	})
+}
+
+func TestPutPendingRequestKV_TracksKeyInCompleteIndex(t *testing.T) {
+	api := &plugintest.API{}
+	key := kvBotRequestPrefix + "r1"
+	existing, _ := json.Marshal([]string{kvBotRequestPrefix + "other"})
+	api.On("KVSet", key, []byte(`{"id":"r1"}`)).Return(nil).Once()
+	api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{kvBotRequestPrefix + "other", key}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.putPendingRequestKV(key, []byte(`{"id":"r1"}`)))
+}
+
+func TestClaimRecord_UntracksOpenRequestKey(t *testing.T) {
+	api := &plugintest.API{}
+	key := kvBotRequestPrefix + "r1"
+	raw := []byte(`{}`)
+	existing, _ := json.Marshal([]string{key, kvBotRequestPrefix + "r2"})
+	api.On("KVCompareAndDelete", key, raw).Return(true, nil).Once()
+	api.On("KVGet", kvOpenRequestIndex).Return(existing, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.Equal(t, []string{kvBotRequestPrefix + "r2"}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	_, ok := p.claimRecord(key, raw, decisionCards{}, "test")
+	require.True(t, ok)
 }

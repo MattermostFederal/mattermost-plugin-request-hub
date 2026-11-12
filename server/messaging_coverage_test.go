@@ -91,11 +91,11 @@ func TestMessageHasBeenPosted_DirectMessages(t *testing.T) {
 	t.Run("reply outside a ticket thread is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
 		api.On("KVGet", kvApprovalPostPrefix+"other").Return(nil, nil)
+		api.On("GetChannel", "dm").Return(dm, nil)
 		api.On("KVGet", kvDMRootPrefix+"other").Return(nil, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{UserId: "u1", ChannelId: "dm", RootId: "other"})
 
-		api.AssertNotCalled(t, "GetChannel", mock.Anything)
 		api.AssertNotCalled(t, "CreatePost", mock.Anything)
 	})
 
@@ -103,6 +103,7 @@ func TestMessageHasBeenPosted_DirectMessages(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
 		defer api.AssertExpectations(t)
 		api.On("KVGet", kvApprovalPostPrefix+"dmroot").Return(nil, nil)
+		api.On("GetChannel", "dm").Return(&model.Channel{Id: "dm", Type: model.ChannelTypeDirect}, nil)
 		api.On("KVGet", kvDMRootPrefix+"dmroot").Return(mustMarshal(t, relayAnchor), nil)
 		api.On("GetUser", "u1").Return(&model.User{Id: "u1", Username: "req"}, nil)
 		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
@@ -113,8 +114,22 @@ func TestMessageHasBeenPosted_DirectMessages(t *testing.T) {
 		p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{
 			UserId: "u1", ChannelId: "dm", RootId: "dmroot", Message: "more detail",
 		})
+	})
 
-		api.AssertNotCalled(t, "GetChannel", mock.Anything)
+	t.Run("approval-anchor KVGet error still tries DM lookup on a DM channel", func(t *testing.T) {
+		p, api := logOnlyPlugin(&configuration{})
+		defer api.AssertExpectations(t)
+		api.On("KVGet", kvApprovalPostPrefix+"dmroot").Return(nil, testAppErr("kv down"))
+		api.On("GetChannel", "dm").Return(&model.Channel{Id: "dm", Type: model.ChannelTypeDirect}, nil)
+		api.On("KVGet", kvDMRootPrefix+"dmroot").Return(mustMarshal(t, relayAnchor), nil)
+		api.On("GetUser", "u1").Return(&model.User{Id: "u1", Username: "req"}, nil)
+		api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+			return post.ChannelId == "appch" && post.RootId == "ap"
+		})).Return(&model.Post{}, nil)
+
+		p.MessageHasBeenPosted(&plugin.Context{}, &model.Post{
+			UserId: "u1", ChannelId: "dm", RootId: "dmroot", Message: "more detail",
+		})
 	})
 }
 
@@ -136,11 +151,12 @@ func TestMessageHasBeenPosted_ChannelPosts(t *testing.T) {
 	t.Run("reply under an unknown post is ignored", func(t *testing.T) {
 		p, api := logOnlyPlugin(&configuration{})
 		api.On("KVGet", kvApprovalPostPrefix+"ap").Return(nil, nil)
-		api.On("KVGet", kvDMRootPrefix+"ap").Return(nil, nil)
+		// Non-DM channel: GetChannel gates the DM-root KVGet.
+		api.On("GetChannel", "appch").Return(appch, nil)
 
 		p.MessageHasBeenPosted(&plugin.Context{}, reply())
 
-		api.AssertNotCalled(t, "GetChannel", mock.Anything)
+		api.AssertNotCalled(t, "KVGet", kvDMRootPrefix+"ap")
 		api.AssertNotCalled(t, "GetUser", mock.Anything)
 	})
 

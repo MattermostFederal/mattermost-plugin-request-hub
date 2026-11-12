@@ -50,6 +50,10 @@ type Plugin struct {
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
 
+	// securityPoolCapWarned is the last "group|attr + capped count" fingerprint
+	// we logged for securityPoolMaxMembers, so reconcile ticks don't spam.
+	securityPoolCapWarned string
+
 	// auditSink, when set, receives every audit event instead of the request
 	// history, the server audit log and the audit channel. A test seam: nil
 	// in production.

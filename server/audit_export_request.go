@@ -481,11 +481,18 @@ func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, exp
 	if appErr != nil {
 		return "", nil, errors.Wrap(appErr, "failed to upload the export")
 	}
+	msg := fmt.Sprintf("📎 **Audit export: %s** (%s, %s). %s. %s Keep it secure.", exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count), p.describeExportFilter(req.Filter), auditExportTypeAbout(req.Filter))
+	if export.detail != nil {
+		if truncated, _ := export.detail["truncated"].(bool); truncated {
+			msg += fmt.Sprintf("\n\n⚠️ **Truncated:** this file hit the export caps (%d histories / %d events). Narrow the filter (kind, requester, since/until) and request again for a complete copy.",
+				historyExportMaxHistories, historyExportMaxEvents)
+		}
+	}
 	if _, appErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
 		ChannelId: channelID,
 		RootId:    rootID,
-		Message:   fmt.Sprintf("📎 **Audit export: %s** (%s, %s). %s. %s Keep it secure.", exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count), p.describeExportFilter(req.Filter), auditExportTypeAbout(req.Filter)),
+		Message:   msg,
 		FileIds:   []string{info.Id},
 	}); appErr != nil {
 		return "", nil, errors.Wrap(appErr, "failed to post the export")

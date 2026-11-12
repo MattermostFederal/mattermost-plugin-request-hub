@@ -1,8 +1,6 @@
 package main
 
 import (
-	"slices"
-
 	"github.com/pkg/errors"
 )
 
@@ -12,26 +10,18 @@ import (
 // missing or unreadable; store/claim paths keep it updated best-effort.
 const kvOpenRequestIndex = "open_requests_v1"
 
-const openRequestIndexCASAttempts = 8
+// openRequestIndexCASAttempts kept as an alias so existing tests that loop
+// on contention still compile against the shared CAS budget.
+const openRequestIndexCASAttempts = keyIndexCASAttempts
+
+func (p *Plugin) openRequestKeyIndex() keyIndex {
+	return keyIndex{p: p, store: kvOpenRequestIndex, label: "open-request"}
+}
 
 // listRequestKeys returns the KV key of every stored pending request.
 // Prefers the open-request index; rebuilds from a full KV scan when needed.
 func (p *Plugin) listRequestKeys() ([]string, error) {
-	if keys, ok := p.loadOpenRequestIndex(); ok {
-		return keys, nil
-	}
-	// Snapshot before the slow scan so a concurrent track/untrack is not
-	// clobbered by an unconditional KVSet of a stale scan result.
-	prev, _ := p.API.KVGet(kvOpenRequestIndex)
-	keys, err := p.scanAllRequestKeys()
-	if err != nil {
-		return nil, err
-	}
-	if saveErr := p.persistOpenRequestIndexFromScan(prev, keys); saveErr != nil {
-		p.API.LogWarn("failed to persist open-request index; list still returned",
-			"error", saveErr.Error(), "count", len(keys))
-	}
-	return keys, nil
+	return p.openRequestKeyIndex().list(p.scanAllRequestKeys)
 }
 
 // scanAllRequestKeys pages the entire plugin KV store for pending request
@@ -56,219 +46,33 @@ func (p *Plugin) scanAllRequestKeys() ([]string, error) {
 }
 
 func (p *Plugin) loadOpenRequestIndex() ([]string, bool) {
-	raw, appErr := p.API.KVGet(kvOpenRequestIndex)
-	if appErr != nil || raw == nil {
-		return nil, false
-	}
-	keys, complete, ok := parseKeyIndex(raw)
-	if !ok {
-		p.API.LogWarn("open-request index unreadable; will rebuild")
-		return nil, false
-	}
-	// Partial blobs are not readable as a complete index — rebuild so we
-	// never serve a one-key (or otherwise incomplete) view as authoritative.
-	if !complete {
-		return nil, false
-	}
-	return keys, true
+	return p.openRequestKeyIndex().load()
 }
 
-// persistOpenRequestIndexFromScan writes a scan result with CAS against prev
-// (the index value observed before the scan). On conflict it unions the scan
-// with the current index (complete or partial) and retries, so concurrent
-// track/untrack wins are not wiped by a slower rebuild.
 func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) error {
-	keys := scanned
-	if keys == nil {
-		keys = []string{}
-	}
-	expected := prev
-	for range openRequestIndexCASAttempts {
-		data, err := marshalCompleteKeyIndex(keys)
-		if err != nil {
-			return err
-		}
-		ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, expected, data)
-		if casErr != nil {
-			return casErr
-		}
-		if ok {
-			return nil
-		}
-		raw, appErr := p.API.KVGet(kvOpenRequestIndex)
-		if appErr != nil {
-			return appErr
-		}
-		var current []string
-		if raw != nil {
-			parsed, _, parseOK := parseKeyIndex(raw)
-			if !parseOK {
-				// Unreadable competing value — keep trying to replace it.
-				expected = raw
-				continue
-			}
-			current = parsed
-		}
-		keys = unionStringKeys(scanned, current)
-		expected = raw
-	}
-	return errors.New("open-request index: CAS contention persisting scan")
+	return p.openRequestKeyIndex().persistFromScan(prev, scanned)
 }
 
-func unionStringKeys(a, b []string) []string {
-	seen := make(map[string]struct{}, len(a)+len(b))
-	out := make([]string, 0, len(a)+len(b))
-	for _, keys := range [][]string{a, b} {
-		for _, k := range keys {
-			if k == "" {
-				continue
-			}
-			if _, ok := seen[k]; ok {
-				continue
-			}
-			seen[k] = struct{}{}
-			out = append(out, k)
-		}
-	}
-	return out
+// invalidateOpenRequestIndex writes a partial blob (optionally including
+// failedKey) so an in-flight rebuild unions that key instead of publishing a
+// scan that missed it. Prefer this over deleting the index.
+func (p *Plugin) invalidateOpenRequestIndex(failedKey string) {
+	p.openRequestKeyIndex().invalidate(failedKey)
 }
 
-// invalidateOpenRequestIndex deletes the index so the next list rebuilds from
-// a full scan. Used when a track fails part-way and leaving a readable but
-// incomplete index would hide open requests.
-func (p *Plugin) invalidateOpenRequestIndex() {
-	if appErr := p.API.KVDelete(kvOpenRequestIndex); appErr != nil {
-		p.API.LogWarn("open-request index: failed to invalidate", "error", appErr.Error())
-	}
-}
-
-// trackOpenRequestKey adds kvKey to the open-request index after a successful
-// store. Best-effort — a failed update invalidates the index so the next list
-// rebuilds rather than trusting a partial blob. When the complete index is
-// missing, writes a partial blob (complete:false) so a concurrent rebuild
-// unions this key instead of publishing a scan that missed it.
 func (p *Plugin) trackOpenRequestKey(kvKey string) {
-	if kvKey == "" {
-		return
-	}
-	for range openRequestIndexCASAttempts {
-		raw, appErr := p.API.KVGet(kvOpenRequestIndex)
-		if appErr != nil {
-			p.API.LogWarn("open-request index: failed to load for add", "key", kvKey, "error", appErr.Error())
-			p.invalidateOpenRequestIndex()
-			return
-		}
-		if raw == nil {
-			data, err := marshalPartialKeyIndex([]string{kvKey})
-			if err != nil {
-				p.invalidateOpenRequestIndex()
-				return
-			}
-			ok, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, nil, data)
-			if casErr != nil {
-				p.API.LogWarn("open-request index: failed to add key", "key", kvKey, "error", casErr.Error())
-				p.invalidateOpenRequestIndex()
-				return
-			}
-			if ok {
-				return
-			}
-			continue
-		}
-		keys, complete, ok := parseKeyIndex(raw)
-		if !ok {
-			p.invalidateOpenRequestIndex()
-			return
-		}
-		if slices.Contains(keys, kvKey) {
-			return
-		}
-		next := append(slices.Clone(keys), kvKey)
-		var data []byte
-		var err error
-		if complete {
-			data, err = marshalCompleteKeyIndex(next)
-		} else {
-			data, err = marshalPartialKeyIndex(next)
-		}
-		if err != nil {
-			p.invalidateOpenRequestIndex()
-			return
-		}
-		casOK, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
-		if casErr != nil {
-			p.API.LogWarn("open-request index: failed to add key", "key", kvKey, "error", casErr.Error())
-			p.invalidateOpenRequestIndex()
-			return
-		}
-		if casOK {
-			return
-		}
-	}
-	p.API.LogWarn("open-request index: gave up adding key after CAS contention", "key", kvKey)
-	p.invalidateOpenRequestIndex()
+	p.openRequestKeyIndex().track(kvKey)
 }
 
-// untrackOpenRequestKey removes kvKey from the open-request index after the
-// request is claimed or deleted. Best-effort.
 func (p *Plugin) untrackOpenRequestKey(kvKey string) {
-	if kvKey == "" {
-		return
-	}
-	for range openRequestIndexCASAttempts {
-		raw, appErr := p.API.KVGet(kvOpenRequestIndex)
-		if appErr != nil {
-			p.API.LogWarn("open-request index: failed to load for remove", "key", kvKey, "error", appErr.Error())
-			return
-		}
-		if raw == nil {
-			return
-		}
-		keys, complete, ok := parseKeyIndex(raw)
-		if !ok {
-			return
-		}
-		idx := slices.Index(keys, kvKey)
-		if idx < 0 {
-			return
-		}
-		next := slices.Delete(slices.Clone(keys), idx, idx+1)
-		var data []byte
-		var err error
-		if complete {
-			data, err = marshalCompleteKeyIndex(next)
-		} else {
-			data, err = marshalPartialKeyIndex(next)
-		}
-		if err != nil {
-			return
-		}
-		casOK, casErr := p.API.KVCompareAndSet(kvOpenRequestIndex, raw, data)
-		if casErr != nil {
-			p.API.LogWarn("open-request index: failed to remove key", "key", kvKey, "error", casErr.Error())
-			return
-		}
-		if casOK {
-			return
-		}
-	}
-	p.API.LogWarn("open-request index: gave up removing key after CAS contention", "key", kvKey)
+	p.openRequestKeyIndex().untrack(kvKey)
 }
 
 // rebuildOpenRequestIndex rescans the store and replaces the index. Used on
-// activate so upgrades pick up requests stored before indexing existed.
+// activate and the periodic reconciler so rolling HA upgrades and older
+// writers still get into the approval queue.
 func (p *Plugin) rebuildOpenRequestIndex() {
-	prev, _ := p.API.KVGet(kvOpenRequestIndex)
-	keys, err := p.scanAllRequestKeys()
-	if err != nil {
-		p.API.LogWarn("open-request index: rebuild scan failed", "error", err.Error())
-		return
-	}
-	if err := p.persistOpenRequestIndexFromScan(prev, keys); err != nil {
-		p.API.LogWarn("open-request index: rebuild save failed", "error", err.Error())
-		return
-	}
-	p.API.LogInfo("open-request index: rebuilt", "count", len(keys))
+	p.openRequestKeyIndex().rebuild(p.scanAllRequestKeys)
 }
 
 // putPendingRequestKV stores a pending request record and tracks it in the
