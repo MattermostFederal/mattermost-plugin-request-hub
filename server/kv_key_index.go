@@ -111,6 +111,7 @@ func (idx keyIndex) list(scan func() ([]string, error)) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys = unionWithPreScanIndex(keys, prev)
 	if saveErr := idx.persistFromScan(prev, keys); saveErr != nil {
 		idx.p.API.LogWarn("failed to persist "+idx.label+" index; list still returned",
 			"error", saveErr.Error(), "count", len(keys))
@@ -312,6 +313,21 @@ func (idx keyIndex) untrack(kvKey string) {
 	idx.p.API.LogWarn(idx.label+" index: gave up removing key after CAS contention", "key", kvKey)
 }
 
+// unionWithPreScanIndex adds the keys of the index observed before a scan
+// (complete or partial) to the scan result. Offset paging can skip a live
+// key when another key is deleted mid-scan; the scan only adds. Ghost keys
+// are tolerated: readers skip missing records.
+func unionWithPreScanIndex(scanned []string, prev []byte) []string {
+	if prev == nil {
+		return scanned
+	}
+	existing, _, ok := parseKeyIndex(prev)
+	if !ok {
+		return scanned
+	}
+	return unionStringKeys(scanned, existing)
+}
+
 func (idx keyIndex) rebuild(scan func() ([]string, error)) {
 	prev, _ := idx.p.API.KVGet(idx.store)
 	keys, err := scan()
@@ -319,14 +335,7 @@ func (idx keyIndex) rebuild(scan func() ([]string, error)) {
 		idx.p.API.LogWarn(idx.label+" index: rebuild scan failed", "error", err.Error())
 		return
 	}
-	// Offset paging can skip a live key when another key is deleted mid-scan.
-	// Periodic rebuild only adds: union with the pre-scan index. Ghosts are
-	// dropped on read via untrack.
-	if prev != nil {
-		if current, _, ok := parseKeyIndex(prev); ok {
-			keys = unionStringKeys(keys, current)
-		}
-	}
+	keys = unionWithPreScanIndex(keys, prev)
 	if err := idx.persistFromScan(prev, keys); err != nil {
 		idx.p.API.LogWarn(idx.label+" index: rebuild save failed", "error", err.Error())
 		return

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -125,7 +126,7 @@ func TestEnsureRootApprovalChannel_CreatesChannelAndSeedsAdmins(t *testing.T) {
 		Return(nil, testAppErr("post failed"))
 	api.On("GetChannel", "root").Return(created, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "bot-user-id"}, {Id: "sa1"}}, nil)
-	api.On("AddChannelMember", "root", "sa1").Return(&model.ChannelMember{}, nil)
+	expectSeededAdd(api, "root", "sa1")
 	api.On("GetChannelSidebarCategories", "sa1", "t1").Return(nil, nil)
 	api.On("CreateChannelSidebarCategory", "sa1", "t1", mock.MatchedBy(func(c *model.SidebarCategoryWithChannels) bool {
 		return c.DisplayName == sidebarCategoryName && len(c.Channels) == 1 && c.Channels[0] == "root"
@@ -246,11 +247,48 @@ func TestAddSystemAdminsToChannel_ChannelLookupFailureSkipsSidebar(t *testing.T)
 	defer api.AssertExpectations(t)
 	api.On("GetChannel", "c1").Return(nil, testAppErr("gone"))
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)
-	api.On("AddChannelMember", "c1", "sa1").Return(&model.ChannelMember{}, nil)
+	expectSeededAdd(api, "c1", "sa1")
 
 	p.addSystemAdminsToChannel("c1")
 
 	api.AssertNotCalled(t, "GetChannelSidebarCategories", mock.Anything, mock.Anything)
+}
+
+func TestAddSystemAdminsToChannel_RecordsOnlyNewMemberships(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1"}, nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "existing"}, {Id: "new"}, {Id: "gone", DeleteAt: 1}}, nil)
+	api.On("GetChannelMember", "c1", "existing").Return(&model.ChannelMember{UserId: "existing"}, nil)
+	var recorded []byte
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { recorded = args.Get(2).([]byte) }).Return(true, nil)
+	expectSeededAdd(api, "c1", "new")
+
+	p.addSystemAdminsToChannel("c1")
+
+	require.JSONEq(t, `["new"]`, string(recorded))
+	api.AssertNotCalled(t, "AddChannelMember", "c1", "existing")
+	api.AssertNotCalled(t, "GetChannelMember", "c1", "gone")
+}
+
+func TestAddSystemAdminsToChannel_PagesPastFirstHundred(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1"}, nil)
+	first := make([]*model.User, systemAdminPageSize)
+	for i := range first {
+		first[i] = &model.User{Id: fmt.Sprintf("sa%03d", i)}
+		api.On("GetChannelMember", "c1", first[i].Id).Return(&model.ChannelMember{}, nil)
+	}
+	api.On("GetUsers", mock.MatchedBy(func(o *model.UserGetOptions) bool { return o.Page == 0 })).Return(first, nil).Once()
+	api.On("GetUsers", mock.MatchedBy(func(o *model.UserGetOptions) bool { return o.Page == 1 })).
+		Return([]*model.User{{Id: "sa-late"}}, nil).Once()
+	expectSeededAdd(api, "c1", "sa-late")
+
+	p.addSystemAdminsToChannel("c1")
+
+	api.AssertCalled(t, "AddChannelMember", "c1", "sa-late")
 }
 
 func TestAddSystemAdminsToChannel_AdminListFailureAddsNobody(t *testing.T) {
@@ -268,8 +306,9 @@ func TestAddSystemAdminsToChannel_AddFailureContinuesWithOthers(t *testing.T) {
 	defer api.AssertExpectations(t)
 	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1", TeamId: "t1"}, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}, {Id: "sa2"}}, nil)
+	api.On("GetChannelMember", "c1", "sa1").Return(nil, notFoundErr())
 	api.On("AddChannelMember", "c1", "sa1").Return(nil, testAppErr("denied"))
-	api.On("AddChannelMember", "c1", "sa2").Return(&model.ChannelMember{}, nil)
+	expectSeededAdd(api, "c1", "sa2")
 	api.On("GetChannelSidebarCategories", "sa2", "t1").Return(nil, testAppErr("down"))
 
 	p.addSystemAdminsToChannel("c1")
@@ -380,12 +419,33 @@ func TestAddTeamApproversToChannel_SkipsBotAndContinuesAfterAddFailure(t *testin
 	api.On("GetChannelMember", "c1", "sa1").Return(nil, notFound)
 	api.On("AddChannelMember", "c1", "ta1").Return(nil, testAppErr("denied"))
 	api.On("AddChannelMember", "c1", "sa1").Return(&model.ChannelMember{}, nil)
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return(nil, nil)
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(nil), []byte(`["sa1"]`)).Return(true, nil)
 	api.On("GetChannelSidebarCategories", "sa1", "team1").Return(nil, testAppErr("down"))
 
 	p.addTeamApproversToChannel("team1", "c1")
 
 	api.AssertNotCalled(t, "AddChannelMember", "c1", "bot-user-id")
 	api.AssertNotCalled(t, "AddChannelMember", "c1", "plain")
+	api.AssertNotCalled(t, "GetChannelSidebarCategories", "ta1", "team1")
+}
+
+func TestAddTeamApproversToChannel_RollsBackAddWhenLedgerWriteFails(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{
+		{UserId: "ta1", Roles: "team_user team_admin"},
+	}, nil)
+	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
+	api.On("GetChannelMember", "c1", "ta1").Return(nil, notFound)
+	api.On("AddChannelMember", "c1", "ta1").Return(&model.ChannelMember{}, nil)
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return(nil, testAppErr("kv down"))
+	api.On("DeleteChannelMember", "c1", "ta1").Return(nil).Once()
+
+	p.addTeamApproversToChannel("team1", "c1")
+
+	api.AssertCalled(t, "DeleteChannelMember", "c1", "ta1")
 	api.AssertNotCalled(t, "GetChannelSidebarCategories", "ta1", "team1")
 }
 
@@ -615,4 +675,308 @@ func TestUserHasJoinedTeam_AddFailureSkipsSidebar(t *testing.T) {
 	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{TeamId: "team1", UserId: "sa1"}, &model.User{Id: "other"})
 
 	api.AssertNotCalled(t, "GetChannelSidebarCategories", mock.Anything, mock.Anything)
+}
+
+func TestUserHasJoinedTeam_RecordsAddedSystemAdmin(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
+	defer api.AssertExpectations(t)
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
+		Return(pluginChannelIn("ch-team1", "mattermost-channel-requests", "team1"), nil)
+	api.On("GetChannelMember", "ch-team1", "sa1").Return(nil, model.NewAppError("test", "not_found", nil, "", http.StatusNotFound))
+	api.On("AddChannelMember", "ch-team1", "sa1").Return(&model.ChannelMember{}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-team1")).Return(nil, nil)
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-team1"), []byte(nil), []byte(`["sa1"]`)).Return(true, nil)
+	api.On("GetChannelSidebarCategories", "sa1", "team1").Return(nil, testAppErr("down"))
+
+	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{TeamId: "team1", UserId: "sa1"},
+		&model.User{Id: "sa1", Roles: "system_user system_admin"})
+}
+
+// --- seed ledger ownership ---
+
+func TestEvictSeededMember_DeletesBeforeClearingLedger(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "c1", TeamId: "t1"}
+	var order []string
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`["u1"]`), nil)
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`["u1"]`), []byte(`[]`)).
+		Run(func(mock.Arguments) { order = append(order, "clear") }).Return(true, nil)
+	api.On("DeleteChannelMember", "c1", "u1").
+		Run(func(mock.Arguments) { order = append(order, "delete") }).Return(nil)
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+
+	evicted, err := p.evictSeededMember(ch, "u1", nil)
+
+	require.Nil(t, err)
+	require.True(t, evicted)
+	require.Equal(t, []string{"delete", "clear"}, order)
+}
+
+// The ledger entry survives a failed delete so the next sweep retries.
+func TestEvictSeededMember_DeleteFailureKeepsLedger(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "c1", TeamId: "t1"}
+	api.On("DeleteChannelMember", "c1", "u1").Return(testAppErr("down"))
+
+	evicted, err := p.evictSeededMember(ch, "u1", func() bool { return true })
+
+	require.NotNil(t, err)
+	require.False(t, evicted)
+	api.AssertNotCalled(t, "KVGet", taVisibilitySeededKey("c1"))
+	api.AssertNotCalled(t, "KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestEvictSeededMember_ClearFailureStillRevokes(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "c1", TeamId: "t1"}
+	api.On("DeleteChannelMember", "c1", "u1").Return(nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return(nil, testAppErr("kv down")).Once()
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+
+	evicted, err := p.evictSeededMember(ch, "u1", nil)
+
+	require.Nil(t, err)
+	require.True(t, evicted)
+	api.AssertCalled(t, "DeleteChannelMember", "c1", "u1")
+}
+
+// A seed that re-added and recorded the user between the delete and the
+// clear has its record restored rather than left unrecorded.
+func TestEvictSeededMember_PromotedAndReaddedMemberIsRecorded(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "c1", TeamId: "t1"}
+	api.On("DeleteChannelMember", "c1", "u1").Return(nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`["u1"]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`["u1"]`), []byte(`[]`)).Return(true, nil).Once()
+	api.On("GetChannelMember", "c1", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`[]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`[]`), []byte(`["u1"]`)).Return(true, nil).Once()
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+
+	evicted, err := p.evictSeededMember(ch, "u1", func() bool { return true })
+
+	require.Nil(t, err)
+	require.False(t, evicted)
+}
+
+// stubEvictedLedger stubs a successful delete and ledger clear of u1 on c1.
+func stubEvictedLedger(api *plugintest.API) {
+	api.On("DeleteChannelMember", "c1", "u1").Return(nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`["u1"]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`["u1"]`), []byte(`[]`)).Return(true, nil).Once()
+}
+
+// A user re-promoted to System Admin and re-added by a concurrent seed keeps
+// their ledger entry even when the caller's Team Admin check fails.
+func TestEvictSeededMember_RepromotedSystemAdminReaddedIsRecorded(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`[]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`[]`), []byte(`["u1"]`)).Return(true, nil).Once()
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", func() bool { return false })
+
+	require.Nil(t, err)
+	require.False(t, evicted)
+}
+
+func TestEvictSeededMember_RepromotedSystemAdminNotReaddedIsAddedBack(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(nil, notFoundErr()).Twice()
+	api.On("AddChannelMember", "c1", "u1").Return(&model.ChannelMember{}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`[]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`[]`), []byte(`["u1"]`)).Return(true, nil).Once()
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
+
+	require.Nil(t, err)
+	require.False(t, evicted)
+}
+
+// A failed role lookup still re-records a re-added member so their seat
+// stays revocable.
+func TestEvictSeededMember_RoleLookupFailureRerecordsMember(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(nil, testAppErr("down"))
+	api.On("GetChannelMember", "c1", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`[]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`[]`), []byte(`["u1"]`)).Return(true, nil).Once()
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
+
+	require.Nil(t, err)
+	require.False(t, evicted)
+}
+
+// A failed role lookup never adds anyone back.
+func TestEvictSeededMember_RoleLookupFailureNeverReadds(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(nil, testAppErr("down"))
+	api.On("GetChannelMember", "c1", "u1").Return(nil, notFoundErr()).Once()
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
+
+	require.Nil(t, err)
+	require.True(t, evicted)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestEvictSeededMember_DeactivatedSystemAdminIsRemoved(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemAdminRoleId, DeleteAt: 1}, nil)
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
+
+	require.Nil(t, err)
+	require.True(t, evicted)
+	api.AssertNotCalled(t, "GetChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestStripAdoptedApprovalChannel_RefusesWhenSystemAdminCannotBeRecorded(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	api.On("GetChannelMembers", "c1", 0, 100).Return(model.ChannelMembers{{UserId: "sa1"}}, nil)
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return(nil, testAppErr("kv down"))
+
+	require.False(t, p.stripAdoptedApprovalChannelToPrivileged(&model.Channel{Id: "c1"}))
+}
+
+// seedTAVisibility re-checks eligibility after the add: a toggle that went
+// off after the caller's snapshot must not leave a stale seed.
+func TestSeedTAVisibility_UndoesSeedThatNoLongerQualifies(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{AllowApprovalTeamAdminsForTeamRequests: false})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "ch-team", TeamId: "hq", Name: "mattermost-team-requests"}
+	api.On("GetChannelMember", "ch-team", "ta1").Return(nil, notFoundErr()).Once()
+	api.On("CreateTeamMember", "hq", "ta1").Return(&model.TeamMember{}, nil)
+	api.On("AddChannelMember", "ch-team", "ta1").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelSidebarCategories", "ta1", "hq").Return(nil, testAppErr("down"))
+	api.On("GetChannelMember", "ch-team", "ta1").Return(&model.ChannelMember{UserId: "ta1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return(nil, nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-team"), []byte(nil), []byte(`["ta1"]`)).Return(true, nil).Once()
+	api.On("GetTeamMember", "hq", "ta1").Return(&model.TeamMember{TeamId: "hq", UserId: "ta1", SchemeAdmin: true}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return([]byte(`["ta1"]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-team"), []byte(`["ta1"]`), []byte(`[]`)).Return(true, nil).Once()
+	api.On("DeleteChannelMember", "ch-team", "ta1").Return(nil).Once()
+	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1"}, nil)
+
+	p.seedTAVisibility(ch, "ta1")
+}
+
+func TestSeedTAVisibility_RollsBackAddWhenLedgerWriteFails(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{AllowApprovalTeamAdminsForTeamRequests: true})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "ch-team", TeamId: "hq", Name: "mattermost-team-requests"}
+	api.On("GetChannelMember", "ch-team", "ta1").Return(nil, notFoundErr()).Once()
+	api.On("CreateTeamMember", "hq", "ta1").Return(&model.TeamMember{}, nil)
+	api.On("AddChannelMember", "ch-team", "ta1").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelSidebarCategories", "ta1", "hq").Return(nil, testAppErr("down"))
+	api.On("GetChannelMember", "ch-team", "ta1").Return(&model.ChannelMember{UserId: "ta1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return(nil, testAppErr("kv down"))
+	api.On("DeleteChannelMember", "ch-team", "ta1").Return(nil).Once()
+
+	p.seedTAVisibility(ch, "ta1")
+
+	api.AssertNotCalled(t, "GetTeamMember", mock.Anything, mock.Anything)
+}
+
+func TestReconcilePerTeamApprovalAccessForUser_DeleteFailureWarnsAndKeepsLedger(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
+	defer api.AssertExpectations(t)
+	ops := &model.Team{Id: "team-ops", Name: "ops"}
+	opsCh := pluginChannelIn("ch-ops", "mattermost-channel-requests", "team-ops")
+	api.On("GetTeamsForUser", "demoted").Return([]*model.Team{ops}, nil)
+	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
+	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-ops")).Return([]byte(`["demoted"]`), nil).Once()
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("DeleteChannelMember", "ch-ops", "demoted").Return(testAppErr("down"))
+
+	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "demoted", Username: "ex"})
+
+	api.AssertCalled(t, "LogWarn", "per-team approval: failed to evict demoted Team Admin on login",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// A promotion that lands mid-eviction on login re-seeds the user (and the
+// ledger) instead of leaving them evicted or as an unrecorded member.
+func TestReconcilePerTeamApprovalAccessForUser_PromotedMidEvictionIsReseeded(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
+	defer api.AssertExpectations(t)
+	ops := &model.Team{Id: "team-ops", Name: "ops"}
+	opsCh := pluginChannelIn("ch-ops", "mattermost-channel-requests", "team-ops")
+	api.On("GetTeamsForUser", "u1").Return([]*model.Team{ops}, nil)
+	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
+	api.On("GetTeamMember", "team-ops", "u1").Return(&model.TeamMember{UserId: "u1", Roles: model.TeamUserRoleId}, nil).Once()
+	api.On("GetTeamMember", "team-ops", "u1").Return(&model.TeamMember{TeamId: "team-ops", UserId: "u1", SchemeAdmin: true}, nil)
+	api.On("KVGet", taVisibilitySeededKey("ch-ops")).Return([]byte(`["u1"]`), nil).Times(2)
+	api.On("GetChannelMember", "ch-ops", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-ops"), []byte(`["u1"]`), []byte(`[]`)).Return(true, nil).Once()
+	api.On("DeleteChannelMember", "ch-ops", "u1").Return(nil).Once()
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+	// Post-clear recheck, then seedTAVisibility's own lookup.
+	api.On("GetChannelMember", "ch-ops", "u1").Return(nil, notFoundErr()).Twice()
+	api.On("CreateTeamMember", "team-ops", "u1").Return(&model.TeamMember{}, nil)
+	api.On("AddChannelMember", "ch-ops", "u1").Return(&model.ChannelMember{}, nil).Once()
+	api.On("GetChannelSidebarCategories", "u1", "team-ops").Return(nil, testAppErr("down"))
+	api.On("GetChannelMember", "ch-ops", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("ch-ops")).Return([]byte(`[]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-ops"), []byte(`[]`), []byte(`["u1"]`)).Return(true, nil).Once()
+
+	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "u1", Username: "u1"})
+
+	api.AssertNotCalled(t, "LogInfo", "per-team approval: evicted demoted Team Admin",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestAddUserToApprovalChannelIfTeamMember_RecordsOnlyNewMemberships(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	newCh := &model.Channel{Id: "c-new", TeamId: "hq"}
+	oldCh := &model.Channel{Id: "c-old", TeamId: "hq"}
+	api.On("GetTeamMember", "hq", "sa1").Return(&model.TeamMember{TeamId: "hq", UserId: "sa1"}, nil)
+	api.On("GetChannelSidebarCategories", "sa1", "hq").Return(nil, testAppErr("down"))
+
+	api.On("GetChannelMember", "c-new", "sa1").Return(nil, notFoundErr())
+	api.On("AddChannelMember", "c-new", "sa1").Return(&model.ChannelMember{}, nil)
+	api.On("KVGet", taVisibilitySeededKey("c-new")).Return(nil, nil)
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c-new"), []byte(nil), []byte(`["sa1"]`)).Return(true, nil)
+	p.addUserToApprovalChannelIfTeamMember(newCh, "sa1")
+
+	// Possibly hand-added: left unrecorded so it is never evicted.
+	api.On("GetChannelMember", "c-old", "sa1").Return(&model.ChannelMember{UserId: "sa1"}, nil)
+	p.addUserToApprovalChannelIfTeamMember(oldCh, "sa1")
+
+	api.AssertNotCalled(t, "AddChannelMember", "c-old", "sa1")
+	api.AssertNotCalled(t, "KVGet", taVisibilitySeededKey("c-old"))
+}
+
+func TestAddUserToApprovalChannelIfTeamMember_LookupErrorSkipsAdd(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	ch := &model.Channel{Id: "c1", TeamId: "hq"}
+	api.On("GetTeamMember", "hq", "sa1").Return(&model.TeamMember{TeamId: "hq", UserId: "sa1"}, nil)
+	api.On("GetChannelMember", "c1", "sa1").Return(nil, testAppErr("down"))
+
+	p.addUserToApprovalChannelIfTeamMember(ch, "sa1")
+
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
 }

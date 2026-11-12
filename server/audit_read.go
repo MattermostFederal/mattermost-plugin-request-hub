@@ -603,11 +603,13 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	cw := csv.NewWriter(&buf)
 	_ = cw.Write(csvRecord("request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"))
 	events := 0
+	represented := 0
 	eventsTruncated := false
 eventLoop:
 	for _, h := range filtered {
+		wroteRow := false
 		for _, ev := range h.Events {
-			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
+			if !exportWindowContains(ev.At, f) {
 				continue
 			}
 			// Cap reached only after seeing another eligible event, including
@@ -623,8 +625,13 @@ eventLoop:
 				ev.Event, ev.Outcome, ev.ActorID, ev.ActorName, ev.Note, message, details,
 			))
 			events++
+			if !wroteRow {
+				wroteRow = true
+				represented++
+			}
 		}
 	}
+	out.count = represented
 	if histTruncated || eventsTruncated {
 		_ = cw.Write(csvRecord("TRUNCATED", "", "", "", "", "", "", "", "",
 			fmt.Sprintf("export capped at %d histories / %d events", historyExportMaxHistories, historyExportMaxEvents), "", ""))
@@ -654,7 +661,7 @@ func capHistoriesEvents(in []requestHistory, f auditExportFilter, maxEvents int)
 		clipped := h
 		clipped.Events = nil
 		for _, ev := range h.Events {
-			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
+			if !exportWindowContains(ev.At, f) {
 				continue
 			}
 			if events >= maxEvents {

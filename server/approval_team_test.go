@@ -16,6 +16,14 @@ import (
 // "appteam", with only log stubs registered so KV calls can be asserted.
 func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	t.Helper()
+	p, api, _ := newApprovalTeamPluginWithStripKV(t)
+	return p, api
+}
+
+// newApprovalTeamPluginWithStripKV is newApprovalTeamPlugin plus a handle on
+// the in-memory adopt-strip marker store.
+func newApprovalTeamPluginWithStripKV(t *testing.T) (*Plugin, *plugintest.API, *fakeAdoptStripKV) {
+	t.Helper()
 	api := &plugintest.API{}
 	for _, method := range []string{"LogDebug", "LogInfo", "LogWarn", "LogError"} {
 		for arity := 1; arity <= 16; arity++ {
@@ -26,16 +34,10 @@ func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 			api.On(method, args...).Maybe()
 		}
 	}
-	// Adopt strip claim (public / untrusted-orphan paths). Explicit tests may override.
-	api.On("KVSetWithOptions", mock.MatchedBy(func(key string) bool {
-		return strings.HasPrefix(key, kvAdoptedStripPrefix)
-	}), mock.Anything, mock.Anything).Return(true, nil).Maybe()
-	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
-		return strings.HasPrefix(key, kvAdoptedStripPrefix)
-	})).Return(nil).Maybe()
+	kv := stubAdoptStripKV(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam", TwoStepApproverMode: twoStepModeSystemAdmin})
-	return p, api
+	return p, api, kv
 }
 
 func approvalTeamRecordBytes(t *testing.T, name, id string) []byte {
@@ -325,28 +327,27 @@ func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testin
 	// Legacy: mattermost-channel-requests was created as public by the
 	// pre-rename bot. Convert to private and adopt so tickets stop DMing
 	// System Admins.
-	p, api := newApprovalTeamPlugin(t)
+	p, api, kv := newApprovalTeamPluginWithStripKV(t)
 	open := &model.Channel{
 		Id: "c9", TeamId: "t1", Name: "approvals",
 		Type: model.ChannelTypeOpen, CreatorId: "legacy-bot",
 	}
 	api.On("GetChannelByName", "t1", "approvals", true).Return(open, nil)
+	api.On("GetChannel", "c9").Return(open.DeepCopy(), nil)
 	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
 		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID,
 	}, nil)
 	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member")).Maybe()
 	api.On("UpdateChannel", mock.MatchedBy(func(c *model.Channel) bool {
-		return c.Id == "c9" && c.Type == model.ChannelTypePrivate
+		// Cleanup must be recorded as required before the conversion.
+		return c.Id == "c9" && c.Type == model.ChannelTypePrivate && kv.marker("c9") == adoptStripPending
 	})).Return(&model.Channel{
 		Id: "c9", TeamId: "t1", Name: "approvals",
-		Type: model.ChannelTypePrivate, CreatorId: "legacy-bot",
+		Type: model.ChannelTypePrivate, CreatorId: "legacy-bot", UpdateAt: 5,
 	}, nil)
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
-	// Public convert strips non-privileged members after adopt.
-	api.On("KVSetWithOptions", adoptedStripKey("c9"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
-	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -354,6 +355,8 @@ func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testin
 	require.Equal(t, model.ChannelTypePrivate, ch.Type)
 	require.False(t, taken)
 	api.AssertCalled(t, "UpdateChannel", mock.Anything)
+	require.Equal(t, adoptStripDone, kv.marker("c9"))
+	require.False(t, kv.lockHeld("c9"), "strip lock must be released")
 }
 
 func TestLookupApprovalChannel_NoAdoptionWhenPublicToPrivateFails(t *testing.T) {
@@ -363,6 +366,7 @@ func TestLookupApprovalChannel_NoAdoptionWhenPublicToPrivateFails(t *testing.T) 
 		Type: model.ChannelTypeOpen, CreatorId: "legacy-bot",
 	}
 	api.On("GetChannelByName", "t1", "approvals", true).Return(open, nil)
+	api.On("GetChannel", "c9").Return(open.DeepCopy(), nil)
 	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
 		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID,
 	}, nil)

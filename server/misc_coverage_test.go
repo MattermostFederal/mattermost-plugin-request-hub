@@ -453,7 +453,9 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1", Roles: "system_user system_admin"}}, nil)
 	api.On("GetTeamMembers", "t1", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
 	api.On("GetChannelMembers", mock.Anything, mock.Anything, mock.Anything).Return(model.ChannelMembers{}, nil).Maybe()
+	api.On("GetChannelMember", mock.Anything, "sa1").Return(nil, notFoundErr()).Maybe()
 	api.On("AddChannelMember", mock.Anything, "sa1").Return(&model.ChannelMember{}, nil).Maybe()
+	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("CreateTeamMember", "t1", "sa1").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("GetChannelSidebarCategories", "sa1", "t1").Return(nil, testAppErr("down")).Maybe()
 	var teamsCalls atomic.Int32

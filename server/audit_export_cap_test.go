@@ -75,6 +75,73 @@ func TestBuildHistoryExport_CSVMarksTruncationAtHistoryBoundary(t *testing.T) {
 	require.Contains(t, string(exp.data), "TRUNCATED")
 }
 
+func TestHistoryHasEventInWindow(t *testing.T) {
+	h := requestHistory{CreatedAt: 10, UpdatedAt: 30, Events: []auditEvent{{At: 10}, {At: 30}}}
+	require.True(t, historyHasEventInWindow(h, auditExportFilter{}))
+	require.True(t, historyHasEventInWindow(requestHistory{}, auditExportFilter{}), "no window keeps event-less histories")
+	require.True(t, historyHasEventInWindow(h, auditExportFilter{Since: 30}), "bounds are inclusive")
+	require.True(t, historyHasEventInWindow(h, auditExportFilter{Until: 10}))
+	require.False(t, historyHasEventInWindow(h, auditExportFilter{Since: 15, Until: 25}))
+}
+
+// A long-lived history overlapping the window with no event inside it must
+// not take a cap slot from a history that has one.
+func TestListHistoriesForExport_CapRanksOnlyHistoriesWithInWindowEvents(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	prev := historyExportMaxHistories
+	historyExportMaxHistories = 1
+	t.Cleanup(func() { historyExportMaxHistories = prev })
+
+	spanning, _ := json.Marshal(requestHistory{
+		RequestID: "span", Kind: "bot", CreatedAt: 1, UpdatedAt: 100,
+		Events: []auditEvent{{At: 1}, {At: 100}},
+	})
+	inside, _ := json.Marshal(requestHistory{
+		RequestID: "inside", Kind: "bot", CreatedAt: 40, UpdatedAt: 50,
+		Events: []auditEvent{{At: 50}},
+	})
+	api.On("KVList", 0, historyListPageSize).Return([]string{kvHistoryPrefix + "span", kvHistoryPrefix + "inside"}, nil)
+	api.On("KVGet", kvHistoryPrefix+"span").Return(spanning, nil)
+	api.On("KVGet", kvHistoryPrefix+"inside").Return(inside, nil)
+
+	got, truncated, err := p.listHistoriesForExport(auditExportFilter{Since: 30, Until: 60})
+	require.NoError(t, err)
+	require.False(t, truncated)
+	require.Len(t, got, 1)
+	require.Equal(t, "inside", got[0].RequestID)
+}
+
+func TestBuildHistoryExport_CSVCountsOnlyRepresentedHistories(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	prevH, prevE := historyExportMaxHistories, historyExportMaxEvents
+	historyExportMaxHistories = 10
+	historyExportMaxEvents = 2
+	t.Cleanup(func() {
+		historyExportMaxHistories = prevH
+		historyExportMaxEvents = prevE
+	})
+
+	// r1 fills the event cap; r2 is cut and has no rows.
+	h1, _ := json.Marshal(requestHistory{RequestID: "r1", Kind: "bot", CreatedAt: 1, UpdatedAt: 2, Events: []auditEvent{{At: 1}, {At: 2}}})
+	h2, _ := json.Marshal(requestHistory{RequestID: "r2", Kind: "bot", CreatedAt: 3, UpdatedAt: 4, Events: []auditEvent{{At: 3}}})
+	api.On("KVList", 0, historyListPageSize).Return([]string{kvHistoryPrefix + "r1", kvHistoryPrefix + "r2"}, nil)
+	api.On("KVGet", kvHistoryPrefix+"r1").Return(h1, nil)
+	api.On("KVGet", kvHistoryPrefix+"r2").Return(h2, nil)
+
+	exp, err := p.buildHistoryExport(auditExportFilter{Format: "csv", Kind: "bot"}, "test")
+	require.NoError(t, err)
+	require.Equal(t, 1, exp.count)
+	require.NotContains(t, string(exp.data), "r2,")
+}
+
 func TestListHistoriesForExport_KeepsNewestAndMarksTruncation(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)

@@ -77,6 +77,32 @@ func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
 }
 
+// A key tracked in a partial index but skipped by the paged scan must stay
+// in both the listing and the first complete index written from it.
+func TestListRequestKeys_UnionsPartialPreScanIndex(t *testing.T) {
+	api := &plugintest.API{}
+	tracked := kvBotRequestPrefix + "tracked"
+	scanned := kvTeamRequestPrefix + "scanned"
+	partial, err := marshalPartialKeyIndex([]string{tracked})
+	require.NoError(t, err)
+	api.On("KVGet", kvOpenRequestIndex).Return(partial, nil)
+	api.On("KVList", 0, 200).Return([]string{scanned}, nil)
+	api.On("KVCompareAndSet", kvOpenRequestIndex, partial, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{scanned, tracked}, keys)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	keys, err := p.listRequestKeys()
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{scanned, tracked}, keys)
+}
+
 func TestTrackOpenRequestKey_MissingIndexWritesPartialNotComplete(t *testing.T) {
 	api := &plugintest.API{}
 	key := kvBotRequestPrefix + "r1"

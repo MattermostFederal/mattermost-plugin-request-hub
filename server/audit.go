@@ -687,6 +687,26 @@ func historyMatchesExportFilter(h requestHistory, f auditExportFilter) bool {
 	return true
 }
 
+// exportWindowContains reports whether a timestamp falls inside f's
+// since/until window. An unset bound is open.
+func exportWindowContains(at int64, f auditExportFilter) bool {
+	return (f.Since <= 0 || at >= f.Since) && (f.Until <= 0 || at <= f.Until)
+}
+
+// historyHasEventInWindow reports whether h has an event inside f's window.
+// Without a window every history qualifies, including one with no events.
+func historyHasEventInWindow(h requestHistory, f auditExportFilter) bool {
+	if f.Since <= 0 && f.Until <= 0 {
+		return true
+	}
+	for _, ev := range h.Events {
+		if exportWindowContains(ev.At, f) {
+			return true
+		}
+	}
+	return false
+}
+
 // listHistoriesForExport pages history keys and keeps at most
 // historyExportMaxHistories newest matches (by UpdatedAt, then CreatedAt) in
 // a bounded min-heap so peak memory stays near the cap, not the full match
@@ -709,7 +729,9 @@ func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []request
 				p.API.LogWarn("skipping unreadable request history", "key", key, "error", loadErr.Error())
 				continue
 			}
-			if h == nil || !historyMatchesExportFilter(*h, f) {
+			// Ranking only histories with an in-window event keeps the cap from
+			// filling with long-lived histories that contribute nothing.
+			if h == nil || !historyMatchesExportFilter(*h, f) || !historyHasEventInWindow(*h, f) {
 				continue
 			}
 			if capN <= 0 {

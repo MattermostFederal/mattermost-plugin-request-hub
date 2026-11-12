@@ -63,9 +63,10 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 
 // warnSecurityPoolCapOnce logs when listing hits securityPoolMaxMembers.
 // Keyed by pool label (not count): at the cap the member count is always the
-// max, so a count fingerprint would never change. Cleared when a later listing
-// is under the cap so a new overrun warns again. sync.Map-safe across
-// reconcile / config / request goroutines.
+// max, so a count fingerprint would never change. Callers also pass complete
+// under-cap listings, which clear the flag so a new overrun warns again.
+// Failed listings must not call it. sync.Map-safe across reconcile / config /
+// request goroutines.
 func (p *Plugin) warnSecurityPoolCapOnce(pool string, members int) {
 	if pool == "" {
 		return
@@ -372,7 +373,9 @@ func (p *Plugin) addUserToApprovalChannel(ch *model.Channel, userID string) {
 
 // addUserToApprovalChannelIfTeamMember adds userID to ch only when they are
 // already an active member of ch's team. Used for SysAdmin visibility on login
-// so we do not silently join them to the Approval team.
+// so we do not silently join them to the Approval team. Memberships this
+// path adds are recorded as plugin-seeded so losing System Admin evicts them;
+// existing (possibly hand-added) memberships are left unrecorded.
 func (p *Plugin) addUserToApprovalChannelIfTeamMember(ch *model.Channel, userID string) {
 	if ch == nil || userID == "" {
 		return
@@ -383,7 +386,12 @@ func (p *Plugin) addUserToApprovalChannelIfTeamMember(ch *model.Channel, userID 
 			return
 		}
 	}
-	p.addChannelMemberAndCategory(ch, userID)
+	if !p.ensureSeededMember(ch.Id, userID) {
+		return
+	}
+	if ch.TeamId != "" {
+		p.addChannelToPermissionsCategory(userID, ch.TeamId, ch.Id)
+	}
 }
 
 func (p *Plugin) addChannelMemberAndCategory(ch *model.Channel, userID string) {
@@ -526,6 +534,7 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			}
 		}
 		if len(users) < perPage {
+			p.warnSecurityPoolCapOnce("group:"+label, len(ids))
 			return ids
 		}
 	}
@@ -586,6 +595,7 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 		}
 		if len(values) < perPage {
+			p.warnSecurityPoolCapOnce("attr:"+attrName, len(ids))
 			return ids
 		}
 	}

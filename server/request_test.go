@@ -60,7 +60,14 @@ func decisionCardsOnly(p *Plugin) func(auditEntry, auditEventSpec) {
 // stubLogs registers permissive log expectations so production code can
 // log at any level/arity without the test caring about the exact calls.
 func stubLogs(api *plugintest.API) {
+	stubLogsWithStripKV(api)
+}
+
+// stubLogsWithStripKV is stubLogs plus a handle on the in-memory adopt-strip
+// marker store.
+func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	stubLogLevels(api)
+	stripKV := stubAdoptStripKV(api)
 	// CAS re-store of post IDs after approval/DM create — most queue tests
 	// don't care about the success path beyond "submitted". Pending lists are
 	// left to stubPendingLists / fakePendingLists.
@@ -114,16 +121,8 @@ func stubLogs(api *plugintest.API) {
 		api.On("UpdateChannelSidebarCategories",
 			mock.MatchedBy(unclaimed[string](api, &seedOurs, "UpdateChannelSidebarCategories", 0)),
 			mock.Anything, mock.Anything).Return([]*model.SidebarCategoryWithChannels{}, nil).Maybe(),
-		// Adopt strip claim — once cluster-wide. Yields to explicit test stubs.
-		api.On("KVSetWithOptions", mock.MatchedBy(func(key string) bool {
-			return strings.HasPrefix(key, kvAdoptedStripPrefix) &&
-				unclaimed[string](api, &seedOurs, "KVSetWithOptions", 0)(key)
-		}), mock.Anything, mock.Anything).Return(true, nil).Maybe(),
-		api.On("KVDelete", mock.MatchedBy(func(key string) bool {
-			return strings.HasPrefix(key, kvAdoptedStripPrefix) &&
-				unclaimed[string](api, &seedOurs, "KVDelete", 0)(key)
-		})).Return(nil).Maybe(),
 	)
+	return stripKV
 }
 
 // stubTAVisibilitySeeded pretends the plugin previously seeded userIDs into

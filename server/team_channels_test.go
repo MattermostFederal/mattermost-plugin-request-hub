@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -489,6 +491,8 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	}, nil)
 
 	api.On("CreateTeamMember", "team-hq", "u_tadmin").Return(&model.TeamMember{}, nil).Maybe()
+	// Post-seed eligibility re-check.
+	api.On("GetTeamMember", "team-hq", "u_tadmin").Return(&model.TeamMember{TeamId: "team-hq", UserId: "u_tadmin", SchemeAdmin: true}, nil)
 	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		// Not a member yet → seed adds and marks; confirm membership after add.
@@ -519,6 +523,7 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	api.AssertNotCalled(t, "AddChannelMember", "ch-bot", "u_tadmin")
 	api.AssertNotCalled(t, "AddChannelMember", "ch-wh", "u_tadmin")
 	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, "u_member")
+	api.AssertNotCalled(t, "DeleteChannelMember", mock.Anything, "u_tadmin")
 }
 
 func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
@@ -544,13 +549,8 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(audit, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
 
-	// Only root has a demoted member; team/audit empty ledgers skip paging.
-	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
-		{UserId: "bot"},
-		{UserId: "demoted"},
-		{UserId: "still-admin"},
-		{UserId: "sysadmin"},
-	}, nil)
+	// Only root has a demoted member; team/audit have empty ledgers.
+	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
 	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return(nil, nil).Maybe()
 	api.On("KVGet", taVisibilitySeededKey("ch-audit")).Return(nil, nil).Maybe()
 
@@ -591,10 +591,7 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_ToggleOffEvictsSeededTeamAdmin
 	api.On("GetChannelByName", "team-hq", "mattermost-team-requests", true).Return(nil, testAppErr("missing"))
 	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(nil, testAppErr("missing"))
 
-	api.On("GetChannelMembers", "ch-root", 0, 100).Return(model.ChannelMembers{
-		{UserId: "bot"},
-		{UserId: "still-admin"},
-	}, nil)
+	api.On("GetChannelMember", "ch-root", "still-admin").Return(&model.ChannelMember{UserId: "still-admin"}, nil)
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
 	api.On("GetTeamMember", "team-hq", "still-admin").Return(&model.TeamMember{UserId: "still-admin", SchemeAdmin: true}, nil)
 	api.On("DeleteChannelMember", "ch-root", "still-admin").Return(nil).Once()
@@ -622,6 +619,33 @@ func TestEvictStaleApproversFromApprovalChannel_LeavesHandAddedObservers(t *test
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "hand-added")
 }
 
+func TestEvictStaleApproversFromApprovalChannel_WalksLedgerNotMemberList(t *testing.T) {
+	api := &plugintest.API{}
+	stubTAVisibilitySeeded(api, "ch-root", "demoted", "left", "lookup-fails")
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	ch := &model.Channel{Id: "ch-root", TeamId: "team-hq"}
+
+	for _, id := range []string{"demoted", "left", "lookup-fails"} {
+		api.On("GetUser", id).Return(&model.User{Id: id, Username: id}, nil)
+		api.On("GetTeamMember", "team-hq", id).Return(&model.TeamMember{UserId: id, Roles: model.TeamUserRoleId}, nil)
+	}
+	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("GetChannelMember", "ch-root", "left").Return(nil, notFoundErr())
+	api.On("GetChannelMember", "ch-root", "lookup-fails").Return(nil, testAppErr("db down"))
+	api.On("DeleteChannelMember", "ch-root", "demoted").Return(nil).Once()
+
+	p.evictStaleApproversFromApprovalChannel(ch, "team-hq", "")
+
+	api.AssertNotCalled(t, "GetChannelMembers", mock.Anything, mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "left")
+	api.AssertNotCalled(t, "DeleteChannelMember", "ch-root", "lookup-fails")
+	api.AssertCalled(t, "LogWarn", "approval channel: membership lookup failed during demotion eviction",
+		"channel_id", "ch-root", "user_id", "lookup-fails", "error", mock.Anything)
+}
+
 func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t *testing.T) {
 	api := &plugintest.API{}
 	stubTAVisibilitySeeded(api, "ch-ops", "demoted", "still-admin")
@@ -641,11 +665,7 @@ func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t
 	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(nil, testAppErr("missing"))
 	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
 
-	api.On("GetChannelMembers", "ch-ops", 0, 100).Return(model.ChannelMembers{
-		{UserId: "bot"},
-		{UserId: "demoted"},
-		{UserId: "still-admin"},
-	}, nil)
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
 	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
 	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
@@ -673,6 +693,7 @@ func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
 	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
 	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
 	api.On("DeleteChannelMember", "ch-ops", "demoted").Return(nil).Once()
+	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 
 	p.reconcilePerTeamApprovalAccessForUser(&model.User{Id: "demoted", Username: "ex"})
 
@@ -775,7 +796,7 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 
 func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing.T) {
 	api := &plugintest.API{}
-	stubLogs(api)
+	kv := stubLogsWithStripKV(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.botUserID = "bot"
@@ -786,8 +807,9 @@ func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing
 	}
 	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
 	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetChannel", "ch-audit").Return(ch.DeepCopy(), nil)
 	api.On("UpdateChannel", mock.MatchedBy(func(c *model.Channel) bool {
-		return c.Id == "ch-audit" && c.Type == model.ChannelTypePrivate
+		return c.Id == "ch-audit" && c.Type == model.ChannelTypePrivate && kv.marker("ch-audit") == adoptStripPending
 	})).Return(&model.Channel{
 		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
 		Type: model.ChannelTypePrivate, CreatorId: "sa1",
@@ -795,7 +817,6 @@ func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing
 	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
 	api.On("CreateTeamMember", "team-hq", "bot").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
-	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
@@ -804,17 +825,20 @@ func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
 	api.On("GetUser", "sa2").Return(&model.User{Id: "sa2", Username: "admin", Roles: model.SystemAdminRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
-	api.On("KVDelete", taVisibilitySeededKey("ch-audit")).Return(nil)
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-audit", "sa2")
 	api.AssertNotCalled(t, "DeleteChannelMember", "ch-audit", "bot")
+	// Retained System Admin is recorded so losing the role evicts them.
+	api.AssertCalled(t, "KVCompareAndSet", taVisibilitySeededKey("ch-audit"), []byte(nil), []byte(`["sa2"]`))
+	require.Equal(t, adoptStripDone, kv.marker("ch-audit"))
+	require.False(t, kv.lockHeld("ch-audit"))
 }
 
 func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
 	api := &plugintest.API{}
-	stubLogs(api)
+	kv := stubLogsWithStripKV(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.botUserID = "bot"
@@ -829,22 +853,21 @@ func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
 	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
 	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
 	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
-	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
 	}, nil)
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
-	api.On("KVDelete", taVisibilitySeededKey("ch-audit")).Return(nil)
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
+	require.Equal(t, adoptStripDone, kv.marker("ch-audit"))
 }
 
-func TestAdoptApprovalChannel_StripFailureRefusesAdoption(t *testing.T) {
+func TestAdoptApprovalChannel_StripFailureKeepsCleanupPending(t *testing.T) {
 	api := &plugintest.API{}
-	stubLogs(api)
+	kv := stubLogsWithStripKV(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
 	p.botUserID = "bot"
@@ -858,11 +881,219 @@ func TestAdoptApprovalChannel_StripFailureRefusesAdoption(t *testing.T) {
 	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
 	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
 	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
-	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(nil, testAppErr("list down"))
-	api.On("KVDelete", adoptedStripKey("ch-audit")).Return(nil)
 
 	require.False(t, p.adoptApprovalChannel(ch))
+	require.Equal(t, adoptStripPending, kv.marker("ch-audit"), "failed strip must leave cleanup required")
+	require.False(t, kv.lockHeld("ch-audit"))
+}
+
+// A public channel converted on an earlier attempt whose strip then failed is
+// private with a trusted creator now; the pending marker still forces a strip.
+func TestAdoptApprovalChannel_RetryAfterConversionStripsPendingChannel(t *testing.T) {
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	kv.setMarker("ch-audit", adoptStripPending)
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "sa1",
+	}
+	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "observer"},
+	}, nil)
+	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Roles: model.SystemUserRoleId}, nil)
+	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+
+	require.True(t, p.adoptApprovalChannel(ch))
+	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
+	require.Equal(t, adoptStripDone, kv.marker("ch-audit"))
+}
+
+// A node working from a stale public copy after another node finished the
+// conversion and strip must not reset the done marker or strip again.
+func TestAdoptApprovalChannel_StalePublicCopyKeepsDoneMarker(t *testing.T) {
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	kv.setMarker("ch-audit", adoptStripDone)
+
+	stale := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypeOpen, CreatorId: "sa1",
+	}
+	fresh := stale.DeepCopy()
+	fresh.Type = model.ChannelTypePrivate
+	fresh.UpdateAt = 7
+	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetChannel", "ch-audit").Return(fresh, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+
+	require.True(t, p.adoptApprovalChannel(stale))
+	api.AssertNotCalled(t, "UpdateChannel", mock.Anything)
+	api.AssertNotCalled(t, "GetChannelMembers", mock.Anything, mock.Anything, mock.Anything)
+	require.Equal(t, adoptStripDone, kv.marker("ch-audit"))
+	require.Equal(t, model.ChannelTypePrivate, stale.Type)
+}
+
+func TestAdoptApprovalChannel_TrustedPrivateWithoutMarkerSkipsStrip(t *testing.T) {
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "sa1",
+	}
+	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+
+	require.True(t, p.adoptApprovalChannel(ch))
+	api.AssertNotCalled(t, "GetChannelMembers", mock.Anything, mock.Anything, mock.Anything)
+	require.Empty(t, kv.marker("ch-audit"))
+	require.False(t, kv.lockHeld("ch-audit"), "no strip lock when no strip is needed")
+}
+
+// Another node holding the strip lock means its strip is still running:
+// adoption is refused instead of treating the claim as completed cleanup.
+func TestAdoptApprovalChannel_RefusesWhileAnotherNodeStrips(t *testing.T) {
+	prev := adoptStripLockTimeout
+	adoptStripLockTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { adoptStripLockTimeout = prev })
+
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	kv.setMarker("ch-audit", adoptStripPending)
+	kv.data[adoptStripLockKeyPrefix+"ch-audit"] = []byte{1}
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "sa1",
+	}
+	api.On("GetBot", "sa1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+
+	require.False(t, p.adoptApprovalChannel(ch))
+	api.AssertNotCalled(t, "GetChannelMembers", mock.Anything, mock.Anything, mock.Anything)
+	require.Equal(t, adoptStripPending, kv.marker("ch-audit"))
+}
+
+func TestCompleteAdoptStrip_RefusesUntilDoneMarkerIsDurable(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	api.On("KVGet", adoptedStripKey("c1")).Return(nil, nil)
+	api.On("KVSetWithOptions", adoptStripLockKeyPrefix+"c1", mock.Anything, mock.Anything).Return(true, nil)
+	api.On("KVSet", adoptedStripKey("c1"), []byte(adoptStripPending)).Return(nil).Once()
+	api.On("GetChannelMembers", "c1", 0, 100).Return(model.ChannelMembers{{UserId: "bot"}}, nil)
+	api.On("KVSet", adoptedStripKey("c1"), []byte(adoptStripDone)).Return(testAppErr("kv down")).Once()
+
+	require.False(t, p.completeAdoptStrip(&model.Channel{Id: "c1"}, true))
+}
+
+func TestStripAdoptedApprovalChannel_RefusesWhenPagingDoesNotEnd(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	full := make(model.ChannelMembers, 100)
+	for i := range full {
+		full[i] = model.ChannelMember{UserId: fmt.Sprintf("u%d", i)}
+	}
+	api.On("GetChannelMembers", "ch-audit", mock.Anything, 100).Return(full, nil)
+
+	require.False(t, p.stripAdoptedApprovalChannelToPrivileged(&model.Channel{Id: "ch-audit"}))
+	api.AssertNotCalled(t, "DeleteChannelMember", mock.Anything, mock.Anything)
+	api.AssertNumberOfCalls(t, "GetChannelMembers", adoptStripMaxPages)
+}
+
+func TestLookupApprovalChannel_OwnBotChannelFinishesPendingStrip(t *testing.T) {
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	kv.setMarker("ch-own", adoptStripPending)
+
+	// Converted earlier (UpdateAt past CreateAt), strip never finished.
+	own := &model.Channel{
+		Id: "ch-own", TeamId: "t1", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "bot", CreateAt: 1, UpdateAt: 9,
+	}
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).Return(own, nil)
+	api.On("GetBot", "bot", true).Return(&model.Bot{UserId: "bot", OwnerId: manifest.Id}, nil)
+	api.On("GetTeamMember", "t1", "bot").Return(&model.TeamMember{TeamId: "t1", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-own", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "ch-own", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "observer"},
+	}, nil)
+	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Roles: model.SystemUserRoleId}, nil)
+	api.On("DeleteChannelMember", "ch-own", "observer").Return(nil).Once()
+
+	ch, taken := p.lookupApprovalChannel("t1", "mattermost-audit-requests")
+	require.NotNil(t, ch)
+	require.False(t, taken)
+	require.Equal(t, adoptStripDone, kv.marker("ch-own"))
+
+	// Verified at this UpdateAt: the next lookup is the plain fast path.
+	ch, taken = p.lookupApprovalChannel("t1", "mattermost-audit-requests")
+	require.NotNil(t, ch)
+	require.False(t, taken)
+	api.AssertNumberOfCalls(t, "GetChannelMembers", 1)
+}
+
+func TestLookupApprovalChannel_OwnBotUntouchedChannelSkipsMarkerRead(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	own := &model.Channel{
+		Id: "ch-own", TeamId: "t1", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "bot", CreateAt: 5, UpdateAt: 5,
+	}
+	api.On("GetChannelByName", "t1", "mattermost-audit-requests", true).Return(own, nil)
+
+	ch, _ := p.lookupApprovalChannel("t1", "mattermost-audit-requests")
+	require.Equal(t, own, ch)
+	api.AssertNotCalled(t, "KVGet", mock.Anything)
+}
+
+func TestAdoptionVerified_StaleAfterChannelUpdate(t *testing.T) {
+	p := newTestPlugin(&plugintest.API{})
+	ch := &model.Channel{Id: "c1", Type: model.ChannelTypePrivate, UpdateAt: 10}
+	p.adoptedApprovalChannels.Store("c1", int64(10))
+	require.True(t, p.adoptionVerified(ch))
+
+	ch.UpdateAt = 11
+	require.False(t, p.adoptionVerified(ch), "a conversion on another node bumps UpdateAt")
+
+	ch.UpdateAt = 10
+	ch.Type = model.ChannelTypeOpen
+	require.False(t, p.adoptionVerified(ch), "a channel made public again must be re-adopted")
 }
 
 func TestKeepSeededTeamAdminOnChannel_PerTeamKeepsApprovalTeamTAs(t *testing.T) {

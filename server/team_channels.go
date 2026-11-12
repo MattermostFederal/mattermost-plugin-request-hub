@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 )
 
@@ -243,9 +247,16 @@ func (p *Plugin) addChannelToPermissionsCategory(userID, teamID, channelID strin
 	}
 }
 
+const (
+	systemAdminPageSize = 100
+	// systemAdminMaxPages stops a listing that never returns a short page.
+	systemAdminMaxPages = 1000
+)
+
 // addSystemAdminsToChannel adds all System Admins to the given channel so they
 // can see and act on root-channel approval requests immediately after creation.
-// Per-user failures are logged but don't abort — a partial add is better than none.
+// Adds are recorded so a demoted admin is evicted; admins already in the
+// channel are left unrecorded. Per-user failures are logged but don't abort.
 func (p *Plugin) addSystemAdminsToChannel(channelID string) {
 	// Resolve the channel's team so we can place it in the sidebar category.
 	channel, chErr := p.API.GetChannel(channelID)
@@ -257,24 +268,30 @@ func (p *Plugin) addSystemAdminsToChannel(channelID string) {
 			"channel_id", channelID, "error", chErr.Error())
 	}
 
-	admins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Page: 0, PerPage: 100})
-	if appErr != nil {
-		p.API.LogWarn("failed to list System Admins for root channel seeding", "channel_id", channelID, "error", appErr.Error())
-		return
+	for page := range systemAdminMaxPages {
+		admins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Page: page, PerPage: systemAdminPageSize})
+		if appErr != nil {
+			p.API.LogWarn("failed to list System Admins for root channel seeding",
+				"channel_id", channelID, "page", page, "error", appErr.Error())
+			return
+		}
+		for _, admin := range admins {
+			if admin == nil || admin.Id == p.botUserID || admin.DeleteAt != 0 {
+				continue
+			}
+			if !p.ensureSeededMember(channelID, admin.Id) {
+				continue
+			}
+			if teamID != "" {
+				p.addChannelToPermissionsCategory(admin.Id, teamID, channelID)
+			}
+		}
+		if len(admins) < systemAdminPageSize {
+			return
+		}
 	}
-	for _, admin := range admins {
-		if admin.Id == p.botUserID {
-			continue
-		}
-		if _, addErr := p.API.AddChannelMember(channelID, admin.Id); addErr != nil {
-			p.API.LogWarn("failed to add System Admin to root approval channel",
-				"channel_id", channelID, "user_id", admin.Id, "error", addErr.Error())
-			continue
-		}
-		if teamID != "" {
-			p.addChannelToPermissionsCategory(admin.Id, teamID, channelID)
-		}
-	}
+	p.API.LogWarn("System Admin listing did not end; later admins were not added to the approval channel",
+		"channel_id", channelID, "pages", systemAdminMaxPages)
 }
 
 // ensureNamedApprovalChannel looks up or creates a private approval channel
@@ -488,7 +505,8 @@ func (p *Plugin) seedRequestTeamApproversForCard(requestTeamID string, approvalC
 //
 // Already-present members are not marked as plugin-seeded: AddChannelMember
 // succeeds for existing membership, and claiming a hand-added observer as
-// seeded would evict them on demotion.
+// seeded would evict them on demotion. Team Admins and System Admins the
+// plugin adds are both marked so either demotion evicts them.
 func (p *Plugin) addTeamApproversToChannel(teamID, channelID string) {
 	sysAdmins := p.systemAdminIDSet()
 	const perPage = 200
@@ -522,8 +540,8 @@ func (p *Plugin) addTeamApproversToChannel(teamID, channelID string) {
 					"channel_id", channelID, "user_id", m.UserId, "error", appErr.Error())
 				continue
 			}
-			if isTeamAdmin {
-				p.markTAVisibilitySeeded(channelID, m.UserId)
+			if !p.recordSeededMember(channelID, m.UserId) {
+				continue
 			}
 			p.addChannelToPermissionsCategory(m.UserId, teamID, channelID)
 		}
@@ -877,6 +895,11 @@ func (p *Plugin) ensureTeamCreationApprovalChannelForVisibility() *model.Channel
 // members are not marked: AddChannelMember succeeds for existing membership,
 // and claiming a hand-added observer as seeded would evict them on demotion.
 // Lookup errors other than not-found fail closed (no add, no mark).
+//
+// Callers decide eligibility from a config / role snapshot. After the add,
+// eligibility is re-checked against current state: a toggle-off or demotion
+// whose eviction already ran would otherwise leave this stale seed in place
+// until the next sweep.
 func (p *Plugin) seedTAVisibility(ch *model.Channel, userID string) {
 	if ch == nil || userID == "" {
 		return
@@ -893,7 +916,37 @@ func (p *Plugin) seedTAVisibility(ch *model.Channel, userID string) {
 	if _, appErr := p.API.GetChannelMember(ch.Id, userID); appErr != nil {
 		return
 	}
-	p.markTAVisibilitySeeded(ch.Id, userID)
+	if !p.recordSeededMember(ch.Id, userID) {
+		return
+	}
+	qualifies := func() bool { return p.seededTeamAdminQualifies(ch, userID) }
+	if qualifies() {
+		return
+	}
+	if _, delErr := p.evictSeededMember(ch, userID, qualifies); delErr != nil {
+		p.API.LogWarn("TA visibility: failed to undo a seed that no longer qualifies; the next sweep retries",
+			"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
+	}
+}
+
+// seededTeamAdminQualifies reports whether userID, as a Team Admin of
+// ch's team, may hold plugin-seeded membership on ch under the current
+// settings. Lookup failures report false (fail closed).
+func (p *Plugin) seededTeamAdminQualifies(ch *model.Channel, userID string) bool {
+	if ch == nil || !p.userIsTeamAdmin(ch.TeamId, userID) {
+		return false
+	}
+	approvalTeamID := ""
+	if ch.Name == p.getConfiguration().TeamChannelName() {
+		approval, err := p.approvalTeam()
+		if err != nil {
+			return false
+		}
+		if approval != nil {
+			approvalTeamID = approval.Id
+		}
+	}
+	return p.keepSeededTeamAdminOnChannel(ch, approvalTeamID)
 }
 
 // syncPrimaryTeamAdminVisibility ensures primary ticket channels exist and
@@ -1057,12 +1110,18 @@ func (p *Plugin) reconcilePerTeamApprovalAccessForUser(user *model.User) {
 		if _, getErr := p.API.GetChannelMember(ch.Id, user.Id); getErr != nil {
 			continue
 		}
-		if delErr := p.API.DeleteChannelMember(ch.Id, user.Id); delErr != nil {
-			p.API.LogDebug("per-team approval: evict on login",
+		teamID := team.Id
+		evicted, delErr := p.evictSeededMember(ch, user.Id, func() bool {
+			return p.userIsTeamAdmin(teamID, user.Id)
+		})
+		if delErr != nil {
+			p.API.LogWarn("per-team approval: failed to evict demoted Team Admin on login",
 				"channel_id", ch.Id, "user_id", user.Id, "error", delErr.Error())
 			continue
 		}
-		p.clearTAVisibilitySeeded(ch.Id, user.Id)
+		if !evicted {
+			continue
+		}
 		p.API.LogInfo("per-team approval: evicted demoted Team Admin",
 			"user_id", user.Id, "username", user.Username, "team_id", team.Id, "channel_id", ch.Id)
 	}
@@ -1105,7 +1164,8 @@ func (p *Plugin) keepSeededTeamAdminOnChannel(ch *model.Channel, approvalTeamID 
 // evictStaleApproversFromApprovalChannel removes plugin-seeded members who are
 // no longer a System Admin or a qualifying Team Admin of teamID (role and
 // visibility toggles). Hand-added observers and cross-team approvers are left
-// alone. Loads the ledger first so an empty set skips member paging.
+// alone. Walks the ledger rather than the member list, so every seeded member
+// is checked however large the channel is.
 // approvalTeamID gates root-channel toggle checks (empty skips the gate).
 func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamID, approvalTeamID string) {
 	if ch == nil || teamID == "" {
@@ -1116,26 +1176,8 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 		return
 	}
 	keepTeamAdmin := p.keepSeededTeamAdminOnChannel(ch, approvalTeamID)
-	const perPage = 100
-	var memberIDs []string
-	for page := range 50 {
-		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
-		if appErr != nil {
-			p.API.LogWarn("approval channel: GetChannelMembers failed during demotion eviction",
-				"channel_id", ch.Id, "error", appErr.Error())
-			return
-		}
-		for i := range members {
-			if id := members[i].UserId; id != "" && id != p.botUserID {
-				memberIDs = append(memberIDs, id)
-			}
-		}
-		if len(members) < perPage {
-			break
-		}
-	}
-	for _, userID := range memberIDs {
-		if _, ok := seeded[userID]; !ok {
+	for _, userID := range slices.Sorted(maps.Keys(seeded)) {
+		if userID == p.botUserID {
 			continue
 		}
 		user, uErr := p.API.GetUser(userID)
@@ -1153,22 +1195,24 @@ func (p *Plugin) evictStaleApproversFromApprovalChannel(ch *model.Channel, teamI
 		} else if tm != nil && tm.DeleteAt == 0 && isTeamAdminMember(tm) && keepTeamAdmin {
 			continue
 		}
-		if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil {
+		// Skip users who already left; deleting a non-member is not assumed
+		// to be a no-op.
+		if _, memErr := p.API.GetChannelMember(ch.Id, userID); memErr != nil {
+			if !isNotFound(memErr) {
+				p.API.LogWarn("approval channel: membership lookup failed during demotion eviction",
+					"channel_id", ch.Id, "user_id", userID, "error", memErr.Error())
+			}
+			continue
+		}
+		evicted, delErr := p.evictSeededMember(ch, userID, func() bool {
+			return keepTeamAdmin && p.userIsTeamAdmin(teamID, userID)
+		})
+		if delErr != nil {
 			p.API.LogWarn("approval channel: failed to evict demoted member",
 				"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
 			continue
 		}
-		p.clearTAVisibilitySeeded(ch.Id, userID)
-		// Re-check after clear: a promotion+reseed between Delete and clear can
-		// leave the user unmarked. seedTAVisibility no-ops when already a
-		// member, so mark directly when they still qualify.
-		if rem, remErr := p.API.GetTeamMember(teamID, userID); remErr == nil &&
-			rem != nil && rem.DeleteAt == 0 && isTeamAdminMember(rem) && keepTeamAdmin {
-			if _, memErr := p.API.GetChannelMember(ch.Id, userID); memErr == nil {
-				p.markTAVisibilitySeeded(ch.Id, userID)
-			} else if isNotFound(memErr) {
-				p.seedTAVisibility(ch, userID)
-			}
+		if !evicted {
 			continue
 		}
 		p.API.LogInfo("approval channel: evicted demoted Team Admin",
@@ -1237,10 +1281,11 @@ func (p *Plugin) UserHasJoinedTeam(_ *plugin.Context, teamMember *model.TeamMemb
 			"channel_id", ch.Id, "user_id", teamMember.UserId, "error", appErr.Error())
 		return
 	}
-	// Team Admins must be recorded as plugin-seeded so demotion eviction can
-	// remove them later (System Admins are not swept by that path).
-	if isTeamAdmin {
-		p.markTAVisibilitySeeded(ch.Id, teamMember.UserId)
+	// Recorded as plugin-seeded so demotion eviction can remove them later.
+	// System Admins are kept while they hold the role and evicted after
+	// losing it unless they are still a Team Admin.
+	if !p.recordSeededMember(ch.Id, teamMember.UserId) {
+		return
 	}
 	p.addChannelToPermissionsCategory(teamMember.UserId, teamMember.TeamId, ch.Id)
 }
@@ -1340,13 +1385,13 @@ func (p *Plugin) lookupApprovalChannel(teamID, name string) (ch *model.Channel, 
 	if appErr != nil || existing == nil {
 		return nil, false
 	}
-	if p.isPluginApprovalChannel(existing) {
+	if p.isPluginApprovalChannel(existing) && !p.adoptStripMayBePending(existing) {
 		return existing, false
 	}
 	if p.adoptApprovalChannel(existing) {
 		return existing, false
 	}
-	p.API.LogError("An approval channel name is used by a channel the plugin can't use (archived, public, or created by someone who is not a System Admin or this plugin's bot), so requests are sent elsewhere. Rename that channel so the plugin can create its own.",
+	p.API.LogError("An approval channel name is used by a channel the plugin can't use (archived, public, created by someone who is not a System Admin or this plugin's bot, or its member cleanup has not finished), so requests are sent elsewhere. Rename that channel so the plugin can create its own, or check earlier warnings for the cleanup failure.",
 		"team_id", teamID, "channel_id", existing.Id, "channel_name", name, "creator_id", existing.CreatorId)
 	return nil, true
 }
@@ -1368,7 +1413,7 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 	if ch.Type != model.ChannelTypePrivate && ch.Type != model.ChannelTypeOpen {
 		return false
 	}
-	if _, adopted := p.adoptedApprovalChannels.Load(ch.Id); adopted {
+	if p.adoptionVerified(ch) {
 		return true
 	}
 	trustedCreator := ch.CreatorId != "" && p.trustedApprovalChannelCreator(ch.CreatorId)
@@ -1379,11 +1424,8 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 			return false
 		}
 	}
-	wasPublic := ch.Type == model.ChannelTypeOpen
-	if wasPublic {
-		if !p.makeApprovalChannelPrivate(ch) {
-			return false
-		}
+	if ch.Type == model.ChannelTypeOpen && !p.convertAdoptedChannelToPrivate(ch) {
+		return false
 	}
 	if err := p.ensureTeamMember(ch.TeamId, p.botUserID); err != nil {
 		p.API.LogWarn("could not add the bot to the team of an existing approval channel",
@@ -1395,15 +1437,13 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 			"channel_id", ch.Id, "channel_name", ch.Name, "error", appErr.Error())
 		return false
 	}
-	// Public convert and untrusted-orphan adopt keep prior members unless we
-	// strip them. Trusted private creators (SysAdmin / plugin bot) keep their
-	// membership layout; the other two paths strip to bot + System Admins.
-	if wasPublic || !trustedCreator {
-		if !p.claimAndStripAdoptedApprovalChannel(ch) {
-			return false
-		}
+	// Public convert (marker left pending) and untrusted-orphan adopt keep
+	// prior members unless we strip them. Trusted private creators (SysAdmin /
+	// plugin bot) keep their membership layout unless a strip is pending.
+	if !p.completeAdoptStrip(ch, !trustedCreator) {
+		return false
 	}
-	p.adoptedApprovalChannels.Store(ch.Id, true)
+	p.adoptedApprovalChannels.Store(ch.Id, ch.UpdateAt)
 	if trustedCreator {
 		p.API.LogInfo("adopted an existing approval channel: the name matched and a System Admin or this plugin's bot created it",
 			"channel_id", ch.Id, "channel_name", ch.Name, "creator_id", ch.CreatorId)
@@ -1414,59 +1454,213 @@ func (p *Plugin) adoptApprovalChannel(ch *model.Channel) bool {
 	return true
 }
 
-// kvAdoptedStripPrefix marks channels whose untrusted/public adopt strip has
-// completed once cluster-wide. In-memory adoptedApprovalChannels alone would
-// re-strip on every restart / every HA node.
+// kvAdoptedStripPrefix stores the cluster-wide strip state of an adopted
+// channel: adoptStripPending while a strip is required (written before a
+// public conversion and before each strip), adoptStripDone once a strip
+// completed. Any other stored value is treated as pending.
 const kvAdoptedStripPrefix = "adopted_strip_v1:"
+
+const (
+	adoptStripPending = "pending"
+	adoptStripDone    = "done"
+)
+
+// adoptStripLockTimeout bounds the wait for another node's strip. On timeout
+// adoption is refused and retried on the next lookup. A var so tests can
+// shorten it.
+var adoptStripLockTimeout = 30 * time.Second
+
+// adoptStripMaxPages bounds member paging (100 per page). A channel that
+// does not end within the bound is refused rather than partly stripped.
+const adoptStripMaxPages = 1000
 
 func adoptedStripKey(channelID string) string {
 	return kvAdoptedStripPrefix + channelID
 }
 
-// claimAndStripAdoptedApprovalChannel runs the privileged-member strip at most
-// once across the cluster. Returns false when the strip cannot be completed —
-// caller must refuse adoption so tickets do not land in a still-populated
-// untrusted channel. A failed strip clears the KV claim so a later activate
-// can retry.
-func (p *Plugin) claimAndStripAdoptedApprovalChannel(ch *model.Channel) bool {
-	if ch == nil {
-		return false
-	}
-	claimed, appErr := p.API.KVSetWithOptions(adoptedStripKey(ch.Id), []byte("1"), model.PluginKVSetOptions{
-		Atomic:   true,
-		OldValue: nil,
-	})
+type adoptStripState int
+
+const (
+	adoptStripStateNone adoptStripState = iota
+	adoptStripStatePending
+	adoptStripStateDone
+)
+
+// loadAdoptStripState returns the stored strip state. ok is false on a KV
+// error; callers fail closed.
+func (p *Plugin) loadAdoptStripState(channelID string) (state adoptStripState, ok bool) {
+	raw, appErr := p.API.KVGet(adoptedStripKey(channelID))
 	if appErr != nil {
-		p.API.LogWarn("adopted approval channel: failed to claim strip marker",
-			"channel_id", ch.Id, "error", appErr.Error())
-		return false
+		p.API.LogWarn("adopted approval channel: failed to load strip marker",
+			"channel_id", channelID, "error", appErr.Error())
+		return adoptStripStateNone, false
 	}
-	if !claimed {
-		// Another node already completed (or claimed) the strip.
-		return true
+	switch {
+	case raw == nil:
+		return adoptStripStateNone, true
+	case string(raw) == adoptStripDone:
+		return adoptStripStateDone, true
+	default:
+		return adoptStripStatePending, true
 	}
-	if !p.stripAdoptedApprovalChannelToPrivileged(ch) {
-		if delErr := p.API.KVDelete(adoptedStripKey(ch.Id)); delErr != nil {
-			p.API.LogWarn("adopted approval channel: failed to clear strip marker after incomplete strip",
-				"channel_id", ch.Id, "error", delErr.Error())
-		}
+}
+
+func (p *Plugin) setAdoptStripMarker(channelID, value string) bool {
+	if appErr := p.API.KVSet(adoptedStripKey(channelID), []byte(value)); appErr != nil {
+		p.API.LogWarn("adopted approval channel: failed to save strip marker",
+			"channel_id", channelID, "state", value, "error", appErr.Error())
 		return false
 	}
 	return true
 }
 
+// adoptionVerified reports whether this node already adopted ch at its
+// current UpdateAt. A conversion (on any node) bumps UpdateAt, so a stale
+// entry cannot skip a strip that conversion left pending.
+func (p *Plugin) adoptionVerified(ch *model.Channel) bool {
+	if ch.Type != model.ChannelTypePrivate {
+		return false
+	}
+	v, ok := p.adoptedApprovalChannels.Load(ch.Id)
+	if !ok {
+		return false
+	}
+	at, isInt := v.(int64)
+	return isInt && at == ch.UpdateAt
+}
+
+// adoptStripMayBePending reports whether a channel the plugin's bot created
+// must go through adoption to finish a pending strip. A pending strip exists
+// only after a conversion, which moves UpdateAt past CreateAt; untouched
+// channels skip the KV read.
+func (p *Plugin) adoptStripMayBePending(ch *model.Channel) bool {
+	if ch.UpdateAt <= ch.CreateAt || p.adoptionVerified(ch) {
+		return false
+	}
+	state, ok := p.loadAdoptStripState(ch.Id)
+	if !ok {
+		return true
+	}
+	if state == adoptStripStatePending {
+		return true
+	}
+	p.adoptedApprovalChannels.Store(ch.Id, ch.UpdateAt)
+	return false
+}
+
+// withAdoptStripLock runs fn under the per-channel cluster mutex that
+// serializes conversion and strip across nodes. Returns false when the lock
+// cannot be taken in time (another node is still working) or fn fails.
+func (p *Plugin) withAdoptStripLock(channelID string, fn func() bool) bool {
+	mu, err := cluster.NewMutex(p.API, "adopt_strip_"+channelID)
+	if err != nil {
+		p.API.LogWarn("adopted approval channel: failed to create strip lock",
+			"channel_id", channelID, "error", err.Error())
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), adoptStripLockTimeout)
+	defer cancel()
+	if err := mu.LockWithContext(ctx); err != nil {
+		p.API.LogWarn("adopted approval channel: timed out waiting for another strip; will retry",
+			"channel_id", channelID, "error", err.Error())
+		return false
+	}
+	defer mu.Unlock()
+	return fn()
+}
+
+// convertAdoptedChannelToPrivate makes a public approval channel private and
+// leaves the strip marker pending. Under the lock the channel is re-read: a
+// node working from a stale public copy must not reset another node's done
+// marker. The marker is written before converting, so a failure after the
+// conversion still forces a strip on retry.
+func (p *Plugin) convertAdoptedChannelToPrivate(ch *model.Channel) bool {
+	return p.withAdoptStripLock(ch.Id, func() bool {
+		fresh, appErr := p.API.GetChannel(ch.Id)
+		if appErr != nil || fresh == nil {
+			errMsg := "nil channel"
+			if appErr != nil {
+				errMsg = appErr.Error()
+			}
+			p.API.LogWarn("adopted approval channel: failed to reload channel before conversion",
+				"channel_id", ch.Id, "error", errMsg)
+			return false
+		}
+		if fresh.DeleteAt != 0 {
+			return false
+		}
+		if fresh.Type == model.ChannelTypeOpen {
+			if !p.setAdoptStripMarker(ch.Id, adoptStripPending) {
+				return false
+			}
+			if !p.makeApprovalChannelPrivate(fresh) {
+				return false
+			}
+		}
+		if fresh.Type != model.ChannelTypePrivate {
+			return false
+		}
+		ch.Type, ch.UpdateAt = fresh.Type, fresh.UpdateAt
+		return true
+	})
+}
+
+// completeAdoptStrip finishes the privileged-member strip when one is
+// required (untrusted orphan) or left pending (public conversion, earlier
+// failed attempt). Strips run under the cluster lock so a node never adopts
+// while another node's strip is still running. The marker stays pending
+// until a strip completes, so a crash or failure keeps cleanup required.
+// Returns false when adoption must be refused.
+func (p *Plugin) completeAdoptStrip(ch *model.Channel, required bool) bool {
+	state, ok := p.loadAdoptStripState(ch.Id)
+	if !ok {
+		return false
+	}
+	if !required && state != adoptStripStatePending {
+		return true
+	}
+	return p.withAdoptStripLock(ch.Id, func() bool {
+		// Re-read under the lock: another node may have finished meanwhile.
+		state, ok := p.loadAdoptStripState(ch.Id)
+		if !ok {
+			return false
+		}
+		if state == adoptStripStateDone {
+			return true
+		}
+		if state == adoptStripStateNone {
+			if !required {
+				return true
+			}
+			if !p.setAdoptStripMarker(ch.Id, adoptStripPending) {
+				return false
+			}
+		}
+		if !p.stripAdoptedApprovalChannelToPrivileged(ch) {
+			return false
+		}
+		// Until done is durable, a later attempt strips again; keeping the
+		// channel out of use until then stops that re-strip from removing
+		// members added after adoption.
+		return p.setAdoptStripMarker(ch.Id, adoptStripDone)
+	})
+}
+
 // stripAdoptedApprovalChannelToPrivileged removes everyone except the bot and
 // System Admins after adopting a public or untrusted-orphan channel. Returns
-// false on any list / lookup / delete failure so adoption can refuse and retry.
-// The TA visibility ledger is cleared only after a complete strip. Qualifying
-// Team Admins / security-pool members are re-seeded by the normal sync paths.
+// false on any list / lookup / delete / ledger failure, or when paging does
+// not end, so adoption can refuse and retry. Removed users lose their ledger entry;
+// retained System Admins are recorded so losing the role evicts them.
+// Qualifying Team Admins / security-pool members are re-seeded by the normal
+// sync paths.
 func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool {
 	if ch == nil {
 		return false
 	}
 	const perPage = 100
 	var memberIDs []string
-	for page := range 50 {
+	complete := false
+	for page := range adoptStripMaxPages {
 		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
 		if appErr != nil {
 			p.API.LogWarn("adopted approval channel: failed to list members for reconcile",
@@ -1479,8 +1673,14 @@ func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool
 			}
 		}
 		if len(members) < perPage {
+			complete = true
 			break
 		}
+	}
+	if !complete {
+		p.API.LogWarn("adopted approval channel: member listing did not end; refusing adoption",
+			"channel_id", ch.Id, "max_members", adoptStripMaxPages*perPage)
+		return false
 	}
 	for _, userID := range memberIDs {
 		user, uErr := p.API.GetUser(userID)
@@ -1494,9 +1694,12 @@ func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool
 			return false
 		}
 		if user.IsSystemAdmin() {
+			if !p.markTAVisibilitySeeded(ch.Id, userID) {
+				return false
+			}
 			continue
 		}
-		if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil {
+		if _, delErr := p.evictSeededMember(ch, userID, nil); delErr != nil {
 			p.API.LogWarn("adopted approval channel: failed to remove non-privileged member",
 				"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
 			return false
@@ -1504,16 +1707,12 @@ func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool
 		p.API.LogInfo("adopted approval channel: removed non-privileged member",
 			"channel_id", ch.Id, "user_id", userID, "username", user.Username)
 	}
-	if appErr := p.API.KVDelete(taVisibilitySeededKey(ch.Id)); appErr != nil {
-		p.API.LogWarn("adopted approval channel: failed to clear TA visibility ledger",
-			"channel_id", ch.Id, "error", appErr.Error())
-		return false
-	}
 	return true
 }
 
 // makeApprovalChannelPrivate converts a public approval channel to private so
-// tickets are not visible to the whole team. Updates ch.Type on success.
+// tickets are not visible to the whole team. Updates ch.Type (and UpdateAt
+// when returned) on success.
 func (p *Plugin) makeApprovalChannelPrivate(ch *model.Channel) bool {
 	if ch == nil || ch.Type == model.ChannelTypePrivate {
 		return true
@@ -1528,6 +1727,7 @@ func (p *Plugin) makeApprovalChannelPrivate(ch *model.Channel) bool {
 	}
 	if updated != nil {
 		ch.Type = updated.Type
+		ch.UpdateAt = updated.UpdateAt
 	} else {
 		ch.Type = model.ChannelTypePrivate
 	}

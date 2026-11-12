@@ -567,6 +567,31 @@ func TestListGroupMemberIDsByGroupID_HitsMemberCap(t *testing.T) {
 	api.AssertNotCalled(t, "GetGroupMemberUsers", "gid", 1, 100)
 }
 
+func TestListGroupMemberIDsByGroupID_UnderCapListingResetsCapWarning(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	full := make([]*model.User, 100)
+	for i := range full {
+		full[i] = &model.User{Id: "u"}
+	}
+	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(full, nil).Once()
+	p.listGroupMemberIDsByGroupID("gid", "label")
+	_, warned := p.securityPoolCapWarned.Load("group:label")
+	require.True(t, warned)
+
+	// A failed listing proves nothing about the pool size: keep the flag.
+	api.On("GetGroupMemberUsers", "gid", 0, 100).Return(nil, testAppErr("down")).Once()
+	p.listGroupMemberIDsByGroupID("gid", "label")
+	_, warned = p.securityPoolCapWarned.Load("group:label")
+	require.True(t, warned)
+
+	api.On("GetGroupMemberUsers", "gid", 0, 100).Return([]*model.User{{Id: "u1"}}, nil).Once()
+	p.listGroupMemberIDsByGroupID("gid", "label")
+	_, warned = p.securityPoolCapWarned.Load("group:label")
+	require.False(t, warned, "a complete under-cap listing re-arms the warning")
+}
+
 func TestEvictStaleMembersFromTwoStepChannel_FailurePaths(t *testing.T) {
 	t.Run("nil channel", func(t *testing.T) {
 		api := &plugintest.API{}

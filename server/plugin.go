@@ -34,8 +34,9 @@ type Plugin struct {
 	mcpServer     *pluginmcp.Server
 	mcpActive     bool
 
-	// adoptedApprovalChannels holds the IDs of approval channels the plugin
-	// adopted (see adoptApprovalChannel), so each is checked only once.
+	// adoptedApprovalChannels maps approval channel ID → the channel UpdateAt
+	// (int64) at which this node last verified adoption / strip state, so each
+	// is re-checked only after the channel changes (see adoptionVerified).
 	adoptedApprovalChannels sync.Map
 
 	// botUserID is the user ID of the bot account used to post approval requests and notify
