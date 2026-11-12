@@ -161,7 +161,8 @@ func TestRemindTokenExpiry_ExpiredSendsOneNoticeThenStops(t *testing.T) {
 	now := time.Now()
 	f := newReminderFixture(t, botTokenExpiry{
 		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1", RequestID: "req-id",
-		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-2 * time.Hour).UnixMilli(),
+		// Last remind older than a day so the expired notice is sent (not suppressed).
+		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-48 * time.Hour).UnixMilli(),
 	})
 	events := captureAudit(f.p)
 

@@ -50,9 +50,10 @@ type Plugin struct {
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
 
-	// securityPoolCapWarned is the last "group|attr + capped count" fingerprint
-	// we logged for securityPoolMaxMembers, so reconcile ticks don't spam.
-	securityPoolCapWarned string
+	// securityPoolCapWarned tracks pool labels we already warned about hitting
+	// securityPoolMaxMembers (sync.Map: pool string → struct{}). Cleared when
+	// a later listing for that pool is under the cap so a new overrun warns again.
+	securityPoolCapWarned sync.Map
 
 	// auditSink, when set, receives every audit event instead of the request
 	// history, the server audit log and the audit channel. A test seam: nil
@@ -115,8 +116,9 @@ func (p *Plugin) OnActivate() error {
 		// Security / system pool members (usergroup or ABAC) into bot + webhook
 		// private channels so they can see and click Approve.
 		p.syncTwoStepApproverChannels()
-		// Primary-team Team Admins: watch-only membership on every primary
-		// ticket channel (including bot/webhook/audit). Approve rights stay gated.
+		// Primary-team Team Admins: watch-only membership on gated primary
+		// channels (root / team-requests / audit per toggles). Bot/webhook stay
+		// with two-step pool reconcile. Approve rights stay gated.
 		p.syncPrimaryTeamAdminVisibility()
 		if p.getConfiguration().PerTeamApprovalChannels {
 			p.ensureAllTeamApprovalChannels()

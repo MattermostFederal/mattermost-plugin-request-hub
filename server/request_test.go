@@ -101,6 +101,8 @@ func stubLogs(api *plugintest.API) {
 		})).Return([]*model.User{}, nil).Maybe(),
 		api.On("GetTeamMembers", mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetTeamMembers", 0)),
 			mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil).Maybe(),
+		api.On("GetChannelMember", mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetChannelMember", 0)),
+			mock.Anything).Return(nil, model.NewAppError("test", "not_found", nil, "", 404)).Maybe(),
 		api.On("AddChannelMember", mock.MatchedBy(unclaimed[string](api, &seedOurs, "AddChannelMember", 0)),
 			mock.Anything).Return(&model.ChannelMember{}, nil).Maybe(),
 		api.On("GetChannelSidebarCategories",
@@ -112,6 +114,15 @@ func stubLogs(api *plugintest.API) {
 		api.On("UpdateChannelSidebarCategories",
 			mock.MatchedBy(unclaimed[string](api, &seedOurs, "UpdateChannelSidebarCategories", 0)),
 			mock.Anything, mock.Anything).Return([]*model.SidebarCategoryWithChannels{}, nil).Maybe(),
+		// Adopt strip claim — once cluster-wide. Yields to explicit test stubs.
+		api.On("KVSetWithOptions", mock.MatchedBy(func(key string) bool {
+			return strings.HasPrefix(key, kvAdoptedStripPrefix) &&
+				unclaimed[string](api, &seedOurs, "KVSetWithOptions", 0)(key)
+		}), mock.Anything, mock.Anything).Return(true, nil).Maybe(),
+		api.On("KVDelete", mock.MatchedBy(func(key string) bool {
+			return strings.HasPrefix(key, kvAdoptedStripPrefix) &&
+				unclaimed[string](api, &seedOurs, "KVDelete", 0)(key)
+		})).Return(nil).Maybe(),
 	)
 }
 

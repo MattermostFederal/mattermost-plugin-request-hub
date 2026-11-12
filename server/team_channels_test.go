@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -488,9 +489,10 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	}, nil)
 
 	api.On("CreateTeamMember", "team-hq", "u_tadmin").Return(&model.TeamMember{}, nil).Maybe()
+	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
 		// Not a member yet → seed adds and marks; confirm membership after add.
-		api.On("GetChannelMember", id, "u_tadmin").Return(nil, testAppErr("missing")).Once()
+		api.On("GetChannelMember", id, "u_tadmin").Return(nil, notFound).Once()
 		api.On("AddChannelMember", id, "u_tadmin").Return(&model.ChannelMember{}, nil)
 		api.On("GetChannelMember", id, "u_tadmin").Return(&model.ChannelMember{UserId: "u_tadmin"}, nil).Once()
 	}
@@ -746,8 +748,9 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 		TeamId: "team-hq", UserId: "u_ta", SchemeAdmin: true,
 	}, nil)
 	api.On("CreateTeamMember", "team-hq", "u_ta").Return(&model.TeamMember{}, nil).Maybe()
+	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
 	for _, id := range []string{"ch-root", "ch-team", "ch-audit"} {
-		api.On("GetChannelMember", id, "u_ta").Return(nil, testAppErr("missing")).Once()
+		api.On("GetChannelMember", id, "u_ta").Return(nil, notFound).Once()
 		api.On("AddChannelMember", id, "u_ta").Return(&model.ChannelMember{}, nil)
 		api.On("GetChannelMember", id, "u_ta").Return(&model.ChannelMember{UserId: "u_ta"}, nil).Once()
 		api.On("KVGet", taVisibilitySeededKey(id)).Return(nil, nil).Maybe()
@@ -792,6 +795,7 @@ func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing
 	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
 	api.On("CreateTeamMember", "team-hq", "bot").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
@@ -825,6 +829,7 @@ func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
 	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
 	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
 	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
@@ -835,6 +840,38 @@ func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
+}
+
+func TestAdoptApprovalChannel_StripFailureRefusesAdoption(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "gone", DeleteAt: 0,
+	}
+	api.On("GetBot", "gone", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "gone").Return(&model.User{Id: "gone", DeleteAt: 1, Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+	api.On("KVSetWithOptions", adoptedStripKey("ch-audit"), []byte("1"), mock.Anything).Return(true, nil)
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(nil, testAppErr("list down"))
+	api.On("KVDelete", adoptedStripKey("ch-audit")).Return(nil)
+
+	require.False(t, p.adoptApprovalChannel(ch))
+}
+
+func TestKeepSeededTeamAdminOnChannel_PerTeamKeepsApprovalTeamTAs(t *testing.T) {
+	p, _ := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true, AllowTeamAdminApprovers: false})
+	root := &model.Channel{Id: "root", TeamId: "hq", Name: "mattermost-channel-requests"}
+	require.True(t, p.keepSeededTeamAdminOnChannel(root, "hq"))
+
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: false, AllowTeamAdminApprovers: false})
+	require.False(t, p.keepSeededTeamAdminOnChannel(root, "hq"))
 }
 
 func TestSyncPrimaryTeamAdminVisibility_SkipsOtherTeams(t *testing.T) {

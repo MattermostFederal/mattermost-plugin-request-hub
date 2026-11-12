@@ -160,10 +160,23 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	nowMillis := now.UnixMilli()
 	remaining := time.Duration(rec.ExpiresAt-nowMillis) * time.Millisecond
 	if remaining <= 0 {
-		// One last notice, then stop tracking.
+		// One last notice, then stop tracking. If KVDelete keeps failing, do
+		// not re-DM every day — bump LastRemindedAt and retry the delete later.
+		sinceLast := time.Duration(nowMillis-rec.LastRemindedAt) * time.Millisecond
+		if rec.LastRemindedAt > 0 && sinceLast < 24*time.Hour-tokenReminderSlack {
+			_ = p.endTokenTracking(key, rec, "the token expired")
+			return
+		}
 		if p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
 			p.auditTokenReminder(rec, true)
-			p.endTokenTracking(key, rec, "the token expired")
+			if p.endTokenTracking(key, rec, "the token expired") {
+				return
+			}
+			rec.LastRemindedAt = nowMillis
+			if err := p.saveBotTokenExpiry(rec); err != nil {
+				p.API.LogWarn("failed to persist token reminder after expired DM with stuck delete",
+					"key", key, "error", err.Error())
+			}
 		}
 		return
 	}
@@ -208,9 +221,10 @@ func (p *Plugin) auditTokenReminder(rec botTokenExpiry, expired bool) {
 // empty when its record couldn't be read; key still names the token. The
 // audit event is written only after a successful delete so a failed delete
 // does not claim tracking ended while the daily job would keep reminding.
-func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) {
+// Returns whether tracking was actually ended (delete succeeded).
+func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) bool {
 	if !p.deleteBotTokenExpiry(key) {
-		return
+		return false
 	}
 	tokenID := rec.TokenID
 	if tokenID == "" {
@@ -225,6 +239,7 @@ func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string)
 		Note:   fmt.Sprintf("Stopped the expiry reminders for the access token of %s: %s", bot, reason),
 		Detail: map[string]any{"bot_user_id": rec.BotUserID, "token_id": tokenID, "reason": reason},
 	})
+	return true
 }
 
 func (p *Plugin) deleteBotTokenExpiry(key string) bool {

@@ -802,12 +802,10 @@ func (p *Plugin) loadRequest(id string) (*channelRequest, []byte, error) {
 // Exercise requests mention nobody, so seeding doesn't notify the channel.
 func (p *Plugin) postApprovalRequest(req *channelRequest, requester *model.User) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(req.TeamID)
-	// Team Admins of the request's team can approve it (canApproveChannelRequest)
-	// even when AllowTeamAdminApprovers is off. Seed them into the destination
-	// so Mattermost allows the Approve button; AllowTeamAdminApprovers only
-	// gates Approval-team TAs acting on *other* teams' cards.
-	if approvalChannel != nil && req.TeamID != "" && !req.Exercise {
-		p.addTeamApproversToChannel(req.TeamID, approvalChannel.Id)
+	// Seed request-team TAs only into that team's own per-team channel (never
+	// root fallback). See seedRequestTeamApproversForCard.
+	if !req.Exercise {
+		p.seedRequestTeamApproversForCard(req.TeamID, approvalChannel)
 	}
 	header := "@channel — a new channel request needs your review."
 	if req.Exercise {

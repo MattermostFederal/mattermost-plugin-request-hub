@@ -26,6 +26,13 @@ func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 			api.On(method, args...).Maybe()
 		}
 	}
+	// Adopt strip claim (public / untrusted-orphan paths). Explicit tests may override.
+	api.On("KVSetWithOptions", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvAdoptedStripPrefix)
+	}), mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvAdoptedStripPrefix)
+	})).Return(nil).Maybe()
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam", TwoStepApproverMode: twoStepModeSystemAdmin})
 	return p, api
@@ -337,6 +344,7 @@ func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testin
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
 	// Public convert strips non-privileged members after adopt.
+	api.On("KVSetWithOptions", adoptedStripKey("c9"), []byte("1"), mock.Anything).Return(true, nil)
 	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
 	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
 

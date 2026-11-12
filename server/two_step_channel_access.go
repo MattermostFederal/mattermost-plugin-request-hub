@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -62,14 +61,22 @@ func (p *Plugin) startTwoStepChannelReconciler() {
 	p.twoStepReconcileJob = job
 }
 
-// warnSecurityPoolCapOnce logs when listing hits securityPoolMaxMembers, at
-// most once per pool fingerprint until the capped count changes.
+// warnSecurityPoolCapOnce logs when listing hits securityPoolMaxMembers.
+// Keyed by pool label (not count): at the cap the member count is always the
+// max, so a count fingerprint would never change. Cleared when a later listing
+// is under the cap so a new overrun warns again. sync.Map-safe across
+// reconcile / config / request goroutines.
 func (p *Plugin) warnSecurityPoolCapOnce(pool string, members int) {
-	fp := fmt.Sprintf("%s:%d", pool, members)
-	if p.securityPoolCapWarned == fp {
+	if pool == "" {
 		return
 	}
-	p.securityPoolCapWarned = fp
+	if members < securityPoolMaxMembers {
+		p.securityPoolCapWarned.Delete(pool)
+		return
+	}
+	if _, loaded := p.securityPoolCapWarned.LoadOrStore(pool, struct{}{}); loaded {
+		return
+	}
 	p.API.LogWarn("two-step channel access: security pool listing hit member cap; extra members can still approve but are not seeded into bot/webhook until login",
 		"pool", pool, "members", members, "max_members", securityPoolMaxMembers)
 }

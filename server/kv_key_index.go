@@ -319,6 +319,14 @@ func (idx keyIndex) rebuild(scan func() ([]string, error)) {
 		idx.p.API.LogWarn(idx.label+" index: rebuild scan failed", "error", err.Error())
 		return
 	}
+	// Offset paging can skip a live key when another key is deleted mid-scan.
+	// Periodic rebuild only adds: union with the pre-scan index. Ghosts are
+	// dropped on read via untrack.
+	if prev != nil {
+		if current, _, ok := parseKeyIndex(prev); ok {
+			keys = unionStringKeys(keys, current)
+		}
+	}
 	if err := idx.persistFromScan(prev, keys); err != nil {
 		idx.p.API.LogWarn(idx.label+" index: rebuild save failed", "error", err.Error())
 		return

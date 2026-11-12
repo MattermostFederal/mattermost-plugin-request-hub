@@ -250,11 +250,10 @@ func (p *Plugin) loadAdminRequest(id string) (*adminRequest, []byte, error) {
 // requests mention nobody, so seeding doesn't notify the approvers.
 func (p *Plugin) postAdminApprovalRequest(req *adminRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(channel.TeamId)
-	// Same as channel-creation: request-team Team Admins must be in the
-	// destination channel to click Approve (authz is separate from the
-	// AllowTeamAdminApprovers visibility toggle).
-	if approvalChannel != nil && channel.TeamId != "" && !req.Exercise {
-		p.addTeamApproversToChannel(channel.TeamId, approvalChannel.Id)
+	// Same as channel-creation: only seed into the request team's own per-team
+	// channel (never root fallback). See seedRequestTeamApproversForCard.
+	if !req.Exercise {
+		p.seedRequestTeamApproversForCard(channel.TeamId, approvalChannel)
 	}
 	header := exerciseMarker + ": a Channel Admin request needs your review."
 	if !req.Exercise {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -373,6 +375,9 @@ func TestAddTeamApproversToChannel_SkipsBotAndContinuesAfterAddFailure(t *testin
 		{UserId: "plain", Roles: "team_user"},
 		{UserId: "sa1", Roles: "team_user"},
 	}, nil)
+	notFound := model.NewAppError("test", "not_found", nil, "", http.StatusNotFound)
+	api.On("GetChannelMember", "c1", "ta1").Return(nil, notFound)
+	api.On("GetChannelMember", "c1", "sa1").Return(nil, notFound)
 	api.On("AddChannelMember", "c1", "ta1").Return(nil, testAppErr("denied"))
 	api.On("AddChannelMember", "c1", "sa1").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "sa1", "team1").Return(nil, testAppErr("down"))
@@ -382,6 +387,44 @@ func TestAddTeamApproversToChannel_SkipsBotAndContinuesAfterAddFailure(t *testin
 	api.AssertNotCalled(t, "AddChannelMember", "c1", "bot-user-id")
 	api.AssertNotCalled(t, "AddChannelMember", "c1", "plain")
 	api.AssertNotCalled(t, "GetChannelSidebarCategories", "ta1", "team1")
+}
+
+func TestAddTeamApproversToChannel_DoesNotMarkExistingMembersAsSeeded(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{
+		{UserId: "ta1", Roles: "team_user team_admin"},
+	}, nil)
+	api.On("GetChannelMember", "c1", "ta1").Return(&model.ChannelMember{UserId: "ta1"}, nil)
+	api.On("GetChannelSidebarCategories", "ta1", "team1").Return(nil, testAppErr("down"))
+
+	p.addTeamApproversToChannel("team1", "c1")
+
+	api.AssertNotCalled(t, "AddChannelMember", "c1", "ta1")
+	api.AssertNotCalled(t, "KVCompareAndSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
+	}), mock.Anything, mock.Anything)
+}
+
+func TestSeedRequestTeamApproversForCard_OnlyOwnPerTeamChannel(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
+
+	// Root fallback (different team) — must not seed.
+	root := &model.Channel{Id: "root", TeamId: "approval-team", Name: "mattermost-channel-requests"}
+	p.seedRequestTeamApproversForCard("team1", root)
+	api.AssertNotCalled(t, "GetTeamMembers", mock.Anything, mock.Anything, mock.Anything)
+
+	// Own per-team channel — seeds.
+	own := &model.Channel{Id: "own", TeamId: "team1", Name: "mattermost-channel-requests"}
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
+	p.seedRequestTeamApproversForCard("team1", own)
+	api.AssertCalled(t, "GetTeamMembers", "team1", 0, 200)
+
+	// PerTeam off — never seed on card post.
+	p.setConfiguration(&configuration{PerTeamApprovalChannels: false})
+	p.seedRequestTeamApproversForCard("team1", own)
 }
 
 // --- ensureAllTeamApprovalChannels ---
@@ -566,6 +609,7 @@ func TestUserHasJoinedTeam_AddFailureSkipsSidebar(t *testing.T) {
 	api.On("GetUser", "sa1").Return(&model.User{Id: "sa1", Roles: "system_user system_admin"}, nil)
 	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).
 		Return(pluginChannelIn("ch-team1", "mattermost-channel-requests", "team1"), nil)
+	api.On("GetChannelMember", "ch-team1", "sa1").Return(nil, model.NewAppError("test", "not_found", nil, "", http.StatusNotFound))
 	api.On("AddChannelMember", "ch-team1", "sa1").Return(nil, testAppErr("denied"))
 
 	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{TeamId: "team1", UserId: "sa1"}, &model.User{Id: "other"})
