@@ -10,8 +10,6 @@ import (
 // does not scan the entire plugin KV store (histories, anchors, …).
 const kvTokenExpiryIndex = "bot_token_expiry_index_v1" //nolint:gosec // G101: a KV key, not a credential
 
-const tokenExpiryIndexCASAttempts = keyIndexCASAttempts
-
 func (p *Plugin) tokenExpiryKeyIndex() keyIndex {
 	return keyIndex{p: p, store: kvTokenExpiryIndex, label: "token-expiry"}
 }
@@ -42,16 +40,8 @@ func (p *Plugin) scanTokenExpiryKeys() ([]string, error) {
 	}
 }
 
-func (p *Plugin) loadTokenExpiryIndex() ([]string, bool) {
-	return p.tokenExpiryKeyIndex().load()
-}
-
 func (p *Plugin) persistTokenExpiryIndexFromScan(prev []byte, scanned []string) error {
 	return p.tokenExpiryKeyIndex().persistFromScan(prev, scanned)
-}
-
-func (p *Plugin) invalidateTokenExpiryIndex(failedKey string) {
-	p.tokenExpiryKeyIndex().invalidate(failedKey)
 }
 
 func (p *Plugin) trackTokenExpiryKey(key string) {

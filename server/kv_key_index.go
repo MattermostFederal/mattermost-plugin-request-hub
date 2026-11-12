@@ -89,7 +89,7 @@ func (idx keyIndex) load() ([]string, bool) {
 	}
 	keys, complete, ok := parseKeyIndex(raw)
 	if !ok {
-		idx.p.API.LogWarn(idx.label+" index unreadable; will rebuild")
+		idx.p.API.LogWarn(idx.label + " index unreadable; will rebuild")
 		return nil, false
 	}
 	// Partial blobs are not readable as a complete index — rebuild so we

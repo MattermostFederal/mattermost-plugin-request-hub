@@ -91,6 +91,28 @@ func stubLogs(api *plugintest.API) {
 	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
 	}), mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// Request-team TA/SA seed into the approval destination when a card posts.
+	// Yields to a test's own GetUsers / GetTeamMembers / AddChannelMember stubs.
+	var seedOurs []*mock.Call
+	seedOurs = append(seedOurs,
+		api.On("GetUsers", mock.MatchedBy(func(o *model.UserGetOptions) bool {
+			return o != nil && o.Role == model.SystemAdminRoleId && !o.Active && o.PerPage == 200 &&
+				unclaimed[*model.UserGetOptions](api, &seedOurs, "GetUsers", 0)(o)
+		})).Return([]*model.User{}, nil).Maybe(),
+		api.On("GetTeamMembers", mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetTeamMembers", 0)),
+			mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil).Maybe(),
+		api.On("AddChannelMember", mock.MatchedBy(unclaimed[string](api, &seedOurs, "AddChannelMember", 0)),
+			mock.Anything).Return(&model.ChannelMember{}, nil).Maybe(),
+		api.On("GetChannelSidebarCategories",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetChannelSidebarCategories", 0)),
+			mock.Anything).Return(nil, nil).Maybe(),
+		api.On("CreateChannelSidebarCategory",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "CreateChannelSidebarCategory", 0)),
+			mock.Anything, mock.Anything).Return(&model.SidebarCategoryWithChannels{}, nil).Maybe(),
+		api.On("UpdateChannelSidebarCategories",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "UpdateChannelSidebarCategories", 0)),
+			mock.Anything, mock.Anything).Return([]*model.SidebarCategoryWithChannels{}, nil).Maybe(),
+	)
 }
 
 // stubTAVisibilitySeeded pretends the plugin previously seeded userIDs into
@@ -524,7 +546,10 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubNamesFree(api)
-	stubLogLevels(api)
+	// Card-record failure must win over stubLogs' permissive KVSet for card keys.
+	isCardKey := func(key string) bool { return strings.HasPrefix(key, kvApprovalCardsPrefix) }
+	api.On("KVSet", mock.MatchedBy(isCardKey), mock.Anything).Return(testAppErr("kv down"))
+	stubLogs(api)
 	// Pending lists only: the card record write must reach the failing mock below.
 	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", isPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
@@ -537,9 +562,7 @@ func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 		ApprovalTeam:         "appteam",
 	})
 
-	isCardKey := func(key string) bool { return strings.HasPrefix(key, kvApprovalCardsPrefix) }
 	api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
-	api.On("KVSet", mock.MatchedBy(isCardKey), mock.Anything).Return(testAppErr("kv down"))
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return !isCardKey(key) }), mock.Anything).Return(nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)

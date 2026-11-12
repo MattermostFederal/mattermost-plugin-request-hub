@@ -86,13 +86,19 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 	stubApprovalTeamRecord(api)
 	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(pluginChannel("appch", "mattermost-channel-requests"), nil)
 	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1"}}, nil)
+	// Called twice: once to seed TAs into the approval channel, once for @-mentions.
 	api.On("GetTeamMembers", "team1", mock.Anything, mock.Anything).Return([]*model.TeamMember{
 		{TeamId: "team1", UserId: "ta1", Roles: "team_user team_admin"},
 		{TeamId: "team1", UserId: "tu1", Roles: "team_user"},
-	}, nil)
+	}, nil).Twice()
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1", Username: "lead"}, nil)
 	api.On("GetUsersByIds", []string{"ta1"}).Return([]*model.User{{Id: "ta1", Username: "lead"}}, nil)
+	// Seed path: request-team TA must be able to click Approve on the card.
+	api.On("AddChannelMember", "appch", "ta1").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelSidebarCategories", "ta1", "team1").Return(nil, nil).Maybe()
+	api.On("CreateChannelSidebarCategory", "ta1", "team1", mock.Anything).
+		Return(&model.SidebarCategoryWithChannels{}, nil).Maybe()
 
 	// Capture only the post going to the approval channel so the requester DM
 	// (a second CreatePost call) doesn't overwrite the assertion target.
@@ -112,6 +118,7 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")
 	api.AssertCalled(t, "KVSet", mock.Anything, mock.Anything)
+	api.AssertCalled(t, "AddChannelMember", "appch", "ta1")
 	api.AssertNotCalled(t, "UpdateChannelMemberRoles", mock.Anything, mock.Anything, mock.Anything)
 
 	// Posted to the approval channel, mentioning the System Admin + Team Admin

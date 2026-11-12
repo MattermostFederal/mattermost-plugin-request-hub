@@ -53,13 +53,6 @@ func (p *Plugin) persistOpenRequestIndexFromScan(prev []byte, scanned []string) 
 	return p.openRequestKeyIndex().persistFromScan(prev, scanned)
 }
 
-// invalidateOpenRequestIndex writes a partial blob (optionally including
-// failedKey) so an in-flight rebuild unions that key instead of publishing a
-// scan that missed it. Prefer this over deleting the index.
-func (p *Plugin) invalidateOpenRequestIndex(failedKey string) {
-	p.openRequestKeyIndex().invalidate(failedKey)
-}
-
 func (p *Plugin) trackOpenRequestKey(kvKey string) {
 	p.openRequestKeyIndex().track(kvKey)
 }
