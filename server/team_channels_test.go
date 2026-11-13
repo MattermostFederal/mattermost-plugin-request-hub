@@ -1105,6 +1105,49 @@ func TestKeepSeededTeamAdminOnChannel_PerTeamKeepsApprovalTeamTAs(t *testing.T) 
 	require.False(t, p.keepSeededTeamAdminOnChannel(root, "hq"))
 }
 
+func TestKeepSeededTeamAdminOnChannel_TeamRequestsAndAuditBranches(t *testing.T) {
+	teamCh := &model.Channel{Id: "team", TeamId: "hq", Name: "mattermost-team-requests"}
+	audit := &model.Channel{Id: "audit", TeamId: "hq", Name: "mattermost-audit-requests"}
+
+	p, _ := logOnlyPlugin(&configuration{})
+	require.False(t, p.keepSeededTeamAdminOnChannel(teamCh, "hq"))
+	require.False(t, p.keepSeededTeamAdminOnChannel(audit, "hq"))
+
+	p.setConfiguration(&configuration{AllowApprovalTeamAdminsForTeamRequests: true})
+	require.True(t, p.keepSeededTeamAdminOnChannel(teamCh, "hq"))
+	require.True(t, p.keepSeededTeamAdminOnChannel(audit, "hq"))
+
+	p.setConfiguration(&configuration{AllowTeamAdminApprovers: true})
+	require.False(t, p.keepSeededTeamAdminOnChannel(teamCh, "hq"))
+	require.True(t, p.keepSeededTeamAdminOnChannel(audit, "hq"))
+}
+
+// A required strip that already finished must not run again after restart /
+// HA: done marker + untrusted orphan returns without paging members.
+func TestAdoptApprovalChannel_UntrustedOrphanWithDoneMarkerSkipsStrip(t *testing.T) {
+	api := &plugintest.API{}
+	kv := stubLogsWithStripKV(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	kv.setMarker("ch-audit", adoptStripDone)
+
+	ch := &model.Channel{
+		Id: "ch-audit", TeamId: "team-hq", Name: "mattermost-audit-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "gone", DeleteAt: 0, UpdateAt: 9,
+	}
+	api.On("GetBot", "gone", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "gone").Return(&model.User{Id: "gone", DeleteAt: 1, Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{UserId: "bot"}, nil)
+	api.On("GetTeamMember", "team-hq", "bot").Return(&model.TeamMember{TeamId: "team-hq", UserId: "bot"}, nil).Maybe()
+	api.On("AddChannelMember", "ch-audit", "bot").Return(&model.ChannelMember{}, nil)
+
+	require.True(t, p.adoptApprovalChannel(ch))
+	api.AssertNotCalled(t, "GetChannelMembers", mock.Anything, mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "DeleteChannelMember", mock.Anything, mock.Anything)
+	require.Equal(t, adoptStripDone, kv.marker("ch-audit"))
+}
+
 func TestSyncPrimaryTeamAdminVisibility_SkipsOtherTeams(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
@@ -1176,4 +1219,66 @@ func TestSubmitRequest_RoutesToPerTeamChannel(t *testing.T) {
 	require.Contains(t, msg, "submitted for approval")
 	require.NotNil(t, approvalPost)
 	require.Equal(t, "team-ch-t1", approvalPost.ChannelId)
+}
+
+// Taken per-team channel name falls back to root; request-team TAs must not
+// be seeded into root.
+func TestSubmitRequest_PerTeamRootFallbackDoesNotSeedRequestTeamTAs(t *testing.T) {
+	api := &plugintest.API{}
+	stubNamesFree(api)
+	stubLogs(api)
+	stubPendingLists(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	cfg := &configuration{
+		ApprovalTeam:            "hq",
+		PerTeamApprovalChannels: true,
+		ChannelNamePrefixes:     "team-|Team channels|16",
+	}
+	cfg.prefixes = parsePrefixList(cfg.ChannelNamePrefixes, func(_ string, _ ...any) {})
+	p.setConfiguration(cfg)
+
+	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
+	api.On("GetTeamMember", "t1", "u_req").Return(&model.TeamMember{TeamId: "t1", UserId: "u_req", DeleteAt: 0}, nil)
+	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
+	api.On("GetTeamMembers", "t1", 0, 200).
+		Return([]*model.TeamMember{{TeamId: "t1", UserId: "ta1", SchemeAdmin: true}}, nil)
+	api.On("GetTeam", "t1").Return(&model.Team{Id: "t1", Name: "t1", DisplayName: "Team One"}, nil)
+
+	foreign := &model.Channel{
+		Id: "foreign", TeamId: "t1", Name: "mattermost-channel-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "stranger",
+	}
+	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).Return(foreign, nil)
+	api.On("GetBot", "stranger", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "stranger").Return(&model.User{Id: "stranger", DeleteAt: 0}, nil).Maybe()
+	api.On("GetChannelMember", "foreign", "bot-user-id").Return(nil, notFoundErr()).Maybe()
+
+	api.On("GetTeamByName", "hq").Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
+	stubApprovalTeamRecord(api)
+	root := &model.Channel{
+		Id: "root", TeamId: "team-hq", Name: "mattermost-channel-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "bot-user-id",
+	}
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(root, nil)
+	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1", Username: "lead"}, nil).Maybe()
+	api.On("GetUsersByIds", mock.Anything).Return([]*model.User{{Id: "ta1", Username: "lead"}}, nil).Maybe()
+
+	api.On("CreatePost", mock.MatchedBy(func(pp *model.Post) bool { return pp.ChannelId == "root" })).
+		Return(&model.Post{Id: "ap1"}, nil)
+	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+
+	msg, err := p.submitRequest(requestInput{
+		RequesterID: "u_req",
+		TeamID:      "t1",
+		DisplayName: "Marketing",
+		Prefix:      "team-",
+		Name:        "marketing",
+		ChannelType: channelTypeOpen,
+	})
+	require.NoError(t, err)
+	require.Contains(t, msg, "submitted for approval")
+	api.AssertNotCalled(t, "AddChannelMember", "root", "ta1")
 }

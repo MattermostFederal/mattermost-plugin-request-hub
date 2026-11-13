@@ -469,6 +469,7 @@ func TestAddTeamApproversToChannel_DoesNotMarkExistingMembersAsSeeded(t *testing
 
 func TestSeedRequestTeamApproversForCard_OnlyOwnPerTeamChannel(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{PerTeamApprovalChannels: true})
+	defer api.AssertExpectations(t)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
 
 	// Root fallback (different team) — must not seed.
@@ -478,13 +479,14 @@ func TestSeedRequestTeamApproversForCard_OnlyOwnPerTeamChannel(t *testing.T) {
 
 	// Own per-team channel — seeds.
 	own := &model.Channel{Id: "own", TeamId: "team1", Name: "mattermost-channel-requests"}
-	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil)
+	api.On("GetTeamMembers", "team1", 0, 200).Return([]*model.TeamMember{}, nil).Once()
 	p.seedRequestTeamApproversForCard("team1", own)
-	api.AssertCalled(t, "GetTeamMembers", "team1", 0, 200)
+	api.AssertNumberOfCalls(t, "GetTeamMembers", 1)
 
 	// PerTeam off — never seed on card post.
 	p.setConfiguration(&configuration{PerTeamApprovalChannels: false})
 	p.seedRequestTeamApproversForCard("team1", own)
+	api.AssertNumberOfCalls(t, "GetTeamMembers", 1)
 }
 
 // --- ensureAllTeamApprovalChannels ---

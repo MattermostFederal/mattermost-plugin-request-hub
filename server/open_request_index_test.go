@@ -62,6 +62,30 @@ func TestRebuildOpenRequestIndex_UsesCASAgainstPreScanValue(t *testing.T) {
 	p.rebuildOpenRequestIndex()
 }
 
+// A key present before the scan but skipped by offset paging must survive
+// rebuild: the scan only adds.
+func TestRebuildOpenRequestIndex_UnionsPreScanIndex(t *testing.T) {
+	api := &plugintest.API{}
+	tracked := kvBotRequestPrefix + "tracked"
+	scanned := kvTeamRequestPrefix + "scanned"
+	prev, err := json.Marshal([]string{tracked})
+	require.NoError(t, err)
+	api.On("KVGet", kvOpenRequestIndex).Return(prev, nil).Once()
+	api.On("KVList", 0, 200).Return([]string{scanned}, nil)
+	api.On("KVCompareAndSet", kvOpenRequestIndex, prev, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{scanned, tracked}, keys)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.rebuildOpenRequestIndex()
+}
+
 func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	api := &plugintest.API{}
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil)

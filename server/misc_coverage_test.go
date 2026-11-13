@@ -347,6 +347,58 @@ func TestOnConfigurationChange_EnablingPerTeamChannelsStartsSweep(t *testing.T) 
 	require.True(t, p.getConfiguration().PerTeamApprovalChannels)
 }
 
+func TestOnConfigurationChange_TAVisibilityToggleResyncs(t *testing.T) {
+	api := &plugintest.API{}
+	done := make(chan struct{})
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: false,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	stubLoadConfiguration(api, configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	// syncPrimaryTeamAdminVisibility always resolves the Approval team first.
+	api.On("GetTeamByName", "hq").Run(func(mock.Arguments) { close(done) }).
+		Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
+	stubApprovalTeamRecord(api)
+	root := pluginChannelIn("ch-root", "mattermost-channel-requests", "team-hq")
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(root, nil).Maybe()
+	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(nil, testAppErr("missing")).Maybe()
+	api.On("GetTeamMembers", "team-hq", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
+	api.On("KVGet", taVisibilitySeededKey("ch-root")).Return(nil, nil).Maybe()
+
+	require.NoError(t, p.OnConfigurationChange())
+	waitFor(t, done, "TA visibility re-sync")
+}
+
+func TestOnConfigurationChange_UnchangedTAVisibilityTogglesSkipResync(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	stubLoadConfiguration(api, configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+
+	require.NoError(t, p.OnConfigurationChange())
+
+	api.AssertNotCalled(t, "GetTeamByName", "hq")
+	api.AssertNotCalled(t, "LogInfo", "primary team admin visibility: reseeding into ticket channels",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestOnConfigurationChange_TwoStepPoolChangeReseedsChannels(t *testing.T) {
 	api := &plugintest.API{}
 	done := make(chan struct{})

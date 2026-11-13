@@ -15,8 +15,9 @@ import (
 // the plugin keeps who asked for it and when it expires, never the token
 // value (bot_token_expiry_* KV). A once-daily cluster job scans that index
 // and DMs the requester: weekly from a month before expiry, daily in the
-// last week, and once when expired. LastRemindedAt in the same KV record is
-// the notification ledger so we do not re-spam between scans. If the
+// last week, and once when expired. LastRemindedAt is the pre-expiry
+// reminder ledger; ExpiredNotifiedAt records that the expired notice was
+// already sent so a stuck KVDelete cannot re-DM every day. If the
 // requester's account is gone, System Admins get the reminders instead.
 
 const (
@@ -33,7 +34,7 @@ const (
 )
 
 // botTokenExpiry is what the plugin keeps about a token it issued.
-// ExpiresAt and LastRemindedAt are Unix millis.
+// ExpiresAt, LastRemindedAt, and ExpiredNotifiedAt are Unix millis.
 type botTokenExpiry struct {
 	TokenID        string `json:"token_id"`
 	BotUserID      string `json:"bot_user_id"`
@@ -41,6 +42,9 @@ type botTokenExpiry struct {
 	RequesterID    string `json:"requester_id"`
 	ExpiresAt      int64  `json:"expires_at"`
 	LastRemindedAt int64  `json:"last_reminded_at"`
+	// ExpiredNotifiedAt is set after the expired DM is sent. Once set, later
+	// runs only retry delete — they never send the expired notice again.
+	ExpiredNotifiedAt int64 `json:"expired_notified_at,omitempty"`
 	// RequestID is the bot request the token was issued for, for auditing.
 	// Empty on tokens tracked before auditing.
 	RequestID string `json:"request_id,omitempty"`
@@ -160,24 +164,7 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	nowMillis := now.UnixMilli()
 	remaining := time.Duration(rec.ExpiresAt-nowMillis) * time.Millisecond
 	if remaining <= 0 {
-		// One last notice, then stop tracking. If KVDelete keeps failing, do
-		// not re-DM every day — bump LastRemindedAt and retry the delete later.
-		sinceLast := time.Duration(nowMillis-rec.LastRemindedAt) * time.Millisecond
-		if rec.LastRemindedAt > 0 && sinceLast < 24*time.Hour-tokenReminderSlack {
-			_ = p.endTokenTracking(key, rec, "the token expired")
-			return
-		}
-		if p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
-			p.auditTokenReminder(rec, true)
-			if p.endTokenTracking(key, rec, "the token expired") {
-				return
-			}
-			rec.LastRemindedAt = nowMillis
-			if err := p.saveBotTokenExpiry(rec); err != nil {
-				p.API.LogWarn("failed to persist token reminder after expired DM with stuck delete",
-					"key", key, "error", err.Error())
-			}
-		}
+		p.remindTokenExpired(key, rec, nowMillis)
 		return
 	}
 
@@ -202,6 +189,31 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	if err := p.saveBotTokenExpiry(rec); err != nil {
 		p.API.LogWarn("failed to record bot token reminder", "bot_user_id", rec.BotUserID, "error", err.Error())
 	}
+}
+
+// remindTokenExpired sends the one-time expired notice, then stops tracking.
+// ExpiredNotifiedAt is persisted only after a successful DM so a transient
+// send failure can retry, while a stuck delete after delivery cannot re-DM
+// every day. Short-lived tokens still get the notice: LastRemindedAt alone
+// is not used as a stand-in for "already told them".
+func (p *Plugin) remindTokenExpired(key string, rec botTokenExpiry, nowMillis int64) {
+	if rec.ExpiredNotifiedAt > 0 {
+		_ = p.endTokenTracking(key, rec, "the token expired")
+		return
+	}
+	if !p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
+		return
+	}
+	p.auditTokenReminder(rec, true)
+	rec.ExpiredNotifiedAt = nowMillis
+	if err := p.saveBotTokenExpiry(rec); err != nil {
+		// DM already went out; keep trying to end tracking. A failed save may
+		// re-send once on the next run, which is better than daily spam after
+		// a durable marker with a stuck delete.
+		p.API.LogWarn("failed to persist expired-token notice marker after DM",
+			"key", key, "error", err.Error())
+	}
+	_ = p.endTokenTracking(key, rec, "the token expired")
 }
 
 // auditTokenReminder records a token expiry reminder that was sent.
