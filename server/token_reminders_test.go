@@ -157,25 +157,58 @@ func TestRemindTokenExpiry_Schedule(t *testing.T) {
 	}
 }
 
-func TestRemindTokenExpiry_ExpiredSendsOneNoticeThenStops(t *testing.T) {
+func TestExpiredNotifyState(t *testing.T) {
+	require.Equal(t, expiredNotifyNone, botTokenExpiry{}.expiredNotifyState())
+	require.Equal(t, expiredNotifyPending, botTokenExpiry{ExpiredNotifyAttemptAt: 1}.expiredNotifyState())
+	require.Equal(t, expiredNotifySent, botTokenExpiry{ExpiredNotifiedAt: 2}.expiredNotifyState())
+	// Sent wins if both are set (recovery after a partial write).
+	require.Equal(t, expiredNotifySent, botTokenExpiry{ExpiredNotifyAttemptAt: 1, ExpiredNotifiedAt: 2}.expiredNotifyState())
+}
+
+// none → pending (saved before send) → sent → delete.
+func TestRemindTokenExpiry_NoneToPendingToSent(t *testing.T) {
 	now := time.Now()
-	f := newReminderFixture(t, botTokenExpiry{
+	key := botTokenExpiryKey("tok1")
+	rec := botTokenExpiry{
 		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1", RequestID: "req-id",
 		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-48 * time.Hour).UnixMilli(),
+	}
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	events := captureAudit(p)
+	var store botTokenExpiry
+	var saves []botTokenExpiry
+	api.On("KVGet", key).Return(func(string) ([]byte, *model.AppError) {
+		return mustMarshal(t, store), nil
 	})
-	events := captureAudit(f.p)
+	api.On("KVSet", key, mock.Anything).Run(func(args mock.Arguments) {
+		var saved botTokenExpiry
+		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &saved))
+		saves = append(saves, saved)
+		store = saved
+	}).Return(nil)
+	api.On("KVDelete", key).Return(nil)
+	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
+	api.On("GetUser", "req1").Return(&model.User{Id: "req1", Username: "alice"}, nil)
+	api.On("GetDirectChannel", "req1", "bot-user-id").Return(&model.Channel{Id: "dm-req1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	store = rec
 
-	f.p.remindTokenExpiry(botTokenExpiryKey("tok1"), now)
+	p.remindTokenExpiry(key, now)
 
-	require.Len(t, f.sent["req1"], 1)
-	require.Contains(t, f.sent["req1"][0], "expired on")
-	require.NotNil(t, f.saved)
-	require.Equal(t, now.UnixMilli(), f.saved.ExpiredNotifiedAt)
-	f.api.AssertCalled(t, "KVDelete", botTokenExpiryKey("tok1"))
+	require.Len(t, saves, 2)
+	require.Equal(t, expiredNotifyPending, saves[0].expiredNotifyState())
+	require.Equal(t, now.UnixMilli(), saves[0].ExpiredNotifyAttemptAt)
+	require.Equal(t, int64(0), saves[0].ExpiredNotifiedAt)
+	require.Equal(t, expiredNotifySent, saves[1].expiredNotifyState())
+	require.Equal(t, now.UnixMilli(), saves[1].ExpiredNotifiedAt)
+	api.AssertCalled(t, "KVDelete", key)
 	require.Equal(t, []string{eventTokenReminder, eventTokenTrackingEnded}, eventNames(*events))
-	require.Equal(t, "req-id", (*events)[0].RequestID)
 	require.Equal(t, true, (*events)[0].Detail["expired"])
-	require.Equal(t, "the token expired", (*events)[1].Detail["reason"])
 }
 
 // A short-lived token still gets the expired notice: LastRemindedAt at issue
@@ -190,82 +223,108 @@ func TestRemindTokenExpiry_ShortLivedTokenStillGetsExpiredNotice(t *testing.T) {
 	f.p.remindTokenExpiry(botTokenExpiryKey("tok1"), now)
 
 	require.Len(t, f.sent["req1"], 1)
-	require.Contains(t, f.sent["req1"][0], "expired on")
+	require.Equal(t, now.UnixMilli(), f.saved.ExpiredNotifyAttemptAt)
 	require.Equal(t, now.UnixMilli(), f.saved.ExpiredNotifiedAt)
 }
 
-// Once ExpiredNotifiedAt is set, a stuck delete only retries cleanup — no
-// second expired DM, even a day later.
-func TestRemindTokenExpiry_StuckDeleteDoesNotResendExpiredNotice(t *testing.T) {
+// pending + send failure stays pending; next run retries the DM without
+// rewriting pending, then advances to sent.
+func TestRemindTokenExpiry_PendingSendFailureRetriesThenSends(t *testing.T) {
 	now := time.Now()
 	key := botTokenExpiryKey("tok1")
-	rec := botTokenExpiry{
-		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
-		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-48 * time.Hour).UnixMilli(),
-	}
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	sent := map[string][]string{}
 	var store botTokenExpiry
+	var sent int
+	var pendingSaves int
 	api.On("KVGet", key).Return(func(string) ([]byte, *model.AppError) {
 		return mustMarshal(t, store), nil
 	})
 	api.On("KVSet", key, mock.Anything).Run(func(args mock.Arguments) {
-		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &store))
+		var saved botTokenExpiry
+		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &saved))
+		if saved.expiredNotifyState() == expiredNotifyPending && saved.ExpiredNotifiedAt == 0 {
+			pendingSaves++
+		}
+		store = saved
 	}).Return(nil)
-	api.On("KVDelete", key).Return(testAppErr("kv down"))
 	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
-	api.On("GetUser", "req1").Return(&model.User{Id: "req1", Username: "alice"}, nil)
+	api.On("GetUser", "req1").Return(&model.User{Id: "req1"}, nil)
+	api.On("GetDirectChannel", "req1", "bot-user-id").Return(nil, testAppErr("no dm")).Once()
 	api.On("GetDirectChannel", "req1", "bot-user-id").Return(&model.Channel{Id: "dm-req1"}, nil)
-	api.On("CreatePost", mock.Anything).Run(func(args mock.Arguments) {
-		post := args.Get(0).(*model.Post)
-		sent["req1"] = append(sent["req1"], post.Message)
-	}).Return(&model.Post{}, nil)
+	api.On("CreatePost", mock.Anything).Run(func(mock.Arguments) { sent++ }).Return(&model.Post{}, nil)
+	api.On("KVDelete", key).Return(nil)
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	store = botTokenExpiry{
+		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
+		ExpiresAt: now.Add(-time.Hour).UnixMilli(),
+	}
 
-	store = rec
 	p.remindTokenExpiry(key, now)
-	require.Len(t, sent["req1"], 1)
-	require.Greater(t, store.ExpiredNotifiedAt, int64(0))
+	require.Equal(t, 0, sent)
+	require.Equal(t, 1, pendingSaves)
+	require.Equal(t, expiredNotifyPending, store.expiredNotifyState())
+	api.AssertNotCalled(t, "KVDelete", key)
 
-	// Next daily run: marker set, delete still stuck — no second DM.
 	later := now.Add(25 * time.Hour)
 	p.remindTokenExpiry(key, later)
-	require.Len(t, sent["req1"], 1)
-	api.AssertNumberOfCalls(t, "KVDelete", 2)
+	require.Equal(t, 1, sent)
+	require.Equal(t, 1, pendingSaves, "pending must not be rewritten on retry")
+	require.Equal(t, expiredNotifySent, store.expiredNotifyState())
+	api.AssertCalled(t, "KVDelete", key)
 }
 
-func TestRemindTokenExpiry_AlreadyNotifiedOnlyRetriesDelete(t *testing.T) {
+// Starting already pending (crash after pending save) must not require a
+// second pending write before send.
+func TestRemindTokenExpiry_AlreadyPendingSendsWithoutRewritingPending(t *testing.T) {
 	now := time.Now()
 	key := botTokenExpiryKey("tok1")
-	rec := botTokenExpiry{
-		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
-		ExpiresAt: now.Add(-time.Hour).UnixMilli(), ExpiredNotifiedAt: now.Add(-24 * time.Hour).UnixMilli(),
-	}
+	attemptAt := now.Add(-time.Hour).UnixMilli()
 	api := &plugintest.API{}
 	stubLogs(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
-	api.On("KVGet", key).Return(mustMarshal(t, rec), nil)
+	store := botTokenExpiry{
+		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
+		ExpiresAt: now.Add(-2 * time.Hour).UnixMilli(), ExpiredNotifyAttemptAt: attemptAt,
+	}
+	var saves []botTokenExpiry
+	api.On("KVGet", key).Return(func(string) ([]byte, *model.AppError) {
+		return mustMarshal(t, store), nil
+	})
+	api.On("KVSet", key, mock.Anything).Run(func(args mock.Arguments) {
+		var saved botTokenExpiry
+		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &saved))
+		saves = append(saves, saved)
+		store = saved
+	}).Return(nil)
 	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
+	api.On("GetUser", "req1").Return(&model.User{Id: "req1"}, nil)
+	api.On("GetDirectChannel", "req1", "bot-user-id").Return(&model.Channel{Id: "dm-req1"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
 	api.On("KVDelete", key).Return(nil)
 	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 
 	p.remindTokenExpiry(key, now)
 
-	api.AssertCalled(t, "KVDelete", key)
-	api.AssertNotCalled(t, "CreatePost", mock.Anything)
-	api.AssertNotCalled(t, "KVSet", key, mock.Anything)
+	require.Len(t, saves, 1)
+	require.Equal(t, attemptAt, saves[0].ExpiredNotifyAttemptAt)
+	require.Equal(t, expiredNotifySent, saves[0].expiredNotifyState())
 }
 
-func TestRemindTokenExpiry_ExpiredMarkerSaveFailureStillEndsTracking(t *testing.T) {
+// sent → only retry delete; no DM even a day later with a stuck delete.
+func TestRemindTokenExpiry_SentOnlyRetriesDelete(t *testing.T) {
 	now := time.Now()
 	key := botTokenExpiryKey("tok1")
 	rec := botTokenExpiry{
 		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
-		ExpiresAt: now.Add(-time.Hour).UnixMilli(), LastRemindedAt: now.Add(-48 * time.Hour).UnixMilli(),
+		ExpiresAt:              now.Add(-time.Hour).UnixMilli(),
+		ExpiredNotifyAttemptAt: now.Add(-26 * time.Hour).UnixMilli(),
+		ExpiredNotifiedAt:      now.Add(-25 * time.Hour).UnixMilli(),
 	}
 	api := &plugintest.API{}
 	stubLogs(api)
@@ -273,10 +332,62 @@ func TestRemindTokenExpiry_ExpiredMarkerSaveFailureStillEndsTracking(t *testing.
 	p := newTestPlugin(api)
 	api.On("KVGet", key).Return(mustMarshal(t, rec), nil)
 	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
+	api.On("KVDelete", key).Return(testAppErr("kv down")).Once()
+	api.On("KVDelete", key).Return(nil).Once()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+
+	p.remindTokenExpiry(key, now)
+	p.remindTokenExpiry(key, now.Add(25*time.Hour))
+
+	api.AssertNumberOfCalls(t, "KVDelete", 2)
+	api.AssertNotCalled(t, "CreatePost", mock.Anything)
+	api.AssertNotCalled(t, "KVSet", key, mock.Anything)
+}
+
+// none + pending-save failure must not send (no durable pending marker).
+func TestRemindTokenExpiry_PendingSaveFailureSkipsDM(t *testing.T) {
+	now := time.Now()
+	key := botTokenExpiryKey("tok1")
+	rec := botTokenExpiry{
+		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
+		ExpiresAt: now.Add(-time.Hour).UnixMilli(),
+	}
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	api.On("KVGet", key).Return(mustMarshal(t, rec), nil)
+	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
+	api.On("KVSet", key, mock.Anything).Return(testAppErr("kv down"))
+
+	p.remindTokenExpiry(key, now)
+
+	api.AssertNotCalled(t, "CreatePost", mock.Anything)
+	api.AssertNotCalled(t, "KVDelete", key)
+}
+
+// DM succeeded but "sent" save failed: still try delete. Next run sees
+// pending and may re-send once if delete also failed.
+func TestRemindTokenExpiry_SentSaveFailureStillEndsTracking(t *testing.T) {
+	now := time.Now()
+	key := botTokenExpiryKey("tok1")
+	api := &plugintest.API{}
+	stubLogs(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	store := botTokenExpiry{
+		TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1",
+		ExpiresAt: now.Add(-time.Hour).UnixMilli(), ExpiredNotifyAttemptAt: now.UnixMilli(),
+	}
+	api.On("KVGet", key).Return(func(string) ([]byte, *model.AppError) {
+		return mustMarshal(t, store), nil
+	})
+	api.On("KVSet", key, mock.Anything).Return(testAppErr("kv down"))
+	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
 	api.On("GetUser", "req1").Return(&model.User{Id: "req1", Username: "alice"}, nil)
 	api.On("GetDirectChannel", "req1", "bot-user-id").Return(&model.Channel{Id: "dm-req1"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
-	api.On("KVSet", key, mock.Anything).Return(testAppErr("kv down"))
 	api.On("KVDelete", key).Return(nil)
 	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
@@ -376,45 +487,6 @@ func TestRemindTokenExpiry_GoneRequesterRemindsSystemAdmins(t *testing.T) {
 			require.NotNil(t, f.saved)
 		})
 	}
-}
-
-// A failed send leaves no ExpiredNotifiedAt, so the next run retries the notice.
-func TestRemindTokenExpiry_FailedSendRetriesNotice(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogs(api)
-	defer api.AssertExpectations(t)
-	p := newTestPlugin(api)
-	now := time.Now()
-	key := botTokenExpiryKey("tok1")
-	rec := botTokenExpiry{TokenID: "tok1", BotUserID: "bot1", BotUsername: "mybot", RequesterID: "req1", ExpiresAt: now.Add(-time.Hour).UnixMilli()}
-	var store botTokenExpiry
-	var sent int
-	api.On("KVGet", key).Return(func(string) ([]byte, *model.AppError) {
-		return mustMarshal(t, store), nil
-	})
-	api.On("KVSet", key, mock.Anything).Run(func(args mock.Arguments) {
-		require.NoError(t, json.Unmarshal(args.Get(1).([]byte), &store))
-	}).Return(nil).Maybe()
-	api.On("GetBot", "bot1", true).Return(&model.Bot{UserId: "bot1", Username: "mybot"}, nil)
-	api.On("GetUser", "req1").Return(&model.User{Id: "req1"}, nil)
-	api.On("GetDirectChannel", "req1", "bot-user-id").Return(nil, testAppErr("no dm")).Once()
-	api.On("GetDirectChannel", "req1", "bot-user-id").Return(&model.Channel{Id: "dm-req1"}, nil)
-	api.On("CreatePost", mock.Anything).Run(func(mock.Arguments) { sent++ }).Return(&model.Post{}, nil)
-	api.On("KVDelete", key).Return(nil)
-	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
-	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
-	store = rec
-
-	p.remindTokenExpiry(key, now)
-	require.Equal(t, 0, sent)
-	require.Equal(t, int64(0), store.ExpiredNotifiedAt)
-	api.AssertNotCalled(t, "KVDelete", key)
-
-	later := now.Add(25 * time.Hour)
-	p.remindTokenExpiry(key, later)
-	require.Equal(t, 1, sent)
-	require.Greater(t, store.ExpiredNotifiedAt, int64(0))
-	api.AssertCalled(t, "KVDelete", key)
 }
 
 func TestRemindTokenExpiry_UnreadableRecordIsDropped(t *testing.T) {

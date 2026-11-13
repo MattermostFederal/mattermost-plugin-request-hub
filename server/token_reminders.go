@@ -16,8 +16,10 @@ import (
 // value (bot_token_expiry_* KV). A once-daily cluster job scans that index
 // and DMs the requester: weekly from a month before expiry, daily in the
 // last week, and once when expired. LastRemindedAt is the pre-expiry
-// reminder ledger; ExpiredNotifiedAt records that the expired notice was
-// already sent so a stuck KVDelete cannot re-DM every day. If the
+// reminder ledger. The expired notice uses a three-state marker:
+// none → pending (ExpiredNotifyAttemptAt, saved before send) → sent
+// (ExpiredNotifiedAt, saved after delivery). Pending lets a failed send
+// retry; sent stops daily re-DMs when KVDelete is stuck. If the
 // requester's account is gone, System Admins get the reminders instead.
 
 const (
@@ -34,7 +36,7 @@ const (
 )
 
 // botTokenExpiry is what the plugin keeps about a token it issued.
-// ExpiresAt, LastRemindedAt, and ExpiredNotifiedAt are Unix millis.
+// Time fields are Unix millis.
 type botTokenExpiry struct {
 	TokenID        string `json:"token_id"`
 	BotUserID      string `json:"bot_user_id"`
@@ -42,12 +44,37 @@ type botTokenExpiry struct {
 	RequesterID    string `json:"requester_id"`
 	ExpiresAt      int64  `json:"expires_at"`
 	LastRemindedAt int64  `json:"last_reminded_at"`
-	// ExpiredNotifiedAt is set after the expired DM is sent. Once set, later
-	// runs only retry delete — they never send the expired notice again.
+	// ExpiredNotifyAttemptAt is set before the expired DM is sent (pending).
+	// A crash or send failure leaves the record here so the next run retries.
+	ExpiredNotifyAttemptAt int64 `json:"expired_notify_attempt_at,omitempty"`
+	// ExpiredNotifiedAt is set after the expired DM is sent (sent). Once set,
+	// later runs only retry delete — they never send the notice again.
 	ExpiredNotifiedAt int64 `json:"expired_notified_at,omitempty"`
 	// RequestID is the bot request the token was issued for, for auditing.
 	// Empty on tokens tracked before auditing.
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// expiredNotifyState is the three-state expired-notice machine:
+// none (never attempted), pending (attempt saved, delivery not confirmed),
+// sent (delivery confirmed).
+type expiredNotifyState int
+
+const (
+	expiredNotifyNone expiredNotifyState = iota
+	expiredNotifyPending
+	expiredNotifySent
+)
+
+func (rec botTokenExpiry) expiredNotifyState() expiredNotifyState {
+	switch {
+	case rec.ExpiredNotifiedAt > 0:
+		return expiredNotifySent
+	case rec.ExpiredNotifyAttemptAt > 0:
+		return expiredNotifyPending
+	default:
+		return expiredNotifyNone
+	}
 }
 
 func botTokenExpiryKey(tokenID string) string {
@@ -192,13 +219,30 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 }
 
 // remindTokenExpired sends the one-time expired notice, then stops tracking.
-// ExpiredNotifiedAt is persisted only after a successful DM so a transient
-// send failure can retry, while a stuck delete after delivery cannot re-DM
-// every day. Short-lived tokens still get the notice: LastRemindedAt alone
-// is not used as a stand-in for "already told them".
+//
+//	none    → save pending, then send
+//	pending → retry send (no second pending write)
+//	sent    → only retry delete
+//
+// Short-lived tokens still get the notice: LastRemindedAt alone is not used
+// as a stand-in for "already told them".
 func (p *Plugin) remindTokenExpired(key string, rec botTokenExpiry, nowMillis int64) {
-	if rec.ExpiredNotifiedAt > 0 {
+	switch state := rec.expiredNotifyState(); state {
+	case expiredNotifySent:
 		_ = p.endTokenTracking(key, rec, "the token expired")
+		return
+	case expiredNotifyNone:
+		rec.ExpiredNotifyAttemptAt = nowMillis
+		if err := p.saveBotTokenExpiry(rec); err != nil {
+			p.API.LogWarn("failed to persist expired-token pending marker; will retry next run",
+				"key", key, "error", err.Error())
+			return
+		}
+	case expiredNotifyPending:
+		// Prior run saved pending then failed or crashed mid-send.
+	default:
+		p.API.LogError("token expiry: unknown expired-notify state; refusing to send",
+			"key", key, "state", int(state))
 		return
 	}
 	if !p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
@@ -207,10 +251,10 @@ func (p *Plugin) remindTokenExpired(key string, rec botTokenExpiry, nowMillis in
 	p.auditTokenReminder(rec, true)
 	rec.ExpiredNotifiedAt = nowMillis
 	if err := p.saveBotTokenExpiry(rec); err != nil {
-		// DM already went out; keep trying to end tracking. A failed save may
-		// re-send once on the next run, which is better than daily spam after
-		// a durable marker with a stuck delete.
-		p.API.LogWarn("failed to persist expired-token notice marker after DM",
+		// DM already went out; keep trying to end tracking. A failed "sent"
+		// save may re-send once while still pending, which is better than
+		// daily spam after a durable sent marker with a stuck delete.
+		p.API.LogWarn("failed to persist expired-token sent marker after DM",
 			"key", key, "error", err.Error())
 	}
 	_ = p.endTokenTracking(key, rec, "the token expired")
