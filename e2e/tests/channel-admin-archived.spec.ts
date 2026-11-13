@@ -4,7 +4,7 @@
 // specs, so this file gets a server of its own.
 import {cardActions, click, pendingIds, postsMentioning, reloadPost, submitAdmin} from '../helpers/channel';
 import {expect, test} from '../helpers/fixtures';
-import {ADMIN, DEFAULT_PLUGIN_CONFIG, cardRequestId, uid} from '../helpers/requesthub';
+import {ADMIN, APPROVAL_CHANNEL, DEFAULT_PLUGIN_CONFIG, cardRequestId, uid} from '../helpers/requesthub';
 
 test.use({
     hubOptions: {name: 'approval-archived', pluginConfig: DEFAULT_PLUGIN_CONFIG},
@@ -13,7 +13,12 @@ test.use({
 
 test('an archived approval channel sends Channel Admin cards to System Admins by direct message', async ({hub}) => {
     const admin = await hub.client(ADMIN);
-    const approvalChannelId = await hub.approvalChannelId();
+    // Dedicated server: wait for OnActivate's background ensure to create the
+    // approval channel before archiving it (approvalChannelId does not poll).
+    const approvalChannelId = await hub.waitForChannel(APPROVAL_CHANNEL);
+    if (!approvalChannelId) {
+        throw new Error(`approval channel ${APPROVAL_CHANNEL} was not created`);
+    }
     await admin.deleteChannel(approvalChannelId);
     try {
         const requester = await hub.createUser();

@@ -114,11 +114,17 @@ export const TeamPicker: React.FC<Props> = (props) => {
         });
     }, []);
 
+    // If the saved slug isn't in the list (admin not on that team, or teams
+    // still loading), keep an option so the console doesn't look blank and a
+    // careless Save can't overwrite ApprovalTeam with "".
+    const saved = value ?? '';
+    const savedMissing = Boolean(saved) && !loading && !teams.some((t) => t.name === saved);
+
     return (
         <div>
             <select
                 className='form-control'
-                value={value ?? ''}
+                value={saved}
                 disabled={disabled ?? loading}
                 onChange={(e) => {
                     onChange(id, e.target.value);
@@ -126,6 +132,11 @@ export const TeamPicker: React.FC<Props> = (props) => {
                 }}
             >
                 <option value=''>{loading ? '-- loading teams --' : '-- pick a team --'}</option>
+                {savedMissing && (
+                    <option value={saved}>
+                        {`${saved}  (saved — join this team or re-pick to change)`}
+                    </option>
+                )}
                 {teams.map((t) => (
                     <option
                         key={t.id}
@@ -135,7 +146,7 @@ export const TeamPicker: React.FC<Props> = (props) => {
                     </option>
                 ))}
             </select>
-            <small style={{opacity: 0.6}}>{'Team where the plugin creates approval channels (channel, bot, webhook, team, audit). Required for the approval workflow.'}</small>
+            <small style={{opacity: 0.6}}>{'Team where the plugin creates approval channels (channel, bot, webhook, team, audit). Required for bot, webhook, team, and audit tickets. Blank = those fall back to System Admin DMs. Channel / Channel Admin requests can still use a per-team mattermost-channel-requests channel when Per-team approval channels is on.'}</small>
         </div>
     );
 };

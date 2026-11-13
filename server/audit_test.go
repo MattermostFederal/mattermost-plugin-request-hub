@@ -538,10 +538,11 @@ func TestHandleAuditExport(t *testing.T) {
 			}
 			return out
 		}
-		// r1 runs from 10 to 30, r2 is at 20.
+		// r1 has events at 10 and 30, r2 at 20. A history needs an event in
+		// the window: r1 spans 15–25 but has nothing inside it.
 		require.Equal(t, []string{"r1"}, ids("?since=25"))
 		require.Equal(t, []string{"r1"}, ids("?until=15"))
-		require.Equal(t, []string{"r1", "r2"}, ids("?since=15&until=25"))
+		require.Equal(t, []string{"r2"}, ids("?since=15&until=25"))
 		// CSV rows are each event in the range.
 		rows, err := csv.NewReader(exportRequest(t, p, "admin1", "?format=csv&kind=bot&since=25").Body).ReadAll()
 		require.NoError(t, err)

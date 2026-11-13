@@ -99,14 +99,14 @@ func (p *Plugin) submitTeamMemberRequest(requesterID, teamID string, nomineeIDs 
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvTeamMemberRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamMemberRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamMember, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot team member request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postTeamMemberApprovalRequest(req, requester, team)
 	if err != nil {
-		_ = p.API.KVDelete(kvTeamMemberRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamMemberRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamMember, req.RequesterID, req.ID)
 		p.API.LogError("failed to post team member request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -232,8 +232,8 @@ func (p *Plugin) storeTeamMemberRequest(req *teamMemberRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal team member request")
 	}
-	if appErr := p.API.KVSet(kvTeamMemberRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store team member request")
+	if err := p.putPendingRequestKV(kvTeamMemberRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store team member request")
 	}
 	return nil
 }

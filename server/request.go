@@ -509,7 +509,7 @@ func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr err
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvRequestPrefix + req.ID)
 		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot channel request")
 	}
@@ -517,7 +517,7 @@ func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr err
 	approvalPostID, approvalChannelID, err := p.postApprovalRequest(req, requester)
 	if err != nil {
 		// Roll back the stored request so it isn't orphaned without an approval message.
-		_ = p.API.KVDelete(kvRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvRequestPrefix + req.ID)
 		p.releasePending(pendingKindChannel, req.RequesterID, req.ID)
 		p.API.LogError("failed to post channel request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -771,8 +771,8 @@ func (p *Plugin) storeRequest(req *channelRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal request")
 	}
-	if appErr := p.API.KVSet(kvRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store request")
+	if err := p.putPendingRequestKV(kvRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store request")
 	}
 	return nil
 }
@@ -802,6 +802,11 @@ func (p *Plugin) loadRequest(id string) (*channelRequest, []byte, error) {
 // Exercise requests mention nobody, so seeding doesn't notify the channel.
 func (p *Plugin) postApprovalRequest(req *channelRequest, requester *model.User) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(req.TeamID)
+	// Seed request-team TAs only into that team's own per-team channel (never
+	// root fallback). See seedRequestTeamApproversForCard.
+	if !req.Exercise {
+		p.seedRequestTeamApproversForCard(req.TeamID, approvalChannel)
+	}
 	header := "@channel — a new channel request needs your review."
 	if req.Exercise {
 		header = exerciseMarker + ": a new channel request needs your review."

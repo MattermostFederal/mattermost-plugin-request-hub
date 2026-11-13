@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -26,6 +27,15 @@ const historyUpdateAttempts = 8
 
 // historyListPageSize is how many KV keys listHistories reads at a time.
 const historyListPageSize = 200
+
+// historyExportMaxHistories / historyExportMaxEvents bound a single histories
+// export so an unbounded KV store cannot OOM the node on download/approve.
+// Prefer filtering by date/request in the UI; these are hard ceilings only.
+// Vars (not consts) so unit tests can override the caps.
+var (
+	historyExportMaxHistories = 500
+	historyExportMaxEvents    = 20000
+)
 
 // Audit events. Every event that touches a request is recorded under one
 // of these names, in the request history, the server audit log (as
@@ -654,4 +664,130 @@ func (p *Plugin) listHistories() ([]requestHistory, error) {
 			return out, nil
 		}
 	}
+}
+
+// historyMatchesExportFilter reports whether h belongs in a histories export
+// for filter f (request/kind/requester/time window on the history record).
+func historyMatchesExportFilter(h requestHistory, f auditExportFilter) bool {
+	if f.RequestID != "" && h.RequestID != f.RequestID {
+		return false
+	}
+	if f.Kind != "" && h.Kind != f.Kind {
+		return false
+	}
+	if f.Requester != "" && h.RequesterID != f.Requester {
+		return false
+	}
+	if f.Since > 0 && h.UpdatedAt < f.Since {
+		return false
+	}
+	if f.Until > 0 && h.CreatedAt > f.Until {
+		return false
+	}
+	return true
+}
+
+// exportWindowContains reports whether a timestamp falls inside f's
+// since/until window. An unset bound is open.
+func exportWindowContains(at int64, f auditExportFilter) bool {
+	return (f.Since <= 0 || at >= f.Since) && (f.Until <= 0 || at <= f.Until)
+}
+
+// historyHasEventInWindow reports whether h has an event inside f's window.
+// Without a window every history qualifies, including one with no events.
+func historyHasEventInWindow(h requestHistory, f auditExportFilter) bool {
+	if f.Since <= 0 && f.Until <= 0 {
+		return true
+	}
+	for _, ev := range h.Events {
+		if exportWindowContains(ev.At, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// listHistoriesForExport pages history keys and keeps at most
+// historyExportMaxHistories newest matches (by UpdatedAt, then CreatedAt) in
+// a bounded min-heap so peak memory stays near the cap, not the full match
+// set. truncated is true when more matches existed than the cap.
+func (p *Plugin) listHistoriesForExport(f auditExportFilter) (filtered []requestHistory, truncated bool, err error) {
+	capN := historyExportMaxHistories
+	kept := &historyExportHeap{}
+	heap.Init(kept)
+	for page := 0; ; page++ {
+		keys, appErr := p.API.KVList(page, historyListPageSize)
+		if appErr != nil {
+			return nil, false, appErr
+		}
+		for _, key := range keys {
+			if !strings.HasPrefix(key, kvHistoryPrefix) {
+				continue
+			}
+			h, loadErr := p.loadHistory(strings.TrimPrefix(key, kvHistoryPrefix))
+			if loadErr != nil {
+				p.API.LogWarn("skipping unreadable request history", "key", key, "error", loadErr.Error())
+				continue
+			}
+			// Ranking only histories with an in-window event keeps the cap from
+			// filling with long-lived histories that contribute nothing.
+			if h == nil || !historyMatchesExportFilter(*h, f) || !historyHasEventInWindow(*h, f) {
+				continue
+			}
+			if capN <= 0 {
+				truncated = true
+				continue
+			}
+			if kept.Len() < capN {
+				heap.Push(kept, *h)
+				continue
+			}
+			oldest := (*kept)[0]
+			if historyExportNewer(*h, oldest) {
+				heap.Pop(kept)
+				heap.Push(kept, *h)
+			}
+			truncated = true
+		}
+		if len(keys) < historyListPageSize {
+			break
+		}
+	}
+	out := make([]requestHistory, kept.Len())
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(kept).(requestHistory)
+	}
+	return out, truncated, nil
+}
+
+// historyExportHeap is a min-heap of requestHistory by UpdatedAt, then
+// CreatedAt — oldest at index 0 so the export can drop it when a newer
+// match arrives past the cap.
+type historyExportHeap []requestHistory
+
+func (h historyExportHeap) Len() int { return len(h) }
+func (h historyExportHeap) Less(i, j int) bool {
+	if h[i].UpdatedAt != h[j].UpdatedAt {
+		return h[i].UpdatedAt < h[j].UpdatedAt
+	}
+	return h[i].CreatedAt < h[j].CreatedAt
+}
+func (h historyExportHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *historyExportHeap) Push(x any) {
+	*h = append(*h, x.(requestHistory))
+}
+
+func (h *historyExportHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func historyExportNewer(a, b requestHistory) bool {
+	if a.UpdatedAt != b.UpdatedAt {
+		return a.UpdatedAt > b.UpdatedAt
+	}
+	return a.CreatedAt > b.CreatedAt
 }

@@ -106,14 +106,14 @@ func (p *Plugin) submitTeamAdminRequest(requesterID, teamID string, nomineeIDs [
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvTeamAdminRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamAdminRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamAdmin, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot team admin request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postTeamAdminApprovalRequest(req, requester, team)
 	if err != nil {
-		_ = p.API.KVDelete(kvTeamAdminRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamAdminRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamAdmin, req.RequesterID, req.ID)
 		p.API.LogError("failed to post team admin request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -166,6 +166,15 @@ func (p *Plugin) promoteTeamAdmins(req *teamAdminRequest) (failed []string) {
 		if _, appErr := p.API.UpdateTeamMemberRoles(req.TeamID, userID, teamAdminRoles); appErr != nil {
 			p.API.LogWarn("failed to promote nominee to team admin", "team_id", req.TeamID, "user_id", userID, "error", appErr.Error())
 			failed = append(failed, userID)
+			continue
+		}
+		// When promoting on the Approval team, seed this admin into primary
+		// visibility channels immediately. Full resync (including eviction)
+		// runs in the background from syncTeamApprovalChannelAfterAdminChange.
+		if approval, err := p.approvalTeam(); err == nil && approval != nil && approval.Id == req.TeamID {
+			for _, ch := range p.primaryTAVisibilityChannels() {
+				p.seedTAVisibility(ch, userID)
+			}
 		}
 	}
 	p.syncTeamApprovalChannelAfterAdminChange(req.TeamID)
@@ -253,8 +262,8 @@ func (p *Plugin) storeTeamAdminRequest(req *teamAdminRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal team admin request")
 	}
-	if appErr := p.API.KVSet(kvTeamAdminRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store team admin request")
+	if err := p.putPendingRequestKV(kvTeamAdminRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store team admin request")
 	}
 	return nil
 }

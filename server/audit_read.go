@@ -568,38 +568,55 @@ func (p *Plugin) buildAuditExport(f auditExportFilter) (*auditExport, error) {
 
 // buildHistoryExport builds the request histories export: JSON with one
 // object per request and its latest copy, or CSV with one row per event
-// and every detail.
+// and every detail. Caps histories/events so a full-store export cannot
+// load the whole node into memory.
 func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*auditExport, error) {
-	histories, err := p.listHistories()
+	filtered, histTruncated, err := p.listHistoriesForExport(f)
 	if err != nil {
 		return nil, err
-	}
-	filtered := make([]requestHistory, 0, len(histories))
-	for _, h := range histories {
-		if (f.RequestID != "" && h.RequestID != f.RequestID) || (f.Kind != "" && h.Kind != f.Kind) ||
-			(f.Requester != "" && h.RequesterID != f.Requester) ||
-			(f.Since > 0 && h.UpdatedAt < f.Since) || (f.Until > 0 && h.CreatedAt > f.Until) {
-			continue
-		}
-		filtered = append(filtered, h)
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt < filtered[j].CreatedAt })
 
 	out := &auditExport{count: len(filtered), filename: filename}
 	var buf bytes.Buffer
 	if f.Format == "json" {
-		if err := json.NewEncoder(&buf).Encode(filtered); err != nil {
+		capped, eventsTruncated := capHistoriesEvents(filtered, f, historyExportMaxEvents)
+		// Always encode a JSON array so consumers can parse histories the same
+		// way whether or not the export was capped. Truncation is flagged in
+		// export.detail (audit event + X-Request-Hub-Export-Truncated header).
+		if err := json.NewEncoder(&buf).Encode(capped); err != nil {
 			return nil, err
+		}
+		out.count = len(capped)
+		if histTruncated || eventsTruncated {
+			out.detail = map[string]any{
+				"truncated":     true,
+				"history_limit": historyExportMaxHistories,
+				"event_limit":   historyExportMaxEvents,
+				"histories_cut": histTruncated,
+				"events_cut":    eventsTruncated,
+			}
 		}
 		out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".json", "application/json"
 		return out, nil
 	}
 	cw := csv.NewWriter(&buf)
 	_ = cw.Write(csvRecord("request_id", "kind", "requester_id", "status", "time_utc", "event", "outcome", "actor_id", "actor_name", "note", "message", "details"))
+	events := 0
+	represented := 0
+	eventsTruncated := false
+eventLoop:
 	for _, h := range filtered {
+		wroteRow := false
 		for _, ev := range h.Events {
-			if (f.Since > 0 && ev.At < f.Since) || (f.Until > 0 && ev.At > f.Until) {
+			if !exportWindowContains(ev.At, f) {
 				continue
+			}
+			// Cap reached only after seeing another eligible event, including
+			// when the cap landed on a history boundary.
+			if events >= historyExportMaxEvents {
+				eventsTruncated = true
+				break eventLoop
 			}
 			message, details := csvDetail(ev.Detail)
 			_ = cw.Write(csvRecord(
@@ -607,6 +624,23 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 				time.UnixMilli(ev.At).UTC().Format(time.RFC3339),
 				ev.Event, ev.Outcome, ev.ActorID, ev.ActorName, ev.Note, message, details,
 			))
+			events++
+			if !wroteRow {
+				wroteRow = true
+				represented++
+			}
+		}
+	}
+	out.count = represented
+	if histTruncated || eventsTruncated {
+		_ = cw.Write(csvRecord("TRUNCATED", "", "", "", "", "", "", "", "",
+			fmt.Sprintf("export capped at %d histories / %d events", historyExportMaxHistories, historyExportMaxEvents), "", ""))
+		out.detail = map[string]any{
+			"truncated":     true,
+			"history_limit": historyExportMaxHistories,
+			"event_limit":   historyExportMaxEvents,
+			"histories_cut": histTruncated,
+			"events_cut":    eventsTruncated,
 		}
 	}
 	cw.Flush()
@@ -615,6 +649,33 @@ func (p *Plugin) buildHistoryExport(f auditExportFilter, filename string) (*audi
 	}
 	out.data, out.filename, out.contentType = buf.Bytes(), out.filename+".csv", "text/csv; charset=utf-8"
 	return out, nil
+}
+
+// capHistoriesEvents returns histories with at most maxEvents eligible events
+// total (same since/until rules as the CSV export). eventsTruncated is true
+// when a further eligible event existed beyond the cap.
+func capHistoriesEvents(in []requestHistory, f auditExportFilter, maxEvents int) (out []requestHistory, eventsTruncated bool) {
+	out = make([]requestHistory, 0, len(in))
+	events := 0
+	for _, h := range in {
+		clipped := h
+		clipped.Events = nil
+		for _, ev := range h.Events {
+			if !exportWindowContains(ev.At, f) {
+				continue
+			}
+			if events >= maxEvents {
+				if len(clipped.Events) > 0 {
+					out = append(out, clipped)
+				}
+				return out, true
+			}
+			clipped.Events = append(clipped.Events, ev)
+			events++
+		}
+		out = append(out, clipped)
+	}
+	return out, false
 }
 
 // parseExportFilter reads an export filter from query parameters.
@@ -667,6 +728,11 @@ func (p *Plugin) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 	})
 	w.Header().Set("Content-Type", export.contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+export.filename+`"`)
+	if export.detail != nil {
+		if truncated, _ := export.detail["truncated"].(bool); truncated {
+			w.Header().Set("X-Request-Hub-Export-Truncated", "true")
+		}
+	}
 	if _, err := w.Write(export.data); err != nil {
 		p.API.LogError("failed to write the audit export", "user_id", user.Id, "error", err.Error())
 	}

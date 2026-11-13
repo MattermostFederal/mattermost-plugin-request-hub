@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -15,6 +16,14 @@ import (
 // "appteam", with only log stubs registered so KV calls can be asserted.
 func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 	t.Helper()
+	p, api, _ := newApprovalTeamPluginWithStripKV(t)
+	return p, api
+}
+
+// newApprovalTeamPluginWithStripKV is newApprovalTeamPlugin plus a handle on
+// the in-memory adopt-strip marker store.
+func newApprovalTeamPluginWithStripKV(t *testing.T) (*Plugin, *plugintest.API, *fakeAdoptStripKV) {
+	t.Helper()
 	api := &plugintest.API{}
 	for _, method := range []string{"LogDebug", "LogInfo", "LogWarn", "LogError"} {
 		for arity := 1; arity <= 16; arity++ {
@@ -25,9 +34,10 @@ func newApprovalTeamPlugin(t *testing.T) (*Plugin, *plugintest.API) {
 			api.On(method, args...).Maybe()
 		}
 	}
+	kv := stubAdoptStripKV(api)
 	p := newTestPlugin(api)
 	p.setConfiguration(&configuration{ApprovalTeam: "appteam", TwoStepApproverMode: twoStepModeSystemAdmin})
-	return p, api
+	return p, api, kv
 }
 
 func approvalTeamRecordBytes(t *testing.T, name, id string) []byte {
@@ -227,8 +237,8 @@ func TestForgetApprovalTeam_FailureIsLogged(t *testing.T) {
 // stubLoadConfiguration makes LoadPluginConfiguration fill in cfg and skips
 // the one-time prefix migration.
 func stubLoadConfiguration(api *plugintest.API, cfg configuration) {
-	// Tests that omit TwoStepApproverMode would otherwise flip to attribute
-	// mode and background-reseed CPA lookups against an unstubbed mock.
+	// Tests that omit TwoStepApproverMode would otherwise flip to usergroup
+	// mode and background-reseed group lookups against an unstubbed mock.
 	if strings.TrimSpace(cfg.TwoStepApproverMode) == "" {
 		cfg.TwoStepApproverMode = twoStepModeSystemAdmin
 	}
@@ -244,6 +254,8 @@ func TestOnConfigurationChange_NewApprovalTeamForgetsRecord(t *testing.T) {
 	// Keep system_admin so the two-step fingerprint does not reseed in the background.
 	stubLoadConfiguration(api, configuration{ApprovalTeam: "otherteam", TwoStepApproverMode: twoStepModeSystemAdmin})
 	api.On("KVDelete", kvApprovalTeamKey).Return(nil).Once()
+	// Background eviction of the previous team + sync of the new team.
+	api.On("GetTeamByName", mock.Anything).Return(nil, testAppErr("missing")).Maybe()
 
 	require.NoError(t, p.OnConfigurationChange())
 	require.Equal(t, "otherteam", p.getConfiguration().ApprovalTeam)
@@ -302,13 +314,90 @@ func TestLookupApprovalChannel_OtherChannelWithNameIsTaken(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
 	require.Nil(t, ch)
 	require.True(t, taken)
 	api.AssertCalled(t, "LogError", mock.Anything, "team_id", "t1", "channel_id", "c9", "channel_name", "approvals", "creator_id", "u1")
-	api.AssertNotCalled(t, "GetUser", mock.Anything)
+}
+
+func TestLookupApprovalChannel_ConvertsPublicLegacyBotChannelToPrivate(t *testing.T) {
+	// Legacy: mattermost-channel-requests was created as public by the
+	// pre-rename bot. Convert to private and adopt so tickets stop DMing
+	// System Admins.
+	p, api, kv := newApprovalTeamPluginWithStripKV(t)
+	open := &model.Channel{
+		Id: "c9", TeamId: "t1", Name: "approvals",
+		Type: model.ChannelTypeOpen, CreatorId: "legacy-bot",
+	}
+	api.On("GetChannelByName", "t1", "approvals", true).Return(open, nil)
+	api.On("GetChannel", "c9").Return(open.DeepCopy(), nil)
+	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
+		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID,
+	}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member")).Maybe()
+	api.On("UpdateChannel", mock.MatchedBy(func(c *model.Channel) bool {
+		// Cleanup must be recorded as required before the conversion.
+		return c.Id == "c9" && c.Type == model.ChannelTypePrivate && kv.marker("c9") == adoptStripPending
+	})).Return(&model.Channel{
+		Id: "c9", TeamId: "t1", Name: "approvals",
+		Type: model.ChannelTypePrivate, CreatorId: "legacy-bot", UpdateAt: 5,
+	}, nil)
+	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
+	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.NotNil(t, ch)
+	require.Equal(t, model.ChannelTypePrivate, ch.Type)
+	require.False(t, taken)
+	api.AssertCalled(t, "UpdateChannel", mock.Anything)
+	require.Equal(t, adoptStripDone, kv.marker("c9"))
+	require.False(t, kv.lockHeld("c9"), "strip lock must be released")
+}
+
+func TestLookupApprovalChannel_NoAdoptionWhenPublicToPrivateFails(t *testing.T) {
+	p, api := newApprovalTeamPlugin(t)
+	open := &model.Channel{
+		Id: "c9", TeamId: "t1", Name: "approvals",
+		Type: model.ChannelTypeOpen, CreatorId: "legacy-bot",
+	}
+	api.On("GetChannelByName", "t1", "approvals", true).Return(open, nil)
+	api.On("GetChannel", "c9").Return(open.DeepCopy(), nil)
+	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
+		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID,
+	}, nil)
+	api.On("UpdateChannel", mock.Anything).Return(nil, testAppErr("cannot convert"))
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestLookupApprovalChannel_AdoptsWhenCreatorDeactivatedAndBotIsMember(t *testing.T) {
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("old-user"), nil)
+	api.On("GetBot", "old-user", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "old-user").Return(&model.User{Id: "old-user", DeleteAt: 1}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
+	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	// Untrusted orphan adopt strips non-privileged members.
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.NotNil(t, ch)
+	require.Equal(t, "c9", ch.Id)
+	require.False(t, taken)
 }
 
 // otherApprovalChannel is a live private channel named like an approval
@@ -320,7 +409,9 @@ func otherApprovalChannel(creatorID string) *model.Channel {
 func TestLookupApprovalChannel_PrivateChannelOfARegularUserIsTaken(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -337,8 +428,13 @@ func TestLookupApprovalChannel_AdoptsPrivateChannelOfASystemAdminOrThePluginsBot
 		t.Run(name, func(t *testing.T) {
 			p, api := newApprovalTeamPlugin(t)
 			api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
-			api.On("GetUser", "u1").Return(creator, nil).Once()
-			api.On("GetBot", "u1", true).Return(&model.Bot{UserId: "u1", OwnerId: manifest.Id}, nil).Maybe()
+			if creator.IsBot {
+				api.On("GetBot", "u1", true).Return(&model.Bot{UserId: "u1", OwnerId: manifest.Id, Username: requestHubBotUsername}, nil).Once()
+			} else {
+				api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot")).Once()
+				api.On("GetUser", "u1").Return(creator, nil).Once()
+			}
+			api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member")).Maybe()
 			api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 			api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil).Once()
 
@@ -352,7 +448,6 @@ func TestLookupApprovalChannel_AdoptsPrivateChannelOfASystemAdminOrThePluginsBot
 			ch, taken = p.lookupApprovalChannel("t1", "approvals")
 			require.NotNil(t, ch)
 			require.False(t, taken)
-			api.AssertNumberOfCalls(t, "GetUser", 1)
 			api.AssertNumberOfCalls(t, "AddChannelMember", 1)
 		})
 	}
@@ -375,8 +470,10 @@ func TestLookupApprovalChannel_PrivateChannelOfAnotherBotIsTaken(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p, api := newApprovalTeamPlugin(t)
 			api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
-			api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId, IsBot: true}, nil)
+			// GetUser only when GetBot fails; OwnerId mismatch refuses without it.
+			api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId, IsBot: true, Username: requestHubBotUsername}, nil).Maybe()
 			getBot(api)
+			api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 			ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -390,7 +487,9 @@ func TestLookupApprovalChannel_PrivateChannelOfAnotherBotIsTaken(t *testing.T) {
 func TestLookupApprovalChannel_NoAdoptionWhenTheBotCantJoin(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u1"), nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemAdminRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member")).Maybe()
 	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
 	api.On("AddChannelMember", "c9", p.botUserID).Return(nil, testAppErr("no"))
 
@@ -400,9 +499,84 @@ func TestLookupApprovalChannel_NoAdoptionWhenTheBotCantJoin(t *testing.T) {
 	require.True(t, taken)
 }
 
+func TestLookupApprovalChannel_AdoptsWhenBotAlreadyMemberAfterCreatorGone(t *testing.T) {
+	// Plugin re-upload / bot recreate: channel CreatorId points at a purged
+	// user, but the current bot is still in the channel — keep using it so
+	// tickets don't fall back to System Admin DMs.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("old-bot"), nil)
+	api.On("GetBot", "old-bot", true).Return(nil, testAppErr("not found"))
+	api.On("GetUser", "old-bot").Return(nil, &model.AppError{StatusCode: http.StatusNotFound, Message: "not found"})
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
+	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMembers", "c9", 0, 100).Return(model.ChannelMembers{{UserId: p.botUserID}}, nil)
+	api.On("KVDelete", taVisibilitySeededKey("c9")).Return(nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.NotNil(t, ch)
+	require.Equal(t, "c9", ch.Id)
+	require.False(t, taken)
+}
+
+func TestLookupApprovalChannel_NoAdoptionOnTransientCreatorLookupError(t *testing.T) {
+	// A 500 from GetUser must not be treated as "creator gone" — that would
+	// adopt a channel owned by a still-live untrusted user during an outage.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u_other"), nil)
+	api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "u_other").Return(nil, testAppErr("api down"))
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestLookupApprovalChannel_BotMembershipAloneDoesNotAdoptLiveUntrustedCreator(t *testing.T) {
+	// A random user who pre-created the name must not capture tickets just
+	// because the bot was added to their channel.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("u_other"), nil)
+	api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other"}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{ChannelId: "c9", UserId: p.botUserID}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.Nil(t, ch)
+	require.True(t, taken)
+	api.AssertNotCalled(t, "AddChannelMember", mock.Anything, mock.Anything)
+}
+
+func TestLookupApprovalChannel_AdoptsLegacyPluginOwnedBotWithoutMembership(t *testing.T) {
+	// Legacy pre-0.5.0 bot (OwnerId = channel-requests) created the channel.
+	// Current bot is not a member → still adopt and join, otherwise tickets
+	// fall back to System Admin DMs.
+	p, api := newApprovalTeamPlugin(t)
+	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel("legacy-bot"), nil)
+	api.On("GetBot", "legacy-bot", true).Return(&model.Bot{
+		UserId: "legacy-bot", OwnerId: legacyRequestHubPluginID, Username: requestHubBotUsername,
+	}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member")).Maybe()
+	api.On("GetTeamMember", "t1", p.botUserID).Return(&model.TeamMember{TeamId: "t1", UserId: p.botUserID}, nil)
+	api.On("AddChannelMember", "c9", p.botUserID).Return(&model.ChannelMember{}, nil)
+
+	ch, taken := p.lookupApprovalChannel("t1", "approvals")
+
+	require.NotNil(t, ch)
+	require.Equal(t, "c9", ch.Id)
+	require.False(t, taken)
+	api.AssertCalled(t, "AddChannelMember", "c9", p.botUserID)
+}
+
 func TestLookupApprovalChannel_NoAdoptionWithoutACreator(t *testing.T) {
 	p, api := newApprovalTeamPlugin(t)
 	api.On("GetChannelByName", "t1", "approvals", true).Return(otherApprovalChannel(""), nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	ch, taken := p.lookupApprovalChannel("t1", "approvals")
 
@@ -424,9 +598,12 @@ func TestLookupApprovalChannel_ArchivedPluginChannelIsTaken(t *testing.T) {
 }
 
 // stubApprovalTeamLookup lets approvalTeam find "appteam" as t1, already recorded.
+// Also stubs Team Admin listing so channel-create seed paths (SysAdmin + primary
+// Team Admin visibility) can run without each test repeating the mock.
 func stubApprovalTeamLookup(t *testing.T, api *plugintest.API) {
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "t1", Name: "appteam"}, nil)
 	api.On("KVGet", kvApprovalTeamKey).Return(approvalTeamRecordBytes(t, "appteam", "t1"), nil)
+	api.On("GetTeamMembers", "t1", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
 }
 
 func TestEnsureRootApprovalChannel_TakenNameIsNotUsed(t *testing.T) {
@@ -434,6 +611,9 @@ func TestEnsureRootApprovalChannel_TakenNameIsNotUsed(t *testing.T) {
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-channel-requests", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	require.Nil(t, p.ensureRootApprovalChannel())
 	api.AssertNotCalled(t, "CreateChannel", mock.Anything)
@@ -452,7 +632,9 @@ func TestEnsureNamedApprovalChannel_TakenNameIsNotUsed(t *testing.T) {
 	stubApprovalTeamLookup(t, api)
 	api.On("GetChannelByName", "t1", "mattermost-bot-requests", true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypePrivate, CreatorId: "u1"}, nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	require.Nil(t, p.ensureNamedApprovalChannel("mattermost-bot-requests", "Bots", "purpose"))
 	api.AssertNotCalled(t, "CreateChannel", mock.Anything)
@@ -470,6 +652,9 @@ func TestEnsureTeamApprovalChannel_TakenNameIsAnError(t *testing.T) {
 	name := p.getConfiguration().TeamChannelName()
 	api.On("GetChannelByName", "team1", name, true).
 		Return(&model.Channel{Id: "c9", Type: model.ChannelTypeOpen, CreatorId: "u1"}, nil)
+	api.On("GetBot", "u1", true).Return(nil, testAppErr("not a bot"))
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemUserRoleId}, nil)
+	api.On("GetChannelMember", "c9", p.botUserID).Return(nil, testAppErr("not a member"))
 
 	ch, err := p.ensureTeamApprovalChannel("team1")
 

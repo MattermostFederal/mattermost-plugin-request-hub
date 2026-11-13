@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -346,6 +348,58 @@ func TestOnConfigurationChange_EnablingPerTeamChannelsStartsSweep(t *testing.T) 
 	require.True(t, p.getConfiguration().PerTeamApprovalChannels)
 }
 
+func TestOnConfigurationChange_TAVisibilityToggleResyncs(t *testing.T) {
+	api := &plugintest.API{}
+	done := make(chan struct{})
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: false,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	stubLoadConfiguration(api, configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	var notify sync.Once
+	api.On("GetTeamByName", "hq").Run(func(mock.Arguments) { notify.Do(func() { close(done) }) }).
+		Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
+	stubApprovalTeamRecord(api)
+	root := pluginChannelIn("ch-root", "mattermost-channel-requests", "team-hq")
+	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(root, nil).Maybe()
+	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(nil, testAppErr("missing")).Maybe()
+	api.On("GetTeamMembers", "team-hq", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
+	api.On("KVGet", taVisibilitySeededKey("ch-root")).Return(nil, nil).Maybe()
+
+	require.NoError(t, p.OnConfigurationChange())
+	waitFor(t, done, "TA visibility re-sync")
+}
+
+func TestOnConfigurationChange_UnchangedTAVisibilityTogglesSkipResync(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+	stubLoadConfiguration(api, configuration{
+		ApprovalTeam:            "hq",
+		AllowTeamAdminApprovers: true,
+		TwoStepApproverMode:     twoStepModeSystemAdmin,
+	})
+
+	require.NoError(t, p.OnConfigurationChange())
+
+	api.AssertNotCalled(t, "GetTeamByName", "hq")
+	api.AssertNotCalled(t, "LogInfo", "primary team admin visibility: reseeding into ticket channels",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestOnConfigurationChange_TwoStepPoolChangeReseedsChannels(t *testing.T) {
 	api := &plugintest.API{}
 	done := make(chan struct{})
@@ -450,10 +504,17 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 	api.On("GetChannelByName", "t1", mock.Anything, true).Return(appch, nil)
 	api.On("GetChannel", "appch").Return(appch, nil)
 	api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1", Roles: "system_user system_admin"}}, nil)
+	api.On("GetTeamMembers", "t1", 0, 200).Return([]*model.TeamMember{}, nil).Maybe()
+	api.On("GetChannelMembers", mock.Anything, mock.Anything, mock.Anything).Return(model.ChannelMembers{}, nil).Maybe()
+	api.On("GetChannelMember", mock.Anything, "sa1").Return(nil, notFoundErr()).Maybe()
 	api.On("AddChannelMember", mock.Anything, "sa1").Return(&model.ChannelMember{}, nil).Maybe()
+	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("CreateTeamMember", "t1", "sa1").Return(&model.TeamMember{}, nil).Maybe()
 	api.On("GetChannelSidebarCategories", "sa1", "t1").Return(nil, testAppErr("down")).Maybe()
-	api.On("GetTeams").Return([]*model.Team{}, nil)
+	var teamsCalls atomic.Int32
+	api.On("GetTeams").Return([]*model.Team{}, nil).Run(func(mock.Arguments) {
+		teamsCalls.Add(1)
+	})
 	api.On("GetUsersInChannel", "appch", "username", 0, 200).Return([]*model.User{}, nil)
 	// No SiteURL, so the docs bookmark sweep waits for a later activation.
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
@@ -467,8 +528,10 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 
 	// The System Admin is seeded into the approval channel.
 	api.AssertCalled(t, "AddChannelMember", "appch", "sa1")
-	// Once for the per-team sweep and once for the sidebar migration.
-	api.AssertNumberOfCalls(t, "GetTeams", 2)
+	// Exactly three GetTeams callers on this path: per-team sweep, sidebar
+	// migration, and the immediate reconcile (which also runs demotion
+	// eviction). Docs bookmarking skips GetTeams when SiteURL is unset.
+	require.Eventually(t, func() bool { return teamsCalls.Load() >= 3 }, 5*time.Second, 10*time.Millisecond)
 	api.AssertCalled(t, "SetProfileImage", "bot-user-id", icon)
 }
 

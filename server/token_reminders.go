@@ -13,24 +13,30 @@ import (
 
 // Bot token expiry reminders. When an approved bot request issues a token,
 // the plugin keeps who asked for it and when it expires, never the token
-// value. An hourly job reminds the requester weekly from a month before the
-// expiry, daily in the last week, and once when it has expired. If the
+// value (bot_token_expiry_* KV). A once-daily cluster job scans that index
+// and DMs the requester: weekly from a month before expiry, daily in the
+// last week, and once when expired. LastRemindedAt is the pre-expiry
+// reminder ledger. The expired notice uses a three-state marker:
+// none → pending (ExpiredNotifyAttemptAt, saved before send) → sent
+// (ExpiredNotifiedAt, saved after delivery). Pending lets a failed send
+// retry; sent stops daily re-DMs when KVDelete is stuck. If the
 // requester's account is gone, System Admins get the reminders instead.
 
 const (
 	botTokenExpiryKeyPrefix = "bot_token_expiry_"   //nolint:gosec // G101: a KV key, not a credential
 	tokenReminderJobKey     = "bot_token_reminders" //nolint:gosec // G101: a KV key, not a credential
-	tokenReminderJobPeriod  = time.Hour
+	tokenReminderJobPeriod  = 24 * time.Hour
 
 	tokenWeeklyWindow = 30 * 24 * time.Hour
 	tokenDailyWindow  = 7 * 24 * time.Hour
-	// tokenReminderSlack lets a reminder go out up to one job run early, so
-	// an hourly job doesn't push a daily reminder to the next day.
-	tokenReminderSlack = tokenReminderJobPeriod
+	// tokenReminderSlack lets a reminder go out up to an hour early so a
+	// daily job that drifts slightly still fires the due reminder same day,
+	// without collapsing the weekly cadence into near-daily sends.
+	tokenReminderSlack = time.Hour
 )
 
 // botTokenExpiry is what the plugin keeps about a token it issued.
-// ExpiresAt and LastRemindedAt are Unix millis.
+// Time fields are Unix millis.
 type botTokenExpiry struct {
 	TokenID        string `json:"token_id"`
 	BotUserID      string `json:"bot_user_id"`
@@ -38,9 +44,37 @@ type botTokenExpiry struct {
 	RequesterID    string `json:"requester_id"`
 	ExpiresAt      int64  `json:"expires_at"`
 	LastRemindedAt int64  `json:"last_reminded_at"`
+	// ExpiredNotifyAttemptAt is set before the expired DM is sent (pending).
+	// A crash or send failure leaves the record here so the next run retries.
+	ExpiredNotifyAttemptAt int64 `json:"expired_notify_attempt_at,omitempty"`
+	// ExpiredNotifiedAt is set after the expired DM is sent (sent). Once set,
+	// later runs only retry delete — they never send the notice again.
+	ExpiredNotifiedAt int64 `json:"expired_notified_at,omitempty"`
 	// RequestID is the bot request the token was issued for, for auditing.
 	// Empty on tokens tracked before auditing.
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// expiredNotifyState is the three-state expired-notice machine:
+// none (never attempted), pending (attempt saved, delivery not confirmed),
+// sent (delivery confirmed).
+type expiredNotifyState int
+
+const (
+	expiredNotifyNone expiredNotifyState = iota
+	expiredNotifyPending
+	expiredNotifySent
+)
+
+func (rec botTokenExpiry) expiredNotifyState() expiredNotifyState {
+	switch {
+	case rec.ExpiredNotifiedAt > 0:
+		return expiredNotifySent
+	case rec.ExpiredNotifyAttemptAt > 0:
+		return expiredNotifyPending
+	default:
+		return expiredNotifyNone
+	}
 }
 
 func botTokenExpiryKey(tokenID string) string {
@@ -74,9 +108,11 @@ func (p *Plugin) saveBotTokenExpiry(rec botTokenExpiry) error {
 	if err != nil {
 		return err
 	}
-	if appErr := p.API.KVSet(botTokenExpiryKey(rec.TokenID), data); appErr != nil {
+	key := botTokenExpiryKey(rec.TokenID)
+	if appErr := p.API.KVSet(key, data); appErr != nil {
 		return appErr
 	}
+	p.trackTokenExpiryKey(key)
 	return nil
 }
 
@@ -84,6 +120,11 @@ func (p *Plugin) saveBotTokenExpiry(rec botTokenExpiry) error {
 // on one server at a time.
 func (p *Plugin) startTokenReminderJob() {
 	job, err := cluster.Schedule(p.API, tokenReminderJobKey, cluster.MakeWaitForInterval(tokenReminderJobPeriod), func() {
+		defer p.logRecoveredPanic("bot token reminders")
+		// Daily repair for rolling HA: old-version nodes may write
+		// pending/token records without indexing them.
+		p.rebuildOpenRequestIndex()
+		p.rebuildTokenExpiryIndex()
 		p.sendTokenExpiryReminders(time.Now())
 	})
 	if err != nil {
@@ -104,24 +145,13 @@ func (p *Plugin) stopTokenReminderJob() {
 }
 
 // sendTokenExpiryReminders goes through every tracked token and sends the
-// reminders that are due at now.
+// reminders that are due at now. Uses the token-expiry index so it does not
+// scan histories/anchors/other plugin KV on every daily run.
 func (p *Plugin) sendTokenExpiryReminders(now time.Time) {
-	const perPage = 200
-	var keys []string
-	for page := 0; ; page++ {
-		batch, appErr := p.API.KVList(page, perPage)
-		if appErr != nil {
-			p.API.LogError("failed to list bot token expiries", "error", appErr.Error())
-			return
-		}
-		for _, key := range batch {
-			if strings.HasPrefix(key, botTokenExpiryKeyPrefix) {
-				keys = append(keys, key)
-			}
-		}
-		if len(batch) < perPage {
-			break
-		}
+	keys, err := p.listTokenExpiryKeys()
+	if err != nil {
+		p.API.LogError("failed to list bot token expiries", "error", err.Error())
+		return
 	}
 	for _, key := range keys {
 		p.remindTokenExpiry(key, now)
@@ -150,7 +180,7 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 		}
 		return
 	}
-	if bot.DeleteAt > 0 {
+	if bot == nil || bot.DeleteAt > 0 {
 		p.endTokenTracking(key, rec, "the bot was deactivated")
 		return
 	}
@@ -161,11 +191,7 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	nowMillis := now.UnixMilli()
 	remaining := time.Duration(rec.ExpiresAt-nowMillis) * time.Millisecond
 	if remaining <= 0 {
-		// One last notice, then stop tracking.
-		if p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
-			p.auditTokenReminder(rec, true)
-			p.endTokenTracking(key, rec, "the token expired")
-		}
+		p.remindTokenExpired(key, rec, nowMillis)
 		return
 	}
 
@@ -192,6 +218,48 @@ func (p *Plugin) remindTokenExpiry(key string, now time.Time) {
 	}
 }
 
+// remindTokenExpired sends the one-time expired notice, then stops tracking.
+//
+//	none    → save pending, then send
+//	pending → retry send (no second pending write)
+//	sent    → only retry delete
+//
+// Short-lived tokens still get the notice: LastRemindedAt alone is not used
+// as a stand-in for "already told them".
+func (p *Plugin) remindTokenExpired(key string, rec botTokenExpiry, nowMillis int64) {
+	switch state := rec.expiredNotifyState(); state {
+	case expiredNotifySent:
+		_ = p.endTokenTracking(key, rec, "the token expired")
+		return
+	case expiredNotifyNone:
+		rec.ExpiredNotifyAttemptAt = nowMillis
+		if err := p.saveBotTokenExpiry(rec); err != nil {
+			p.API.LogWarn("failed to persist expired-token pending marker; will retry next run",
+				"key", key, "error", err.Error())
+			return
+		}
+	case expiredNotifyPending:
+		// Prior run saved pending then failed or crashed mid-send.
+	default:
+		p.API.LogError("token expiry: unknown expired-notify state; refusing to send",
+			"key", key, "state", int(state))
+		return
+	}
+	if !p.sendTokenReminder(rec, tokenExpiredMessage(rec)) {
+		return
+	}
+	p.auditTokenReminder(rec, true)
+	rec.ExpiredNotifiedAt = nowMillis
+	if err := p.saveBotTokenExpiry(rec); err != nil {
+		// DM already went out; keep trying to end tracking. A failed "sent"
+		// save may re-send once while still pending, which is better than
+		// daily spam after a durable sent marker with a stuck delete.
+		p.API.LogWarn("failed to persist expired-token sent marker after DM",
+			"key", key, "error", err.Error())
+	}
+	_ = p.endTokenTracking(key, rec, "the token expired")
+}
+
 // auditTokenReminder records a token expiry reminder that was sent.
 func (p *Plugin) auditTokenReminder(rec botTokenExpiry, expired bool) {
 	note := fmt.Sprintf("Reminded about the access token for bot @%s, which expires on %s", rec.BotUsername, formatDay(rec.ExpiresAt))
@@ -206,9 +274,14 @@ func (p *Plugin) auditTokenReminder(rec botTokenExpiry, expired bool) {
 }
 
 // endTokenTracking stops the reminders for a token, recording why. rec is
-// empty when its record couldn't be read; key still names the token.
-func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) {
-	p.deleteBotTokenExpiry(key)
+// empty when its record couldn't be read; key still names the token. The
+// audit event is written only after a successful delete so a failed delete
+// does not claim tracking ended while the daily job would keep reminding.
+// Returns whether tracking was actually ended (delete succeeded).
+func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string) bool {
+	if !p.deleteBotTokenExpiry(key) {
+		return false
+	}
 	tokenID := rec.TokenID
 	if tokenID == "" {
 		tokenID = strings.TrimPrefix(key, botTokenExpiryKeyPrefix)
@@ -222,12 +295,16 @@ func (p *Plugin) endTokenTracking(key string, rec botTokenExpiry, reason string)
 		Note:   fmt.Sprintf("Stopped the expiry reminders for the access token of %s: %s", bot, reason),
 		Detail: map[string]any{"bot_user_id": rec.BotUserID, "token_id": tokenID, "reason": reason},
 	})
+	return true
 }
 
-func (p *Plugin) deleteBotTokenExpiry(key string) {
+func (p *Plugin) deleteBotTokenExpiry(key string) bool {
 	if appErr := p.API.KVDelete(key); appErr != nil {
 		p.API.LogWarn("failed to delete bot token expiry", "key", key, "error", appErr.Error())
+		return false
 	}
+	p.untrackTokenExpiryKey(key)
+	return true
 }
 
 // sendTokenReminder DMs the requester, or every active System Admin when

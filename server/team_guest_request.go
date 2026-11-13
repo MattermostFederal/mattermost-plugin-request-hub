@@ -130,14 +130,14 @@ func (p *Plugin) submitTeamGuestRequest(requesterID, teamID, email string, chann
 	sa.markStored()
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
-		_ = p.API.KVDelete(kvTeamGuestRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamGuestRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
 		return "", errors.Wrap(snapErr, "failed to snapshot team guest request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postTeamGuestApprovalRequest(req, requester, team)
 	if err != nil {
-		_ = p.API.KVDelete(kvTeamGuestRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvTeamGuestRequestPrefix + req.ID)
 		p.releasePending(pendingKindTeamGuest, req.RequesterID, req.ID)
 		p.API.LogError("failed to post team guest request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -261,8 +261,8 @@ func (p *Plugin) storeTeamGuestRequest(req *teamGuestRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal team guest request")
 	}
-	if appErr := p.API.KVSet(kvTeamGuestRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store team guest request")
+	if err := p.putPendingRequestKV(kvTeamGuestRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store team guest request")
 	}
 	return nil
 }

@@ -86,6 +86,8 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 	stubApprovalTeamRecord(api)
 	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(pluginChannel("appch", "mattermost-channel-requests"), nil)
 	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1"}}, nil)
+	// Mentions only — card lands in root (PerTeam off), so request-team TAs
+	// are not seeded into root (security: never expose foreign TAs to every card).
 	api.On("GetTeamMembers", "team1", mock.Anything, mock.Anything).Return([]*model.TeamMember{
 		{TeamId: "team1", UserId: "ta1", Roles: "team_user team_admin"},
 		{TeamId: "team1", UserId: "tu1", Roles: "team_user"},
@@ -112,6 +114,7 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 	require.NoError(t, err)
 	require.Contains(t, msg, "submitted for approval")
 	api.AssertCalled(t, "KVSet", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "AddChannelMember", "appch", "ta1")
 	api.AssertNotCalled(t, "UpdateChannelMemberRoles", mock.Anything, mock.Anything, mock.Anything)
 
 	// Posted to the approval channel, mentioning the System Admin + Team Admin
@@ -130,6 +133,66 @@ func TestSubmitAdminRequest_PostsToApprovalChannelMentioningApprovers(t *testing
 		}
 	}
 	require.Contains(t, teamField, "Engineering")
+}
+
+// Per-team on with a taken local channel name falls back to root. Request-team
+// Team Admins must not be added to root (every team's cards live there).
+func TestSubmitAdminRequest_PerTeamRootFallbackDoesNotSeedRequestTeamTAs(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	stubPendingLists(api)
+	stubSubmittedRequestExists(api, kvAdminRequestPrefix)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+	p.setConfiguration(&configuration{
+		ApprovalTeam:            "appteam",
+		PerTeamApprovalChannels: true,
+	})
+
+	api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Name: "marketing", TeamId: "team1", Type: model.ChannelTypePrivate}, nil)
+	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "reqer", Roles: "system_user"}, nil)
+	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
+	api.On("GetChannelMember", "ch1", testNomineeID).Return(&model.ChannelMember{}, nil)
+	api.On("GetUser", testNomineeID).Return(&model.User{Id: testNomineeID, Username: "nommy"}, nil)
+	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "eng", DisplayName: "Engineering"}, nil)
+	api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
+
+	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
+	stubApprovalTeamRecord(api)
+	// Team has a TA so the per-team path is attempted, then refused (taken name).
+	api.On("GetUsers", isSystemAdminQuery).Return([]*model.User{{Id: "sys1"}}, nil)
+	api.On("GetTeamMembers", "team1", mock.Anything, mock.Anything).Return([]*model.TeamMember{
+		{TeamId: "team1", UserId: "ta1", SchemeAdmin: true},
+	}, nil)
+	foreign := &model.Channel{
+		Id: "foreign", TeamId: "team1", Name: "mattermost-channel-requests",
+		Type: model.ChannelTypePrivate, CreatorId: "stranger",
+	}
+	api.On("GetChannelByName", "team1", "mattermost-channel-requests", true).Return(foreign, nil)
+	api.On("GetBot", "stranger", true).Return(nil, testAppErr("not a bot")).Maybe()
+	api.On("GetUser", "stranger").Return(&model.User{Id: "stranger", DeleteAt: 0}, nil).Maybe()
+	api.On("GetChannelMember", "foreign", "bot-user-id").Return(nil, notFoundErr()).Maybe()
+
+	root := pluginChannel("appch", "mattermost-channel-requests")
+	root.TeamId = "appteam-id"
+	api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(root, nil)
+	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
+	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1", Username: "lead"}, nil)
+	api.On("GetUsersByIds", []string{"ta1"}).Return([]*model.User{{Id: "ta1", Username: "lead"}}, nil)
+
+	api.On("CreatePost", mock.MatchedBy(func(p *model.Post) bool { return p.ChannelId == "appch" })).
+		Return(&model.Post{Id: "appch-post"}, nil)
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
+	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "req-dm"}, nil)
+
+	msg, err := p.submitAdminRequest("u_req", "ch1", []string{testNomineeID})
+
+	require.NoError(t, err)
+	require.Contains(t, msg, "submitted for approval")
+	api.AssertNotCalled(t, "AddChannelMember", "appch", "ta1")
+	api.AssertNotCalled(t, "AddChannelMember", "appch", mock.MatchedBy(func(id string) bool {
+		return id == "ta1"
+	}))
 }
 
 func TestSubmitAdminRequest_NoApprovalChannelFallsBackToSystemAdmins(t *testing.T) {

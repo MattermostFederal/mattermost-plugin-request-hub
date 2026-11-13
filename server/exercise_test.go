@@ -455,6 +455,9 @@ func (f *exerciseFake) mockServer() {
 		}
 		return admins, nil
 	}).Maybe()
+	// Primary Team Admin visibility seeding walks Approval-team members when
+	// ticket channels are ensured during exercise populate.
+	api.On("GetTeamMembers", mock.Anything, mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil).Maybe()
 	api.On("GetUserByUsername", mock.Anything).Return(func(name string) (*model.User, *model.AppError) {
 		if e := f.err("GetUserByUsername"); e != nil {
 			return nil, e

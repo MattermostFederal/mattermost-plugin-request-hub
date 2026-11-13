@@ -124,8 +124,8 @@ type configuration struct {
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how the security reviewer is identified:
-	//   "attribute"    — User Attributes / ABAC (CPA); default
-	//   "usergroup"    — Mattermost user groups (LDAP/synced, or custom when allowed) by name
+	//   "attribute"    — User Attributes / ABAC (CPA) (shipped default)
+	//   "usergroup"    — Mattermost user groups by name
 	//   "system_admin" — System Admins only (setup backup; one admin can do both steps)
 	// The system step is always System Admins — there is no system pool setting.
 	TwoStepApproverMode string
@@ -141,8 +141,9 @@ type configuration struct {
 	SecurityApproverGroup string
 
 	// AllowCustomApproverGroups lets a custom (not LDAP or plugin-synced)
-	// group be the security approver group. Off by default: a custom group's
-	// managers choose its members.
+	// group be the security approver group. Off by default: only LDAP and
+	// plugin-synced groups count. Turn on to use a custom security-approvers
+	// group without LDAP.
 	AllowCustomApproverGroups bool
 
 	// --- 6. Agents ---
@@ -388,22 +389,51 @@ func (p *Plugin) OnConfigurationChange() error {
 	prevPerTeamEnabled := false
 	prevTwoStep := ""
 	prevApprovalTeam := ""
+	prevAllowTAApprovers := false
+	prevAllowTATeamRequests := false
 	if hadPrevConfig {
 		prevPerTeamEnabled = p.configuration.PerTeamApprovalChannels
 		prevTwoStep = twoStepPoolFingerprint(p.configuration)
 		prevApprovalTeam = strings.TrimSpace(p.configuration.ApprovalTeam)
+		prevAllowTAApprovers = p.configuration.AllowTeamAdminApprovers
+		prevAllowTATeamRequests = p.configuration.AllowApprovalTeamAdminsForTeamRequests
 	}
 	p.configurationLock.RUnlock()
 
 	p.setConfiguration(configuration)
 
 	// A newly selected Approval team is recorded on its next use.
-	if hadPrevConfig && strings.TrimSpace(configuration.ApprovalTeam) != prevApprovalTeam {
+	approvalTeamChanged := hadPrevConfig && strings.TrimSpace(configuration.ApprovalTeam) != prevApprovalTeam
+	if approvalTeamChanged {
 		p.forgetApprovalTeam()
 	}
+	taVisibilityTogglesChanged := hadPrevConfig &&
+		(configuration.AllowTeamAdminApprovers != prevAllowTAApprovers ||
+			configuration.AllowApprovalTeamAdminsForTeamRequests != prevAllowTATeamRequests)
 
 	if hadPrevConfig && configuration.PerTeamApprovalChannels && !prevPerTeamEnabled {
 		go p.ensureAllTeamApprovalChannels()
+	}
+	// When Approval team changes, strip seeded TAs from the previous team's
+	// primary channels first — syncPrimaryTeamAdminVisibility only touches
+	// the new team. Toggle flips still reseed the current team only.
+	if approvalTeamChanged {
+		prevTeam := prevApprovalTeam
+		newTeam := strings.TrimSpace(configuration.ApprovalTeam)
+		go func() {
+			defer p.logRecoveredPanic("primary ticket channel ensure")
+			if prevTeam != "" {
+				p.evictStalePrimaryVisibilityForNamedTeam(prevTeam)
+			}
+			if newTeam != "" {
+				p.syncPrimaryTeamAdminVisibility()
+			}
+		}()
+	} else if taVisibilityTogglesChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {
+		go func() {
+			defer p.logRecoveredPanic("primary ticket channel ensure")
+			p.syncPrimaryTeamAdminVisibility()
+		}()
 	}
 	// Reseed bot/webhook channels when two-step pool settings change (mode,
 	// group names, or attribute names) so newly configured security approvers

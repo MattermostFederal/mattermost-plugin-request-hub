@@ -400,6 +400,7 @@ func (p *Plugin) claimRecord(kvKey string, raw []byte, cards decisionCards, what
 		still, loadErr := p.API.KVGet(kvKey)
 		return claimLost(loadErr != nil || still != nil, cards.clickedPostID != ""), false
 	}
+	p.untrackOpenRequestKey(kvKey)
 	return decisionResult{}, true
 }
 

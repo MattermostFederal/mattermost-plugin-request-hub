@@ -34,19 +34,27 @@ type Plugin struct {
 	mcpServer     *pluginmcp.Server
 	mcpActive     bool
 
-	// adoptedApprovalChannels holds the IDs of approval channels the plugin
-	// adopted (see adoptApprovalChannel), so each is checked only once.
+	// adoptedApprovalChannels maps approval channel ID → the channel UpdateAt
+	// (int64) at which this node last verified adoption / strip state, so each
+	// is re-checked only after the channel changes (see adoptionVerified).
 	adoptedApprovalChannels sync.Map
 
 	// botUserID is the user ID of the bot account used to post approval requests and notify
 	// requesters of the outcome.
 	botUserID string
 
-	// twoStepSyncStop cancels the periodic two-step channel reconciler.
-	twoStepSyncStop chan struct{}
+	// twoStepReconcileJob periodically syncs two-step pool membership and
+	// evicts demoted plugin-seeded Team Admins. Cluster-scheduled so only one
+	// node runs it.
+	twoStepReconcileJob *cluster.Job
 
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
+
+	// securityPoolCapWarned tracks pool labels we already warned about hitting
+	// securityPoolMaxMembers (sync.Map: pool string → struct{}). Cleared when
+	// a later listing for that pool is under the cap so a new overrun warns again.
+	securityPoolCapWarned sync.Map
 
 	// auditSink, when set, receives every audit event instead of the request
 	// history, the server audit log and the audit channel. A test seam: nil
@@ -103,23 +111,23 @@ func (p *Plugin) OnActivate() error {
 		// Re-sync System Admins into every approval channel on activation so
 		// admins promoted after initial install are added without manual
 		// intervention. addSystemAdminsToChannel is idempotent.
-		for _, ensure := range []func() *model.Channel{
-			p.ensureRootApprovalChannel,
-			p.ensureBotApprovalChannel,
-			p.ensureWebhookApprovalChannel,
-			p.ensureTeamCreationApprovalChannel,
-			p.ensureAuditChannel,
-		} {
-			if ch := ensure(); ch != nil {
-				p.addSystemAdminsToChannel(ch.Id)
-			}
+		for _, ch := range p.primaryTicketChannels() {
+			p.addSystemAdminsToChannel(ch.Id)
 		}
 		// Security / system pool members (usergroup or ABAC) into bot + webhook
 		// private channels so they can see and click Approve.
 		p.syncTwoStepApproverChannels()
+		// Primary-team Team Admins: watch-only membership on gated primary
+		// channels (root / team-requests / audit per toggles). Bot/webhook stay
+		// with two-step pool reconcile. Approve rights stay gated.
+		p.syncPrimaryTeamAdminVisibility()
 		if p.getConfiguration().PerTeamApprovalChannels {
 			p.ensureAllTeamApprovalChannels()
 		}
+		// Rebuild the open-request index so list/approve paths avoid a full
+		// plugin KV scan (histories, anchors, bot index, …).
+		p.rebuildOpenRequestIndex()
+		p.rebuildTokenExpiryIndex()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

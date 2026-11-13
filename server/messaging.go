@@ -74,25 +74,42 @@ func (p *Plugin) storeTicketLookups(anchor threadAnchor) {
 //   - Forwards DM thread replies from requesters to their ticket's approval thread.
 //   - Forwards approval thread replies from reviewers to the requester's DM thread.
 //   - Prompts users who DM the bot outside of any ticket thread.
+//
+// Hot path: almost every post on the server hits this hook. Approval-anchor
+// KV is checked first (ticket replies in approval channels). For other thread
+// replies, GetChannel (server-cached) gates the DM-root KV so busy non-DM
+// channels do not pay a second uncached KVGet on every message.
 func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
 	// Never react to our own posts — would create an infinite forwarding loop.
 	if post.UserId == p.botUserID {
 		return
 	}
 
+	if post.RootId != "" {
+		raw, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId)
+		if appErr == nil && raw != nil {
+			p.forwardThreadReplyToRequesterDM(post, raw)
+			return
+		}
+		// Approval miss: only DMs can be requester ticket threads.
+		channel, chErr := p.API.GetChannel(post.ChannelId)
+		if chErr != nil || channel == nil || channel.Type != model.ChannelTypeDirect {
+			return
+		}
+		if raw, dmErr := p.API.KVGet(kvDMRootPrefix + post.RootId); dmErr == nil && raw != nil {
+			p.forwardDMReplyToTicketThread(post, raw)
+			return
+		}
+		return
+	}
+
+	// Root-level posts: only DMs with the bot get a help nudge.
 	channel, appErr := p.API.GetChannel(post.ChannelId)
 	if appErr != nil {
 		return
 	}
-
 	if channel.Type == model.ChannelTypeDirect {
 		p.handleIncomingDMPost(post)
-		return
-	}
-
-	// Only care about thread replies in non-DM channels (reviewers commenting in ticket threads).
-	if post.RootId != "" {
-		p.handleIncomingThreadReply(post)
 	}
 }
 
@@ -125,23 +142,14 @@ func (p *Plugin) handleIncomingDMPost(post *model.Post) {
 	p.forwardDMReplyToTicketThread(post, rawAnchor)
 }
 
-// handleIncomingThreadReply handles a non-DM thread reply. If the root post
-// is a known ticket approval post, it forwards the message to the requester's
-// DM thread.
-func (p *Plugin) handleIncomingThreadReply(post *model.Post) {
-	rawAnchor, appErr := p.API.KVGet(kvApprovalPostPrefix + post.RootId)
-	if appErr != nil || rawAnchor == nil {
-		return
-	}
-
-	p.forwardThreadReplyToRequesterDM(post, rawAnchor)
-}
-
 // forwardDMReplyToTicketThread posts the requester's DM reply as a bot message
 // in the approval thread, attributed to the requester by name.
 func (p *Plugin) forwardDMReplyToTicketThread(post *model.Post, rawAnchor []byte) {
 	var anchor threadAnchor
 	if err := json.Unmarshal(rawAnchor, &anchor); err != nil || anchor.ApprovalPostID == "" {
+		return
+	}
+	if anchor.DMChannelID != "" && post.ChannelId != anchor.DMChannelID {
 		return
 	}
 
@@ -172,6 +180,9 @@ func quotedText(msg string) string {
 func (p *Plugin) forwardThreadReplyToRequesterDM(post *model.Post, rawAnchor []byte) {
 	var anchor threadAnchor
 	if err := json.Unmarshal(rawAnchor, &anchor); err != nil || anchor.DMRootPostID == "" {
+		return
+	}
+	if anchor.ApprovalChannelID != "" && post.ChannelId != anchor.ApprovalChannelID {
 		return
 	}
 

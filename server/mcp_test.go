@@ -130,6 +130,8 @@ func stubActivation(t *testing.T, api *plugintest.API, p *Plugin, config *config
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()
+	api.On("GetTeamMembers", mock.Anything, mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil).Maybe()
+	api.On("GetChannelMembers", mock.Anything, mock.Anything, mock.Anything).Return(model.ChannelMembers{}, nil).Maybe()
 	api.On("GetConfig").Return(&model.Config{}).Maybe()
 	stubTokenReminderJob(api)
 }

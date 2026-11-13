@@ -60,7 +60,14 @@ func decisionCardsOnly(p *Plugin) func(auditEntry, auditEventSpec) {
 // stubLogs registers permissive log expectations so production code can
 // log at any level/arity without the test caring about the exact calls.
 func stubLogs(api *plugintest.API) {
+	stubLogsWithStripKV(api)
+}
+
+// stubLogsWithStripKV is stubLogs plus a handle on the in-memory adopt-strip
+// marker store.
+func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	stubLogLevels(api)
+	stripKV := stubAdoptStripKV(api)
 	// CAS re-store of post IDs after approval/DM create — most queue tests
 	// don't care about the success path beyond "submitted". Pending lists are
 	// left to stubPendingLists / fakePendingLists.
@@ -75,6 +82,59 @@ func stubLogs(api *plugintest.API) {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvApprovalCardsPrefix)
 	})).Return(nil).Maybe()
+	// Open-request / token-expiry indexes updated on store/claim (best-effort).
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvOpenRequestIndex).Return(nil).Maybe()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvTokenExpiryIndex).Return(nil).Maybe()
+	// TA visibility seed set — mark/clear during AddChannelMember / eviction.
+	api.On("KVGet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
+	})).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
+	}), mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// Request-team TA/SA seed into the approval destination when a card posts.
+	// Yields to a test's own GetUsers / GetTeamMembers / AddChannelMember stubs.
+	var seedOurs []*mock.Call
+	seedOurs = append(seedOurs,
+		api.On("GetUsers", mock.MatchedBy(func(o *model.UserGetOptions) bool {
+			return o != nil && o.Role == model.SystemAdminRoleId && !o.Active && o.PerPage == 200 &&
+				unclaimed[*model.UserGetOptions](api, &seedOurs, "GetUsers", 0)(o)
+		})).Return([]*model.User{}, nil).Maybe(),
+		api.On("GetTeamMembers", mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetTeamMembers", 0)),
+			mock.Anything, mock.Anything).Return([]*model.TeamMember{}, nil).Maybe(),
+		api.On("GetChannelMember", mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetChannelMember", 0)),
+			mock.Anything).Return(nil, model.NewAppError("test", "not_found", nil, "", 404)).Maybe(),
+		api.On("AddChannelMember", mock.MatchedBy(unclaimed[string](api, &seedOurs, "AddChannelMember", 0)),
+			mock.Anything).Return(&model.ChannelMember{}, nil).Maybe(),
+		api.On("GetChannelSidebarCategories",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "GetChannelSidebarCategories", 0)),
+			mock.Anything).Return(nil, nil).Maybe(),
+		api.On("CreateChannelSidebarCategory",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "CreateChannelSidebarCategory", 0)),
+			mock.Anything, mock.Anything).Return(&model.SidebarCategoryWithChannels{}, nil).Maybe(),
+		api.On("UpdateChannelSidebarCategories",
+			mock.MatchedBy(unclaimed[string](api, &seedOurs, "UpdateChannelSidebarCategories", 0)),
+			mock.Anything, mock.Anything).Return([]*model.SidebarCategoryWithChannels{}, nil).Maybe(),
+	)
+	return stripKV
+}
+
+// stubTAVisibilitySeeded pretends the plugin previously seeded userIDs into
+// channelID, so demotion eviction is allowed to remove them.
+func stubTAVisibilitySeeded(api *plugintest.API, channelID string, userIDs ...string) {
+	data, err := json.Marshal(userIDs)
+	if err != nil {
+		panic(err)
+	}
+	key := taVisibilitySeededKey(channelID)
+	api.On("KVGet", key).Return(data, nil)
+	api.On("KVCompareAndSet", key, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 }
 
 // stubLogLines registers only the permissive log expectations, for tests
@@ -133,8 +193,8 @@ func stubNamesFree(api *plugintest.API) {
 	)
 }
 
-// stubLogLevels registers permissive log expectations and nothing else, for
-// tests that assert no other API call is made.
+// stubLogLevels registers permissive log expectations and the open-request /
+// token-expiry index CAS stubs (store/claim paths update those best-effort).
 func stubLogLevels(api *plugintest.API) {
 	for _, method := range []string{"LogDebug", "LogInfo", "LogWarn", "LogError"} {
 		for arity := 1; arity <= 16; arity++ {
@@ -146,13 +206,23 @@ func stubLogLevels(api *plugintest.API) {
 		}
 	}
 	api.On("LogAuditRec", mock.Anything).Maybe()
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
 }
 
 // stubApprovalTeamRecord lets approvalTeam read and write its record of the
-// Approval team; nothing is recorded yet.
+// Approval team; nothing is recorded yet. Also stubs the open-request index
+// CAS path used whenever a pending request is stored.
 func stubApprovalTeamRecord(api *plugintest.API) {
 	api.On("KVGet", kvApprovalTeamKey).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvApprovalTeamKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
 }
 
 // pluginChannel returns a private channel the plugin's bot created, the
@@ -486,7 +556,10 @@ func TestSubmitRequest_SystemAdminRequestQueues(t *testing.T) {
 func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 	api := &plugintest.API{}
 	stubNamesFree(api)
-	stubLogLevels(api)
+	// Card-record failure must win over stubLogs' permissive KVSet for card keys.
+	isCardKey := func(key string) bool { return strings.HasPrefix(key, kvApprovalCardsPrefix) }
+	api.On("KVSet", mock.MatchedBy(isCardKey), mock.Anything).Return(testAppErr("kv down"))
+	stubLogs(api)
 	// Pending lists only: the card record write must reach the failing mock below.
 	api.On("KVGet", isPendingListKey).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", isPendingListKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
@@ -499,9 +572,7 @@ func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 		ApprovalTeam:         "appteam",
 	})
 
-	isCardKey := func(key string) bool { return strings.HasPrefix(key, kvApprovalCardsPrefix) }
 	api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
-	api.On("KVSet", mock.MatchedBy(isCardKey), mock.Anything).Return(testAppErr("kv down"))
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return !isCardKey(key) }), mock.Anything).Return(nil)
 	api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
 	stubApprovalTeamRecord(api)
@@ -527,7 +598,8 @@ func TestSubmitRequest_CardRecordFailureRollsBack(t *testing.T) {
 
 func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testing.T) {
 	for _, taken := range []*model.Channel{
-		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypeOpen, CreatorId: "bot-user-id"},
+		// Foreign creator + bot not a member → adopt refuses (open or private).
+		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypeOpen, CreatorId: "u_other"},
 		{Id: "taken-ch", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "u_other"},
 	} {
 		t.Run("type "+string(taken.Type), func(t *testing.T) {
@@ -547,8 +619,10 @@ func TestSubmitRequest_TakenApprovalChannelNameSendsCardToSystemAdmins(t *testin
 			api.On("GetUser", "admin1").Return(&model.User{Id: "admin1", Username: "admin", Roles: "system_user system_admin"}, nil)
 			api.On("KVSet", mock.Anything, mock.Anything).Return(nil)
 			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil)
-			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Roles: "system_user"}, nil).Maybe()
+			api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other", Roles: "system_user"}, nil).Maybe()
 			api.On("GetChannelByName", "appteam-id", "mattermost-channel-requests", true).Return(taken, nil)
+			api.On("GetBot", "u_other", true).Return(nil, testAppErr("not a bot")).Maybe()
+			api.On("GetChannelMember", "taken-ch", mock.Anything).Return(nil, testAppErr("not a member")).Maybe()
 			api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", Name: "team", DisplayName: "Team"}, nil)
 			api.On("GetUsers", mock.Anything).Return([]*model.User{{Id: "sa1"}}, nil)
 			api.On("GetDirectChannel", mock.Anything, "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)

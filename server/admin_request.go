@@ -120,7 +120,7 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	sa.markStored()
 	rawBefore, err := json.Marshal(req)
 	if err != nil {
-		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvAdminRequestPrefix + req.ID)
 		p.releasePending(pendingKindAdmin, req.RequesterID, req.ID)
 		return "", errors.Wrap(err, "failed to snapshot admin request")
 	}
@@ -128,7 +128,7 @@ func (p *Plugin) submitAdminRequest(requesterID, channelID string, nomineeIDs []
 	approvalPostID, approvalChannelID, err := p.postAdminApprovalRequest(req, requester, channel)
 	if err != nil {
 		// Roll back so the stored request isn't orphaned without an approval message.
-		_ = p.API.KVDelete(kvAdminRequestPrefix + req.ID)
+		p.deletePendingRequestKV(kvAdminRequestPrefix + req.ID)
 		p.releasePending(pendingKindAdmin, req.RequesterID, req.ID)
 		p.API.LogError("failed to post Channel Admin request for approval", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
@@ -217,8 +217,8 @@ func (p *Plugin) storeAdminRequest(req *adminRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal admin request")
 	}
-	if appErr := p.API.KVSet(kvAdminRequestPrefix+req.ID, data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store admin request")
+	if err := p.putPendingRequestKV(kvAdminRequestPrefix+req.ID, data); err != nil {
+		return errors.Wrap(err, "failed to store admin request")
 	}
 	return nil
 }
@@ -250,6 +250,11 @@ func (p *Plugin) loadAdminRequest(id string) (*adminRequest, []byte, error) {
 // requests mention nobody, so seeding doesn't notify the approvers.
 func (p *Plugin) postAdminApprovalRequest(req *adminRequest, requester *model.User, channel *model.Channel) (postID, channelID string, err error) {
 	approvalChannel, teamLabel := p.resolveApprovalChannel(channel.TeamId)
+	// Same as channel-creation: only seed into the request team's own per-team
+	// channel (never root fallback). See seedRequestTeamApproversForCard.
+	if !req.Exercise {
+		p.seedRequestTeamApproversForCard(channel.TeamId, approvalChannel)
+	}
 	header := exerciseMarker + ": a Channel Admin request needs your review."
 	if !req.Exercise {
 		header = p.adminApprovalHeader(channel)

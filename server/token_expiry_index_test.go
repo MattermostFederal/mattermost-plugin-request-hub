@@ -1,0 +1,110 @@
+package main
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+func TestScanTokenExpiryKeys_ExcludesIndexKey(t *testing.T) {
+	api := &plugintest.API{}
+	api.On("KVList", 0, 200).Return([]string{
+		botTokenExpiryKey("tok1"),
+		kvTokenExpiryIndex, // shares bot_token_expiry_ prefix; must be skipped
+		"other",
+		botTokenExpiryKey("tok2"),
+	}, nil)
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	keys, err := p.scanTokenExpiryKeys()
+	require.NoError(t, err)
+	require.Equal(t, []string{botTokenExpiryKey("tok1"), botTokenExpiryKey("tok2")}, keys)
+}
+
+func TestPersistTokenExpiryIndexFromScan_ConflictMergesConcurrentTrack(t *testing.T) {
+	api := &plugintest.API{}
+	scanned := []string{botTokenExpiryKey("old")}
+	liveJSON, _ := json.Marshal([]string{botTokenExpiryKey("new")})
+
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
+	api.On("KVGet", kvTokenExpiryIndex).Return(liveJSON, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			var got []string
+			require.NoError(t, json.Unmarshal(args.Get(2).([]byte), &got))
+			require.ElementsMatch(t, []string{botTokenExpiryKey("old"), botTokenExpiryKey("new")}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.persistTokenExpiryIndexFromScan(nil, scanned))
+}
+
+func TestRebuildTokenExpiryIndex_UsesCAS(t *testing.T) {
+	api := &plugintest.API{}
+	key := botTokenExpiryKey("tok1")
+	partial, err := marshalPartialKeyIndex([]string{key})
+	require.NoError(t, err)
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Once()
+	api.On("KVList", 0, 200).Return([]string{key, kvTokenExpiryIndex}, nil).Twice()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, []byte(nil), mock.MatchedBy(func(b []byte) bool {
+		keys, complete, ok := parseKeyIndex(b)
+		return ok && !complete && len(keys) == 1 && keys[0] == key
+	})).Return(true, nil).Once()
+	api.On("KVGet", kvTokenExpiryIndex).Return(partial, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, partial, mock.MatchedBy(func(b []byte) bool {
+		keys, complete, ok := parseKeyIndex(b)
+		return ok && complete && len(keys) == 1 && keys[0] == key
+	})).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.rebuildTokenExpiryIndex()
+}
+
+func TestTrackTokenExpiryKey_MissingIndexWritesPartial(t *testing.T) {
+	api := &plugintest.API{}
+	key := botTokenExpiryKey("tok1")
+	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			keys, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.False(t, complete)
+			require.Equal(t, []string{key}, keys)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	p.trackTokenExpiryKey(key)
+}
+
+func TestPersistTokenExpiryIndexFromScan_ConflictMergesPartial(t *testing.T) {
+	api := &plugintest.API{}
+	scanned := []string{botTokenExpiryKey("old")}
+	partial, err := marshalPartialKeyIndex([]string{botTokenExpiryKey("new")})
+	require.NoError(t, err)
+
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(false, nil).Once()
+	api.On("KVGet", kvTokenExpiryIndex).Return(partial, nil).Once()
+	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got, complete, ok := parseKeyIndex(args.Get(2).([]byte))
+			require.True(t, ok)
+			require.True(t, complete)
+			require.ElementsMatch(t, []string{botTokenExpiryKey("old"), botTokenExpiryKey("new")}, got)
+		}).Return(true, nil).Once()
+	stubLogLevels(api)
+	defer api.AssertExpectations(t)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.persistTokenExpiryIndexFromScan(nil, scanned))
+}

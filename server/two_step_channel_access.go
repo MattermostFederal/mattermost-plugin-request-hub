@@ -2,58 +2,94 @@ package main
 
 import (
 	"strings"
-	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 )
+
+// twoStepChannelReconcileJobKey is the cluster job name for the periodic
+// two-step / Team Admin visibility reconcile.
+const twoStepChannelReconcileJobKey = "two_step_channel_reconcile"
+
+// securityPoolMaxMembers caps usergroup / attribute security-pool listing so
+// a misconfigured LDAP sync cannot expand into a runaway scan. Members past
+// this cap can still approve (authz uses pool checks), but are not seeded into
+// bot/webhook channels until login. Documented in docs/admin-guide.md.
+const securityPoolMaxMembers = 75
 
 // UserHasLoggedIn adds or evicts the user from bot/webhook approval channels
 // based on current pool / admin status. Mattermost has no plugin hook for
 // custom-group membership changes, so login + periodic reconcile cover joins
-// and demotions.
+// and demotions. Also reconciles primary-team Team Admin visibility (seed on
+// promote, evict from root/team/audit on demote) and per-team channel-requests
+// membership after a secondary-team demotion.
 func (p *Plugin) UserHasLoggedIn(_ *plugin.Context, user *model.User) {
 	if user == nil || user.Id == "" || user.Id == p.botUserID {
 		return
 	}
-	go p.reconcileTwoStepAccessForUser(user)
-}
-
-// startTwoStepChannelReconciler periodically adds current pool members to the
-// bot/webhook channels. Cheap when groups resolve (only lists ~6 members).
-func (p *Plugin) startTwoStepChannelReconciler() {
-	p.stopTwoStepChannelReconciler()
-	stop := make(chan struct{})
-	p.configurationLock.Lock()
-	p.twoStepSyncStop = stop
-	p.configurationLock.Unlock()
-
 	go func() {
-		// Run once immediately — NewTicker only fires after the first interval.
-		p.reconcileTwoStepApproverChannels()
-
-		ticker := time.NewTicker(twoStepChannelReconcileInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				p.reconcileTwoStepApproverChannels()
-			}
-		}
+		defer p.logRecoveredPanic("login access reconcile")
+		p.reconcileTwoStepAccessForUser(user)
+		p.reconcilePrimaryTeamAdminVisibilityForUser(user)
+		p.reconcilePerTeamApprovalAccessForUser(user)
 	}()
 }
 
-func (p *Plugin) stopTwoStepChannelReconciler() {
-	p.configurationLock.Lock()
-	stop := p.twoStepSyncStop
-	p.twoStepSyncStop = nil
-	p.configurationLock.Unlock()
-	if stop != nil {
-		close(stop)
+// startTwoStepChannelReconciler periodically adds current pool members to the
+// bot/webhook channels and evicts demoted Team Admins from primary visibility
+// channels and per-team channel-requests. Runs on one cluster node at a time.
+func (p *Plugin) startTwoStepChannelReconciler() {
+	p.stopTwoStepChannelReconciler()
+	run := func() {
+		defer p.logRecoveredPanic("two-step channel reconcile")
+		p.reconcileTwoStepApproverChannels()
+		p.evictStalePrimaryTeamAdminChannelMembers()
+		p.evictStalePerTeamApprovalChannelMembers()
 	}
+	// Immediate pass on every node at activation (Schedule waits for the first
+	// interval). Overlap with the cluster job and OnActivate sync is intentional:
+	// those paths are idempotent (CAS seed ledger) and we prefer a fresh pass
+	// over delaying until the first interval on a single node.
+	go run()
+	job, err := cluster.Schedule(p.API, twoStepChannelReconcileJobKey, cluster.MakeWaitForInterval(twoStepChannelReconcileInterval), run)
+	if err != nil {
+		p.API.LogError("failed to schedule two-step channel reconcile", "error", err.Error())
+		return
+	}
+	p.twoStepReconcileJob = job
+}
+
+// warnSecurityPoolCapOnce logs when listing hits securityPoolMaxMembers.
+// Keyed by pool label (not count): at the cap the member count is always the
+// max, so a count fingerprint would never change. Callers also pass complete
+// under-cap listings, which clear the flag so a new overrun warns again.
+// Failed listings must not call it. sync.Map-safe across reconcile / config /
+// request goroutines.
+func (p *Plugin) warnSecurityPoolCapOnce(pool string, members int) {
+	if pool == "" {
+		return
+	}
+	if members < securityPoolMaxMembers {
+		p.securityPoolCapWarned.Delete(pool)
+		return
+	}
+	if _, loaded := p.securityPoolCapWarned.LoadOrStore(pool, struct{}{}); loaded {
+		return
+	}
+	p.API.LogWarn("two-step channel access: security pool listing hit member cap; extra members can still approve but are not seeded into bot/webhook until login",
+		"pool", pool, "members", members, "max_members", securityPoolMaxMembers)
+}
+
+func (p *Plugin) stopTwoStepChannelReconciler() {
+	if p.twoStepReconcileJob == nil {
+		return
+	}
+	if err := p.twoStepReconcileJob.Close(); err != nil {
+		p.API.LogWarn("failed to stop two-step channel reconcile", "error", err.Error())
+	}
+	p.twoStepReconcileJob = nil
 }
 
 // reconcileTwoStepApproverChannels is the periodic path: group/attribute member
@@ -332,6 +368,33 @@ func (p *Plugin) addUserToApprovalChannel(ch *model.Channel, userID string) {
 				"team_id", ch.TeamId, "user_id", userID, "error", appErr.Error())
 		}
 	}
+	p.addChannelMemberAndCategory(ch, userID)
+}
+
+// addUserToApprovalChannelIfTeamMember adds userID to ch only when they are
+// already an active member of ch's team. Used for SysAdmin visibility on login
+// so we do not silently join them to the Approval team. Memberships this
+// path adds are recorded as plugin-seeded so losing System Admin evicts them;
+// existing (possibly hand-added) memberships are left unrecorded.
+func (p *Plugin) addUserToApprovalChannelIfTeamMember(ch *model.Channel, userID string) {
+	if ch == nil || userID == "" {
+		return
+	}
+	if ch.TeamId != "" {
+		m, appErr := p.API.GetTeamMember(ch.TeamId, userID)
+		if appErr != nil || m == nil || m.DeleteAt != 0 {
+			return
+		}
+	}
+	if !p.ensureSeededMember(ch.Id, userID) {
+		return
+	}
+	if ch.TeamId != "" {
+		p.addChannelToPermissionsCategory(userID, ch.TeamId, ch.Id)
+	}
+}
+
+func (p *Plugin) addChannelMemberAndCategory(ch *model.Channel, userID string) {
 	if _, appErr := p.API.AddChannelMember(ch.Id, userID); appErr != nil {
 		p.API.LogWarn("two-step channel access: failed to add channel member",
 			"channel_id", ch.Id, "user_id", userID, "error", appErr.Error())
@@ -461,11 +524,17 @@ func (p *Plugin) listGroupMemberIDsByGroupID(groupID, label string) []string {
 			return ids
 		}
 		for _, u := range users {
-			if u != nil {
-				ids = append(ids, u.Id)
+			if u == nil {
+				continue
+			}
+			ids = append(ids, u.Id)
+			if len(ids) >= securityPoolMaxMembers {
+				p.warnSecurityPoolCapOnce("group:"+label, len(ids))
+				return ids[:securityPoolMaxMembers]
 			}
 		}
 		if len(users) < perPage {
+			p.warnSecurityPoolCapOnce("group:"+label, len(ids))
 			return ids
 		}
 	}
@@ -515,6 +584,10 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 			if attributeValueIsSet(v.Value, field) {
 				ids = append(ids, v.TargetID)
+				if len(ids) >= securityPoolMaxMembers {
+					p.warnSecurityPoolCapOnce("attr:"+attrName, len(ids))
+					return ids[:securityPoolMaxMembers]
+				}
 			}
 			cursor = model.PropertyValueSearchCursor{
 				PropertyValueID: v.ID,
@@ -522,6 +595,7 @@ func (p *Plugin) listApproverAttributeUserIDs(attrName string) []string {
 			}
 		}
 		if len(values) < perPage {
+			p.warnSecurityPoolCapOnce("attr:"+attrName, len(ids))
 			return ids
 		}
 	}
