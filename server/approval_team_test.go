@@ -254,6 +254,8 @@ func TestOnConfigurationChange_NewApprovalTeamForgetsRecord(t *testing.T) {
 	// Keep system_admin so the two-step fingerprint does not reseed in the background.
 	stubLoadConfiguration(api, configuration{ApprovalTeam: "otherteam", TwoStepApproverMode: twoStepModeSystemAdmin})
 	api.On("KVDelete", kvApprovalTeamKey).Return(nil).Once()
+	// Background eviction of the previous team + sync of the new team.
+	api.On("GetTeamByName", mock.Anything).Return(nil, testAppErr("missing")).Maybe()
 
 	require.NoError(t, p.OnConfigurationChange())
 	require.Equal(t, "otherteam", p.getConfiguration().ApprovalTeam)

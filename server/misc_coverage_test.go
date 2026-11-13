@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -362,8 +363,8 @@ func TestOnConfigurationChange_TAVisibilityToggleResyncs(t *testing.T) {
 		AllowTeamAdminApprovers: true,
 		TwoStepApproverMode:     twoStepModeSystemAdmin,
 	})
-	// syncPrimaryTeamAdminVisibility always resolves the Approval team first.
-	api.On("GetTeamByName", "hq").Run(func(mock.Arguments) { close(done) }).
+	var notify sync.Once
+	api.On("GetTeamByName", "hq").Run(func(mock.Arguments) { notify.Do(func() { close(done) }) }).
 		Return(&model.Team{Id: "team-hq", Name: "hq"}, nil)
 	stubApprovalTeamRecord(api)
 	root := pluginChannelIn("ch-root", "mattermost-channel-requests", "team-hq")
@@ -527,9 +528,10 @@ func TestOnActivate_BackgroundSetupSeedsChannelsAndSweepsTeams(t *testing.T) {
 
 	// The System Admin is seeded into the approval channel.
 	api.AssertCalled(t, "AddChannelMember", "appch", "sa1")
-	// Per-team sweep, sidebar migration, demotion eviction, and the immediate
-	// two-step reconcile each list teams. Wait for the reconciler goroutine.
-	require.Eventually(t, func() bool { return teamsCalls.Load() >= 4 }, 5*time.Second, 10*time.Millisecond)
+	// Exactly three GetTeams callers on this path: per-team sweep, sidebar
+	// migration, and the immediate reconcile (which also runs demotion
+	// eviction). Docs bookmarking skips GetTeams when SiteURL is unset.
+	require.Eventually(t, func() bool { return teamsCalls.Load() >= 3 }, 5*time.Second, 10*time.Millisecond)
 	api.AssertCalled(t, "SetProfileImage", "bot-user-id", icon)
 }
 

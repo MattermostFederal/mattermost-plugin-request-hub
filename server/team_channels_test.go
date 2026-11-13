@@ -550,7 +550,8 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_RemovesDemoted(t *testing.T) {
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
 
 	// Only root has a demoted member; team/audit have empty ledgers.
-	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil).Once()
+	api.On("GetChannelMember", "ch-root", "demoted").Return(nil, notFoundErr()).Maybe()
 	api.On("KVGet", taVisibilitySeededKey("ch-team")).Return(nil, nil).Maybe()
 	api.On("KVGet", taVisibilitySeededKey("ch-audit")).Return(nil, nil).Maybe()
 
@@ -591,7 +592,8 @@ func TestEvictStalePrimaryTeamAdminChannelMembers_ToggleOffEvictsSeededTeamAdmin
 	api.On("GetChannelByName", "team-hq", "mattermost-team-requests", true).Return(nil, testAppErr("missing"))
 	api.On("GetChannelByName", "team-hq", "mattermost-audit-requests", true).Return(nil, testAppErr("missing"))
 
-	api.On("GetChannelMember", "ch-root", "still-admin").Return(&model.ChannelMember{UserId: "still-admin"}, nil)
+	api.On("GetChannelMember", "ch-root", "still-admin").Return(&model.ChannelMember{UserId: "still-admin"}, nil).Once()
+	api.On("GetChannelMember", "ch-root", "still-admin").Return(nil, notFoundErr()).Maybe()
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
 	api.On("GetTeamMember", "team-hq", "still-admin").Return(&model.TeamMember{UserId: "still-admin", SchemeAdmin: true}, nil)
 	api.On("DeleteChannelMember", "ch-root", "still-admin").Return(nil).Once()
@@ -632,7 +634,8 @@ func TestEvictStaleApproversFromApprovalChannel_WalksLedgerNotMemberList(t *test
 		api.On("GetUser", id).Return(&model.User{Id: id, Username: id}, nil)
 		api.On("GetTeamMember", "team-hq", id).Return(&model.TeamMember{UserId: id, Roles: model.TeamUserRoleId}, nil)
 	}
-	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("GetChannelMember", "ch-root", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil).Once()
+	api.On("GetChannelMember", "ch-root", "demoted").Return(nil, notFoundErr()).Maybe()
 	api.On("GetChannelMember", "ch-root", "left").Return(nil, notFoundErr())
 	api.On("GetChannelMember", "ch-root", "lookup-fails").Return(nil, testAppErr("db down"))
 	api.On("DeleteChannelMember", "ch-root", "demoted").Return(nil).Once()
@@ -665,7 +668,8 @@ func TestEvictStalePerTeamApprovalChannelMembers_RemovesDemotedOnSecondaryTeam(t
 	api.On("GetChannelByName", "team-hq", "mattermost-channel-requests", true).Return(nil, testAppErr("missing"))
 	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
 
-	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil).Once()
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(nil, notFoundErr()).Maybe()
 	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 	api.On("GetUser", "still-admin").Return(&model.User{Id: "still-admin", Username: "ta"}, nil)
 	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
@@ -691,7 +695,8 @@ func TestReconcilePerTeamApprovalAccessForUser_EvictsDemoted(t *testing.T) {
 	opsCh := &model.Channel{Id: "ch-ops", TeamId: "team-ops", Name: "mattermost-channel-requests", Type: model.ChannelTypePrivate, CreatorId: "bot-user-id"}
 	api.On("GetChannelByName", "team-ops", "mattermost-channel-requests", true).Return(opsCh, nil)
 	api.On("GetTeamMember", "team-ops", "demoted").Return(&model.TeamMember{UserId: "demoted", Roles: model.TeamUserRoleId}, nil)
-	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil)
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(&model.ChannelMember{UserId: "demoted"}, nil).Once()
+	api.On("GetChannelMember", "ch-ops", "demoted").Return(nil, notFoundErr()).Maybe()
 	api.On("DeleteChannelMember", "ch-ops", "demoted").Return(nil).Once()
 	api.On("GetUser", "demoted").Return(&model.User{Id: "demoted", Username: "ex"}, nil)
 
@@ -821,10 +826,15 @@ func TestAdoptApprovalChannel_PublicConvertStripsNonPrivilegedMembers(t *testing
 		{UserId: "bot"},
 		{UserId: "observer"},
 		{UserId: "sa2"},
-	}, nil)
+	}, nil).Once()
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+		{UserId: "sa2"},
+	}, nil).Once()
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
 	api.On("GetUser", "sa2").Return(&model.User{Id: "sa2", Username: "admin", Roles: model.SystemAdminRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+	api.On("GetChannelMember", "ch-audit", "observer").Return(nil, notFoundErr()).Maybe()
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
@@ -856,9 +866,13 @@ func TestAdoptApprovalChannel_UntrustedOrphanStripsObservers(t *testing.T) {
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
-	}, nil)
+	}, nil).Once()
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+	}, nil).Once()
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Username: "obs", Roles: model.SystemUserRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+	api.On("GetChannelMember", "ch-audit", "observer").Return(nil, notFoundErr()).Maybe()
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
@@ -909,9 +923,13 @@ func TestAdoptApprovalChannel_RetryAfterConversionStripsPendingChannel(t *testin
 	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
-	}, nil)
+	}, nil).Once()
+	api.On("GetChannelMembers", "ch-audit", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+	}, nil).Once()
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Roles: model.SystemUserRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-audit", "observer").Return(nil).Once()
+	api.On("GetChannelMember", "ch-audit", "observer").Return(nil, notFoundErr()).Maybe()
 
 	require.True(t, p.adoptApprovalChannel(ch))
 	api.AssertCalled(t, "DeleteChannelMember", "ch-audit", "observer")
@@ -1050,9 +1068,13 @@ func TestLookupApprovalChannel_OwnBotChannelFinishesPendingStrip(t *testing.T) {
 	api.On("GetChannelMembers", "ch-own", 0, 100).Return(model.ChannelMembers{
 		{UserId: "bot"},
 		{UserId: "observer"},
-	}, nil)
+	}, nil).Once()
+	api.On("GetChannelMembers", "ch-own", 0, 100).Return(model.ChannelMembers{
+		{UserId: "bot"},
+	}, nil).Once()
 	api.On("GetUser", "observer").Return(&model.User{Id: "observer", Roles: model.SystemUserRoleId}, nil)
 	api.On("DeleteChannelMember", "ch-own", "observer").Return(nil).Once()
+	api.On("GetChannelMember", "ch-own", "observer").Return(nil, notFoundErr()).Maybe()
 
 	ch, taken := p.lookupApprovalChannel("t1", "mattermost-audit-requests")
 	require.NotNil(t, ch)
@@ -1063,7 +1085,7 @@ func TestLookupApprovalChannel_OwnBotChannelFinishesPendingStrip(t *testing.T) {
 	ch, taken = p.lookupApprovalChannel("t1", "mattermost-audit-requests")
 	require.NotNil(t, ch)
 	require.False(t, taken)
-	api.AssertNumberOfCalls(t, "GetChannelMembers", 1)
+	api.AssertNumberOfCalls(t, "GetChannelMembers", 2)
 }
 
 func TestLookupApprovalChannel_OwnBotUntouchedChannelSkipsMarkerRead(t *testing.T) {

@@ -844,13 +844,48 @@ func (p *Plugin) lookupPrimaryNamedChannels(names []string) []*model.Channel {
 	if err != nil || team == nil {
 		return nil
 	}
+	return p.lookupPrimaryNamedChannelsInTeam(team.Id, names)
+}
+
+// lookupPrimaryNamedChannelsInTeam is lookupPrimaryNamedChannels for a known
+// team id (used when Approval team just changed and approvalTeam() already
+// resolves the new name).
+func (p *Plugin) lookupPrimaryNamedChannelsInTeam(teamID string, names []string) []*model.Channel {
+	if teamID == "" {
+		return nil
+	}
 	var out []*model.Channel
 	for _, name := range names {
-		if ch, _ := p.lookupApprovalChannel(team.Id, name); ch != nil {
+		if ch, _ := p.lookupApprovalChannel(teamID, name); ch != nil {
 			out = append(out, ch)
 		}
 	}
 	return out
+}
+
+// evictStalePrimaryVisibilityForNamedTeam strips non-qualifying seeded members
+// from a named team's primary ticket channels without creating channels. Used
+// when Approval team changes so the previous team is cleaned even though
+// approvalTeam() now resolves the new setting.
+func (p *Plugin) evictStalePrimaryVisibilityForNamedTeam(teamName string) {
+	teamName = strings.TrimSpace(teamName)
+	if teamName == "" {
+		return
+	}
+	team, appErr := p.API.GetTeamByName(teamName)
+	if appErr != nil || team == nil || team.DeleteAt != 0 {
+		return
+	}
+	for _, ch := range p.lookupPrimaryNamedChannelsInTeam(team.Id, []string{
+		"mattermost-channel-requests",
+		"mattermost-team-requests",
+		"mattermost-audit-requests",
+	}) {
+		if ch == nil {
+			continue
+		}
+		p.evictStaleApproversFromApprovalChannel(ch, team.Id, team.Id)
+	}
 }
 
 // primaryTAVisibilityChannels returns the primary channels Approval-team Team
@@ -1470,6 +1505,11 @@ const (
 // shorten it.
 var adoptStripLockTimeout = 30 * time.Second
 
+// adoptStripVerifyRounds is how many list→strip passes run before adoption
+// may mark done. A concurrent join mid-strip is caught on the next pass; if
+// non-privileged members remain after the last round, done is refused.
+const adoptStripVerifyRounds = 3
+
 // adoptStripMaxPages bounds member paging (100 per page). A channel that
 // does not end within the bound is refused rather than partly stripped.
 const adoptStripMaxPages = 1000
@@ -1653,23 +1693,69 @@ func (p *Plugin) completeAdoptStrip(ch *model.Channel, required bool) bool {
 // retained System Admins are recorded so losing the role evicts them.
 // Qualifying Team Admins / security-pool members are re-seeded by the normal
 // sync paths.
+//
+// Runs up to adoptStripVerifyRounds list→strip passes and only returns true
+// when a full pass finds no non-privileged members left to remove.
 func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool {
 	if ch == nil {
 		return false
 	}
+	for range adoptStripVerifyRounds {
+		memberIDs, ok := p.listAdoptStripMemberIDs(ch)
+		if !ok {
+			return false
+		}
+		removed := false
+		for _, userID := range memberIDs {
+			user, uErr := p.API.GetUser(userID)
+			if uErr != nil || user == nil {
+				errMsg := "nil user"
+				if uErr != nil {
+					errMsg = uErr.Error()
+				}
+				p.API.LogWarn("adopted approval channel: failed to load member during strip",
+					"channel_id", ch.Id, "user_id", userID, "error", errMsg)
+				return false
+			}
+			if user.IsSystemAdmin() {
+				if !p.markTAVisibilitySeeded(ch.Id, userID) {
+					return false
+				}
+				continue
+			}
+			if _, delErr := p.evictSeededMember(ch, userID, nil); delErr != nil {
+				p.API.LogWarn("adopted approval channel: failed to remove non-privileged member",
+					"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
+				return false
+			}
+			removed = true
+			p.API.LogInfo("adopted approval channel: removed non-privileged member",
+				"channel_id", ch.Id, "user_id", userID, "username", user.Username)
+		}
+		if !removed {
+			return true
+		}
+	}
+	p.API.LogWarn("adopted approval channel: strip did not stabilize; refusing done marker",
+		"channel_id", ch.Id, "rounds", adoptStripVerifyRounds)
+	return false
+}
+
+// listAdoptStripMemberIDs pages every non-bot channel member. ok is false when
+// listing fails or does not end within adoptStripMaxPages.
+func (p *Plugin) listAdoptStripMemberIDs(ch *model.Channel) (ids []string, ok bool) {
 	const perPage = 100
-	var memberIDs []string
 	complete := false
 	for page := range adoptStripMaxPages {
 		members, appErr := p.API.GetChannelMembers(ch.Id, page, perPage)
 		if appErr != nil {
 			p.API.LogWarn("adopted approval channel: failed to list members for reconcile",
 				"channel_id", ch.Id, "error", appErr.Error())
-			return false
+			return nil, false
 		}
 		for i := range members {
 			if id := members[i].UserId; id != "" && id != p.botUserID {
-				memberIDs = append(memberIDs, id)
+				ids = append(ids, id)
 			}
 		}
 		if len(members) < perPage {
@@ -1680,34 +1766,9 @@ func (p *Plugin) stripAdoptedApprovalChannelToPrivileged(ch *model.Channel) bool
 	if !complete {
 		p.API.LogWarn("adopted approval channel: member listing did not end; refusing adoption",
 			"channel_id", ch.Id, "max_members", adoptStripMaxPages*perPage)
-		return false
+		return nil, false
 	}
-	for _, userID := range memberIDs {
-		user, uErr := p.API.GetUser(userID)
-		if uErr != nil || user == nil {
-			errMsg := "nil user"
-			if uErr != nil {
-				errMsg = uErr.Error()
-			}
-			p.API.LogWarn("adopted approval channel: failed to load member during strip",
-				"channel_id", ch.Id, "user_id", userID, "error", errMsg)
-			return false
-		}
-		if user.IsSystemAdmin() {
-			if !p.markTAVisibilitySeeded(ch.Id, userID) {
-				return false
-			}
-			continue
-		}
-		if _, delErr := p.evictSeededMember(ch, userID, nil); delErr != nil {
-			p.API.LogWarn("adopted approval channel: failed to remove non-privileged member",
-				"channel_id", ch.Id, "user_id", userID, "error", delErr.Error())
-			return false
-		}
-		p.API.LogInfo("adopted approval channel: removed non-privileged member",
-			"channel_id", ch.Id, "user_id", userID, "username", user.Username)
-	}
-	return true
+	return ids, true
 }
 
 // makeApprovalChannelPrivate converts a public approval channel to private so

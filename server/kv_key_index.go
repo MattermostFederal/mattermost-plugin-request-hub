@@ -107,10 +107,48 @@ func (idx keyIndex) list(scan func() ([]string, error)) ([]string, error) {
 	// Snapshot before the slow scan so a concurrent track/untrack is not
 	// clobbered by an unconditional KVSet of a stale scan result.
 	prev, _ := idx.p.API.KVGet(idx.store)
+	if len(prev) == 0 {
+		// Missing index: partial-then-complete double scan so keys created
+		// during the first pass are not dropped when complete is published.
+		return idx.bootstrapFromScans(scan)
+	}
 	keys, err := scan()
 	if err != nil {
 		return nil, err
 	}
+	keys = unionWithPreScanIndex(keys, prev)
+	if saveErr := idx.persistFromScan(prev, keys); saveErr != nil {
+		idx.p.API.LogWarn("failed to persist "+idx.label+" index; list still returned",
+			"error", saveErr.Error(), "count", len(keys))
+	}
+	return keys, nil
+}
+
+// bootstrapFromScans builds a missing index with a partial publish after the
+// first KV scan, then a second scan unioned into a complete blob. Concurrent
+// track/untrack against the partial survive via persistFromScan CAS merges.
+func (idx keyIndex) bootstrapFromScans(scan func() ([]string, error)) ([]string, error) {
+	keys1, err := scan()
+	if err != nil {
+		return nil, err
+	}
+	if keys1 == nil {
+		keys1 = []string{}
+	}
+	if data, mErr := marshalPartialKeyIndex(keys1); mErr == nil {
+		if _, casErr := idx.p.API.KVCompareAndSet(idx.store, nil, data); casErr != nil {
+			idx.p.API.LogWarn(idx.label+" index: bootstrap partial publish failed",
+				"error", casErr.Error())
+		}
+	}
+	keys2, err := scan()
+	if err != nil {
+		idx.p.API.LogWarn(idx.label+" index: bootstrap second scan failed; leaving partial",
+			"error", err.Error())
+		return keys1, err
+	}
+	keys := unionStringKeys(keys1, keys2)
+	prev, _ := idx.p.API.KVGet(idx.store)
 	keys = unionWithPreScanIndex(keys, prev)
 	if saveErr := idx.persistFromScan(prev, keys); saveErr != nil {
 		idx.p.API.LogWarn("failed to persist "+idx.label+" index; list still returned",
@@ -330,6 +368,15 @@ func unionWithPreScanIndex(scanned []string, prev []byte) []string {
 
 func (idx keyIndex) rebuild(scan func() ([]string, error)) {
 	prev, _ := idx.p.API.KVGet(idx.store)
+	if len(prev) == 0 {
+		keys, err := idx.bootstrapFromScans(scan)
+		if err != nil {
+			idx.p.API.LogWarn(idx.label+" index: rebuild scan failed", "error", err.Error())
+			return
+		}
+		idx.p.API.LogInfo(idx.label+" index: rebuilt", "count", len(keys))
+		return
+	}
 	keys, err := scan()
 	if err != nil {
 		idx.p.API.LogWarn(idx.label+" index: rebuild scan failed", "error", err.Error())

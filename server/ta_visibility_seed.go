@@ -112,7 +112,13 @@ func (p *Plugin) ensureSeededMember(channelID, userID string) bool {
 // before the clear removed that record. An existing member is re-recorded,
 // and a missing one is added back. When the role lookup fails, an existing
 // member is still re-recorded so their seat stays revocable, but nobody is
-// added back. Returns whether the user ended up removed.
+// added back.
+//
+// When the user does not qualify, membership is still rechecked after the
+// clear: a concurrent seed may have re-added them while the ledger clear
+// wiped that seed's record. A present member is deleted again (and the
+// ledger re-cleared) so they are not left unrecorded in the channel.
+// Returns whether the user ended up removed.
 func (p *Plugin) evictSeededMember(ch *model.Channel, userID string, stillQualifies func() bool) (bool, *model.AppError) {
 	if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil && !isNotFound(delErr) {
 		return false, delErr
@@ -123,15 +129,25 @@ func (p *Plugin) evictSeededMember(ch *model.Channel, userID string, stillQualif
 	}
 	sysAdmin, roleKnown := p.lookupSystemAdmin(userID)
 	qualifies := sysAdmin || (stillQualifies != nil && stillQualifies())
-	if roleKnown && !qualifies {
-		return true, nil
-	}
 	_, memErr := p.API.GetChannelMember(ch.Id, userID)
 	switch {
 	case memErr == nil:
+		if roleKnown && !qualifies {
+			if delErr := p.API.DeleteChannelMember(ch.Id, userID); delErr != nil && !isNotFound(delErr) {
+				return false, delErr
+			}
+			if !p.clearTAVisibilitySeeded(ch.Id, userID) {
+				p.API.LogWarn("ta visibility seed: re-stripped a concurrent re-add but could not clear their ledger entry",
+					"channel_id", ch.Id, "user_id", userID)
+			}
+			return true, nil
+		}
 		p.recordSeededMember(ch.Id, userID)
 		return false, nil
 	case isNotFound(memErr):
+		if roleKnown && !qualifies {
+			return true, nil
+		}
 		switch {
 		case sysAdmin:
 			p.ensureSeededMember(ch.Id, userID)

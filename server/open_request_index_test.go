@@ -47,14 +47,20 @@ func TestPersistOpenRequestIndexFromScan_ConflictMergesConcurrentTrack(t *testin
 
 func TestRebuildOpenRequestIndex_UsesCASAgainstPreScanValue(t *testing.T) {
 	api := &plugintest.API{}
+	key := kvBotRequestPrefix + "r1"
+	partial, err := marshalPartialKeyIndex([]string{key})
+	require.NoError(t, err)
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Once()
-	api.On("KVList", 0, 200).Return([]string{kvBotRequestPrefix + "r1", "noise"}, nil)
-	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			var got []string
-			require.NoError(t, json.Unmarshal(args.Get(2).([]byte), &got))
-			require.Equal(t, []string{kvBotRequestPrefix + "r1"}, got)
-		}).Return(true, nil).Once()
+	api.On("KVList", 0, 200).Return([]string{key, "noise"}, nil).Twice()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, []byte(nil), mock.MatchedBy(func(b []byte) bool {
+		keys, complete, ok := parseKeyIndex(b)
+		return ok && !complete && len(keys) == 1 && keys[0] == key
+	})).Return(true, nil).Once()
+	api.On("KVGet", kvOpenRequestIndex).Return(partial, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, partial, mock.MatchedBy(func(b []byte) bool {
+		keys, complete, ok := parseKeyIndex(b)
+		return ok && complete && len(keys) == 1 && keys[0] == key
+	})).Return(true, nil).Once()
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -90,7 +96,7 @@ func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	api := &plugintest.API{}
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil)
 	api.On("KVList", 0, 200).Return([]string{kvTeamRequestPrefix + "a"}, nil)
-	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Once()
+	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil)
 	stubLogLevels(api)
 	defer api.AssertExpectations(t)
 	p := newTestPlugin(api)
@@ -99,6 +105,9 @@ func TestListRequestKeys_RebuildDoesNotKVSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{kvTeamRequestPrefix + "a"}, keys)
 	api.AssertNotCalled(t, "KVSet", kvOpenRequestIndex, mock.Anything)
+	// Missing-index bootstrap: partial publish + complete persist.
+	api.AssertNumberOfCalls(t, "KVCompareAndSet", 2)
+	api.AssertNumberOfCalls(t, "KVList", 2)
 }
 
 // A key tracked in a partial index but skipped by the paged scan must stay

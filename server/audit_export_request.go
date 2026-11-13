@@ -484,8 +484,14 @@ func (p *Plugin) deliverAuditExport(req *auditExportRequest) (fileID string, exp
 	msg := fmt.Sprintf("📎 **Audit export: %s** (%s, %s). %s. %s Keep it secure.", exportLabel(req.Filter), strings.ToUpper(req.Filter.Format), exportCount(req.Filter, export.count), p.describeExportFilter(req.Filter), auditExportTypeAbout(req.Filter))
 	if export.detail != nil {
 		if truncated, _ := export.detail["truncated"].(bool); truncated {
-			msg += fmt.Sprintf("\n\n⚠️ **Truncated:** this file hit the export caps (%d histories / %d events). Narrow the filter (kind, requester, since/until) and request again for a complete copy.",
-				historyExportMaxHistories, historyExportMaxEvents)
+			switch req.Filter.exportType() {
+			case exportBotForensic:
+				msg += fmt.Sprintf("\n\n⚠️ **Truncated:** this file hit the forensic caps (%d posts / %d MB / %d days). Narrow since/until and request again for a complete copy.",
+					forensicMaxPosts, forensicMaxBytes>>20, forensicMaxDays)
+			default:
+				msg += fmt.Sprintf("\n\n⚠️ **Truncated:** this file hit the export caps (%d histories / %d events). Narrow the filter (kind, requester, since/until) and request again for a complete copy.",
+					historyExportMaxHistories, historyExportMaxEvents)
+			}
 		}
 	}
 	if _, appErr := p.API.CreatePost(&model.Post{

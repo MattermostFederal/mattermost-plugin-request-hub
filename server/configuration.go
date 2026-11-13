@@ -414,9 +414,22 @@ func (p *Plugin) OnConfigurationChange() error {
 	if hadPrevConfig && configuration.PerTeamApprovalChannels && !prevPerTeamEnabled {
 		go p.ensureAllTeamApprovalChannels()
 	}
-	// When Approval team is set/changed or TA visibility toggles flip, ensure
-	// primary ticket channels exist and reseed / evict Team Admin membership.
-	if (approvalTeamChanged || taVisibilityTogglesChanged) && strings.TrimSpace(configuration.ApprovalTeam) != "" {
+	// When Approval team changes, strip seeded TAs from the previous team's
+	// primary channels first — syncPrimaryTeamAdminVisibility only touches
+	// the new team. Toggle flips still reseed the current team only.
+	if approvalTeamChanged {
+		prevTeam := prevApprovalTeam
+		newTeam := strings.TrimSpace(configuration.ApprovalTeam)
+		go func() {
+			defer p.logRecoveredPanic("primary ticket channel ensure")
+			if prevTeam != "" {
+				p.evictStalePrimaryVisibilityForNamedTeam(prevTeam)
+			}
+			if newTeam != "" {
+				p.syncPrimaryTeamAdminVisibility()
+			}
+		}()
+	} else if taVisibilityTogglesChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {
 		go func() {
 			defer p.logRecoveredPanic("primary ticket channel ensure")
 			p.syncPrimaryTeamAdminVisibility()

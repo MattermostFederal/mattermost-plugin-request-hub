@@ -707,6 +707,7 @@ func TestEvictSeededMember_DeletesBeforeClearingLedger(t *testing.T) {
 	api.On("DeleteChannelMember", "c1", "u1").
 		Run(func(mock.Arguments) { order = append(order, "delete") }).Return(nil)
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(nil, notFoundErr())
 
 	evicted, err := p.evictSeededMember(ch, "u1", nil)
 
@@ -737,6 +738,7 @@ func TestEvictSeededMember_ClearFailureStillRevokes(t *testing.T) {
 	api.On("DeleteChannelMember", "c1", "u1").Return(nil).Once()
 	api.On("KVGet", taVisibilitySeededKey("c1")).Return(nil, testAppErr("kv down")).Once()
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(nil, notFoundErr())
 
 	evicted, err := p.evictSeededMember(ch, "u1", nil)
 
@@ -842,12 +844,31 @@ func TestEvictSeededMember_DeactivatedSystemAdminIsRemoved(t *testing.T) {
 	defer api.AssertExpectations(t)
 	stubEvictedLedger(api)
 	api.On("GetUser", "u1").Return(&model.User{Id: "u1", Roles: model.SystemAdminRoleId, DeleteAt: 1}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(nil, notFoundErr())
 
 	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
 
 	require.Nil(t, err)
 	require.True(t, evicted)
-	api.AssertNotCalled(t, "GetChannelMember", mock.Anything, mock.Anything)
+}
+
+// A concurrent seed that re-adds a non-qualifying user between delete and
+// clear is stripped again so they are not left in-channel without a ledger.
+func TestEvictSeededMember_NonQualifyingReaddIsRestipped(t *testing.T) {
+	p, api := logOnlyPlugin(&configuration{})
+	defer api.AssertExpectations(t)
+	stubEvictedLedger(api)
+	api.On("GetUser", "u1").Return(&model.User{Id: "u1"}, nil)
+	api.On("GetChannelMember", "c1", "u1").Return(&model.ChannelMember{UserId: "u1"}, nil).Once()
+	api.On("DeleteChannelMember", "c1", "u1").Return(nil).Once()
+	api.On("KVGet", taVisibilitySeededKey("c1")).Return([]byte(`["u1"]`), nil).Once()
+	api.On("KVCompareAndSet", taVisibilitySeededKey("c1"), []byte(`["u1"]`), []byte(`[]`)).Return(true, nil).Once()
+
+	evicted, err := p.evictSeededMember(&model.Channel{Id: "c1", TeamId: "t1"}, "u1", nil)
+
+	require.Nil(t, err)
+	require.True(t, evicted)
+	api.AssertNumberOfCalls(t, "DeleteChannelMember", 2)
 }
 
 func TestStripAdoptedApprovalChannel_RefusesWhenSystemAdminCannotBeRecorded(t *testing.T) {
@@ -878,6 +899,7 @@ func TestSeedTAVisibility_UndoesSeedThatNoLongerQualifies(t *testing.T) {
 	api.On("KVCompareAndSet", taVisibilitySeededKey("ch-team"), []byte(`["ta1"]`), []byte(`[]`)).Return(true, nil).Once()
 	api.On("DeleteChannelMember", "ch-team", "ta1").Return(nil).Once()
 	api.On("GetUser", "ta1").Return(&model.User{Id: "ta1"}, nil)
+	api.On("GetChannelMember", "ch-team", "ta1").Return(nil, notFoundErr()).Once()
 
 	p.seedTAVisibility(ch, "ta1")
 }
