@@ -419,6 +419,7 @@ func TestHandleAction_ApproveClaimsAndCreates(t *testing.T) {
 	// The claim compares against the exact bytes loadRequest returned.
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	// No AdminMemberIDs → requester is auto-promoted to channel admin.
 	api.On("UpdateChannelMemberRoles", "ch1", "u_req", channelAdminRoleString).Return(&model.ChannelMember{}, nil)
@@ -853,6 +854,7 @@ func TestHandleAction_PerTeamTeamAdminMayApprove(t *testing.T) {
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "ops-test-6", TeamId: "team_new"}, nil)
 	api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
+	stubBotJoinsCreatedChannel(api, "team_new", "ch1")
 	api.On("UpdateChannelMemberRoles", "ch1", "u_req", channelAdminRoleString).Return(&model.ChannelMember{}, nil)
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil)
@@ -1628,6 +1630,7 @@ func TestHandleAction_WelcomeMentionsAddedMembersAndAdmins(t *testing.T) {
 	api.On("KVGet", kvRequestPrefix+"req1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	for _, id := range []string{"u_req", "u_mem", "u_adm"} {
 		api.On("AddChannelMember", "ch1", id).Return(&model.ChannelMember{}, nil)
 	}
@@ -2324,6 +2327,7 @@ func TestHandleActionApproveSystemAdminRequesterSkipsTeamCheck(t *testing.T) {
 	api.On("KVGet", kvRequestPrefix+"req1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", "admin2").Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "admin2", channelAdminRoles).Return(&model.ChannelMember{}, nil)
 	api.On("GetDirectChannel", "admin2", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
@@ -2335,7 +2339,7 @@ func TestHandleActionApproveSystemAdminRequesterSkipsTeamCheck(t *testing.T) {
 
 	resp := actionResponse(t, w)
 	require.Contains(t, resp.Update.Message, "Channel ~team-x created")
-	api.AssertNotCalled(t, "GetTeamMember", mock.Anything, mock.Anything)
+	api.AssertNotCalled(t, "GetTeamMember", mock.Anything, "admin2")
 }
 
 func TestHandleAdminActionApproveRechecks(t *testing.T) {
@@ -2494,6 +2498,7 @@ func TestHandleActionFreesPendingSlot(t *testing.T) {
 					api.On("KVSet", kvRequestPrefix+"req1", mock.Anything).Return(tc.restoreErr)
 				} else {
 					api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+					stubBotJoinsCreatedChannel(api, "team1", "ch1")
 					api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 					api.On("UpdateChannelMemberRoles", "ch1", "u_req", channelAdminRoles).Return(&model.ChannelMember{}, nil)
 				}

@@ -124,6 +124,9 @@ func (p *Plugin) OnActivate() error {
 		if p.getConfiguration().PerTeamApprovalChannels {
 			p.ensureAllTeamApprovalChannels()
 		}
+		// Per-team Channel Requests channels carry their team's name; this
+		// renames channels created before that, and picks up team renames.
+		p.syncApprovalChannelDisplayNames()
 		// Rebuild the open-request index so list/approve paths avoid a full
 		// plugin KV scan (histories, anchors, bot index, …).
 		p.rebuildOpenRequestIndex()

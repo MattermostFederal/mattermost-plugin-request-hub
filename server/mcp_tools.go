@@ -26,9 +26,11 @@ import (
 type ListPrefixesArgs struct{}
 
 type MCPPrefix struct {
-	Prefix      string `json:"prefix" jsonschema:"The prefix exactly as it must be passed to request_channel, such as team-"`
-	Description string `json:"description,omitempty" jsonschema:"What channels under this prefix are for"`
-	SuffixRule  string `json:"suffix_rule,omitempty" jsonschema:"The rule for the part after the prefix: a maximum length, or a pattern it must match. Empty means no rule"`
+	Prefix         string `json:"prefix" jsonschema:"The prefix exactly as it must be passed to request_channel, such as team-"`
+	Description    string `json:"description,omitempty" jsonschema:"What channels under this prefix are for"`
+	SuffixRule     string `json:"suffix_rule,omitempty" jsonschema:"The rule for the part after the prefix: a maximum length, or a pattern it must match. Empty means no rule"`
+	ChannelType    string `json:"channel_type,omitempty" jsonschema:"O or P when every channel under this prefix is public or private whatever the request asks. Empty means the request chooses"`
+	DefaultPurpose string `json:"default_purpose,omitempty" jsonschema:"The purpose used when the request leaves it blank"`
 }
 
 type ListPrefixesOutput struct {
@@ -232,10 +234,13 @@ func (p *Plugin) listPrefixesTool(ctx context.Context, _ *mcp.CallToolRequest, _
 
 	out := ListPrefixesOutput{Prefixes: make([]MCPPrefix, 0, len(config.prefixes))}
 	for _, pf := range config.prefixes {
+		d, _ := config.defaultsForPrefix(pf.Prefix)
 		out.Prefixes = append(out.Prefixes, MCPPrefix{
-			Prefix:      pf.Prefix,
-			Description: pf.Description,
-			SuffixRule:  pf.SuffixPatternRaw,
+			Prefix:         pf.Prefix,
+			Description:    pf.Description,
+			SuffixRule:     pf.SuffixPatternRaw,
+			ChannelType:    d.ChannelType,
+			DefaultPurpose: d.Purpose,
 		})
 	}
 	return nil, out, nil
