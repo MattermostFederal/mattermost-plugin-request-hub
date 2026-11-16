@@ -598,6 +598,9 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	if req.Exercise && !p.recordExerciseWebhook(req.TeamID, exerciseWebhook{ID: hookID, Type: req.WebhookType}, actingUser.Id) {
 		return p.closeAfterTeardown(cards, req.RequesterID, req.DMRootPostID, req.DMChannelID)
 	}
+	// Index the new standalone hook so transfer/retire and the orphan
+	// scanner can find it by hook ID (no-op for exercise hooks).
+	p.writeWebhookIndex(req, hookID, actingUser.Id)
 
 	// Best-effort: reopen the requester DM if submit-time open failed.
 	if req.DMChannelID == "" {

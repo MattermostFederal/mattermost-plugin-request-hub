@@ -49,6 +49,8 @@ const (
 	eventApproved            = "approved"
 	eventApprovedPartial     = "approved_partial"
 	eventDenied              = "denied"
+	eventWithdrawn           = "withdrawn"
+	eventAcknowledged        = "acknowledged"
 	eventExpired             = "expired"
 	eventApproveFailed       = "approve_failed"
 	eventLost                = "lost"
@@ -68,13 +70,15 @@ const (
 
 // History statuses: where a request ended up, or pending while it is open.
 const (
-	historyPending  = "pending"
-	historyApproved = "approved"
-	historyDenied   = "denied"
-	historyExpired  = "expired"
-	historyFailed   = "failed"
-	historyLost     = "lost"
-	historyClosed   = "closed"
+	historyPending   = "pending"
+	historyApproved  = "approved"
+	historyDenied    = "denied"
+	historyWithdrawn     = "withdrawn"
+	historyAcknowledged  = "acknowledged"
+	historyExpired       = "expired"
+	historyFailed    = "failed"
+	historyLost      = "lost"
+	historyClosed    = "closed"
 )
 
 // auditNever marks an event that is never posted to the audit channel.
@@ -104,6 +108,8 @@ var auditEventSpecs = map[string]auditEventSpec{
 	eventApproved:            {status: historyApproved, card: auditApproved, level: auditLevelDecisions},
 	eventApprovedPartial:     {status: historyApproved, card: auditPartial, level: auditLevelDecisions},
 	eventDenied:              {status: historyDenied, card: auditDenied, level: auditLevelDecisions},
+	eventWithdrawn:           {status: historyWithdrawn, card: auditWithdrawn, level: auditLevelDecisions},
+	eventAcknowledged:        {status: historyAcknowledged, card: auditAcknowledged, level: auditLevelDecisions},
 	eventExpired:             {status: historyExpired, card: auditExpired, level: auditLevelDecisions},
 	eventApproveFailed:       {card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventLost:                {status: historyLost, card: auditFailed, level: auditLevelLifecycle, failed: true},
@@ -493,8 +499,14 @@ func kindLabel(kind string) string {
 		return "bot account"
 	case pendingKindWebhook:
 		return "webhook"
+	case pendingKindBotTransfer:
+		return "bot transfer/retire"
+	case pendingKindWebhookTransfer:
+		return "webhook transfer/retire"
 	case pendingKindAuditExport:
 		return "audit export"
+	case pendingKindBugReport:
+		return "bug/feedback report"
 	default:
 		return kind
 	}

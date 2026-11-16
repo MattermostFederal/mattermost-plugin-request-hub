@@ -17,13 +17,16 @@ import {
     openAuditExportRequestModal,
     openAuditHistoryModal,
     openBotRequestModal,
+    openBotTransferModal,
     openIncomingWebhookModal,
+    openBugReportModal,
     openOutgoingWebhookModal,
     openRequestModal,
     openTeamAdminRequestModal,
     openTeamCreationModal,
     openTeamGuestRequestModal,
     openTeamMemberRequestModal,
+    openWebhookTransferModal,
 } from './store';
 import type {GlobalState} from './store';
 
@@ -114,6 +117,9 @@ const defaultEnabled: EnabledRequestTypes = {
     teamGuest: false,
     bot: true,
     webhook: true,
+    bugReport: true,
+    botTransfer: true,
+    webhookTransfer: true,
 };
 
 export const RequestHubModal = () => {
@@ -245,6 +251,27 @@ export const RequestHubModal = () => {
             // Outgoing webhooks can only watch public channels.
             requiresTeam: true,
             requiresPublicChannel: true,
+        },
+        {
+            icon: '🐞',
+            title: 'Report a Bug or Feedback',
+            description: 'Tell System Admins about a Request Hub problem or suggestion.',
+            action: openBugReportModal,
+            enabled: enabled.bugReport,
+        },
+        {
+            icon: '🔁',
+            title: 'Transfer or Retire a Bot',
+            description: 'Hand an RH-managed bot to a new owner, or retire it.',
+            action: openBotTransferModal,
+            enabled: enabled.botTransfer,
+        },
+        {
+            icon: '🔀',
+            title: 'Transfer or Retire a Webhook',
+            description: 'Reassign or retire a Request Hub-managed webhook.',
+            action: openWebhookTransferModal,
+            enabled: enabled.webhookTransfer,
         },
     ];
 

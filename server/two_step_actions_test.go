@@ -617,6 +617,10 @@ func finalWebhook(t *testing.T, api *plugintest.API, req *webhookRequest) []byte
 	stubSystemAdmin(api)
 	api.On("KVGet", kvWebhookRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvWebhookRequestPrefix+"r1", raw).Return(true, nil).Once()
+	// A successful create indexes the standalone hook for transfer/retire.
+	api.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvWebhookIndexPrefix)
+	}), mock.Anything).Return(nil).Maybe()
 	// The requester is still in the target channel at approve time.
 	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	return raw

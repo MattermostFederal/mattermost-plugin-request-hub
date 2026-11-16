@@ -59,7 +59,7 @@ func TestKVHistoryPrefix_IsNoRequestPrefix(t *testing.T) {
 func TestEveryAuditEventHasASpec(t *testing.T) {
 	for _, event := range []string{
 		eventSubmitted, eventSubmitFailed, eventSubmitRefused, eventStepApproved, eventApproved,
-		eventApprovedPartial, eventDenied, eventExpired, eventApproveFailed, eventLost, eventUndelivered,
+		eventApprovedPartial, eventDenied, eventWithdrawn, eventAcknowledged, eventExpired, eventApproveFailed, eventLost, eventUndelivered,
 		eventClosedAfterTeardown, eventDecisionRefused, eventMessageRelayed, eventMessageDropped,
 		eventTokenReminder, eventTokenTrackingEnded, eventTokenPostDeleted, eventExerciseSeeded,
 		eventExerciseRemoved, eventMigrated, eventAuditExported,

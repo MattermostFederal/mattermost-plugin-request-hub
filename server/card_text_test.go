@@ -96,18 +96,21 @@ func TestTeamCreationCard_ShowsTextAsTyped(t *testing.T) {
 func TestBotCard_ShowsTextAsTyped(t *testing.T) {
 	api := &plugintest.API{}
 	p := newTestPlugin(api)
+	api.On("GetUser", "u_req").Return(cardRequester(), nil)
 	api.On("GetChannel", "ch-in").Return(&model.Channel{Id: "ch-in", Name: "alerts", TeamId: "team1"}, nil)
 	api.On("GetChannel", "ch-out").Return(&model.Channel{Id: "ch-out", Name: "relay", TeamId: "team1"}, nil)
 	api.On("GetTeam", "team1").Return(markupTeam(), nil)
 
 	att := p.botApprovalAttachment(&botRequest{
-		ID: "r1", Username: "svcbot", DisplayName: markupText, Description: markupText,
+		ID: "r1", RequesterID: "u_req", Username: "svcbot", DisplayName: markupText, Description: markupText,
 		IncomingWebhookChannelID: "ch-in", IncomingWebhookDisplayName: markupText,
 		OutgoingWebhookChannelID: "ch-out", OutgoingWebhookDisplayName: markupText,
 		OutgoingWebhookCallbackURL: "https://e.example/[x](y)",
 	}, cardRequester())
 
-	requireShownAsTyped(t, cardText(att))
+	text := cardText(att)
+	requireShownAsTyped(t, text)
+	require.Contains(t, text, "**Webhook owner:** @svcbot (bot owned by @reqer)")
 }
 
 func TestWebhookCard_ShowsTextAsTyped(t *testing.T) {
@@ -122,6 +125,13 @@ func TestWebhookCard_ShowsTextAsTyped(t *testing.T) {
 	text := cardText(att)
 	requireShownAsTyped(t, text)
 	require.Contains(t, text, "Outgoing webhook")
+	var owner string
+	for _, f := range att.Fields {
+		if f.Title == "Webhook owner" {
+			owner, _ = f.Value.(string)
+		}
+	}
+	require.Equal(t, "@reqer", owner)
 }
 
 func TestChannelNamesList(t *testing.T) {

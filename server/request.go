@@ -554,6 +554,7 @@ func (p *Plugin) sendTicketCreatedDM(req *channelRequest, requester *model.User)
 		req.RequesterID,
 		p.approvalAttachment(req, requester),
 		ticketSubmittedIntro("channel request"),
+		req.ID,
 	)
 }
 
@@ -592,6 +593,8 @@ type auditOutcome int
 const (
 	auditApproved     auditOutcome = iota // green ✅
 	auditDenied                           // red ❌
+	auditWithdrawn                        // gray: requester cancelled before final decision
+	auditAcknowledged                     // green: SysAdmin ack of a bug/feedback report
 	auditExpired                          // gray: closed unreviewed after the expiry period
 	auditSubmitted                        // amber: a new request
 	auditStepApproved                     // green: one step of two approved
@@ -642,6 +645,10 @@ func auditCardStyle(kind auditOutcome) (color, title string) {
 		return colorApproved, "✅ Approved"
 	case auditDenied:
 		return colorDenied, "❌ Denied"
+	case auditWithdrawn:
+		return colorWithdrawn, "↩️ Withdrawn"
+	case auditAcknowledged:
+		return colorApproved, "✅ Acknowledged"
 	case auditExpired:
 		return colorExpired, "⌛ Expired"
 	case auditSubmitted:
@@ -1066,6 +1073,10 @@ func (p *Plugin) placeChannelInCategory(userID, teamID, channelID, categoryName 
 func (p *Plugin) mentionList(userIDs []string) string {
 	mentions := make([]string, 0, len(userIDs))
 	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
 		if user, appErr := p.API.GetUser(id); appErr == nil {
 			mentions = append(mentions, "@"+user.Username)
 		}

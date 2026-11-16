@@ -83,9 +83,10 @@ func (p *Plugin) notifyTicketProgress(tp ticketProgress) {
 }
 
 // postTicketCreatedDM opens the bot↔requester DM and posts the pending card as
-// the ticket thread root (no Approve/Deny buttons). Returns empty IDs on
-// failure — callers treat that as non-fatal.
-func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAttachment, intro string) (dmRootPostID, dmChannelID string) {
+// the ticket thread root. Approve/Deny stay on the approval channel; the DM
+// gets a Withdraw button when requestID is set. Returns empty IDs on failure —
+// callers treat that as non-fatal.
+func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAttachment, intro, requestID string) (dmRootPostID, dmChannelID string) {
 	if requesterID == "" || card == nil {
 		return "", ""
 	}
@@ -97,10 +98,13 @@ func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAtta
 
 	attachment := *card
 	attachment.Actions = nil
+	if action := p.withdrawAction(requestID); action != nil {
+		attachment.Actions = []*model.PostAction{action}
+	}
 	attachment.Color = colorPending
 
 	if intro == "" {
-		intro = "Your request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers."
+		intro = "Your request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers. Use Withdraw if you no longer need this request."
 	}
 
 	post := &model.Post{
@@ -135,8 +139,14 @@ type ticketClose struct {
 
 	// Expired closes the ticket without a decision (request expired before
 	// review). ThreadReply then replaces the Approved/Denied thread line.
-	Expired     bool
-	ThreadReply string
+	Expired bool
+	// Withdrawn is a requester cancel before final decision. ThreadReply is
+	// required (same as Expired).
+	Withdrawn bool
+	// Acknowledged is a SysAdmin ack of a bug/feedback report (not approve).
+	// ThreadReply is required (same as Withdrawn).
+	Acknowledged bool
+	ThreadReply  string
 }
 
 // closeTicket runs the shared close path and returns the Update payload for the
@@ -146,7 +156,9 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 	switch {
 	case c.Expired:
 		color = colorExpired
-	case c.Approved:
+	case c.Withdrawn:
+		color = colorWithdrawn
+	case c.Acknowledged, c.Approved:
 		color = colorApproved
 	}
 	p.notifyRequesterInThreadCard(c.RequesterID, c.DMRootPostID, c.DMChannelID, &model.MessageAttachment{
@@ -154,9 +166,10 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 		Title: c.CardTitle,
 		Text:  c.CardText,
 	})
-	if c.Expired {
+	switch {
+	case c.Expired, c.Withdrawn, c.Acknowledged:
 		p.postTicketThreadReply(c.DMChannelID, c.DMRootPostID, c.ThreadReply)
-	} else {
+	default:
 		p.postOutcomeThreadReply(c.DMChannelID, c.DMRootPostID, c.Approved, c.ApproverUsername)
 	}
 	p.deleteApprovalCards(c.RequestID)
@@ -169,7 +182,7 @@ func ticketSubmittedIntro(kindLabel string) string {
 		kindLabel = "request"
 	}
 	return fmt.Sprintf(
-		"Your %s has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers.",
+		"Your %s has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers. Use Withdraw if you no longer need this request.",
 		kindLabel,
 	)
 }

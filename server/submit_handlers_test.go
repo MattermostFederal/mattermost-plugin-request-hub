@@ -557,9 +557,12 @@ func TestHandleConfig_ReportsEachRequestType(t *testing.T) {
 		requestTypeTeam:         false,
 		requestTypeTeamAdmin:    false,
 		requestTypeTeamMember:   false,
-		requestTypeTeamGuest:    false,
-		requestTypeWebhook:      true,
-		requestTypeBot:          true,
+		requestTypeTeamGuest:       false,
+		requestTypeWebhook:         true,
+		requestTypeBot:             true,
+		requestTypeBugReport:       false,
+		requestTypeBotTransfer:     false,
+		requestTypeWebhookTransfer: false,
 	}, out)
 }
 

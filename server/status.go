@@ -42,7 +42,8 @@ type requestSummary struct {
 var allPendingKinds = []string{
 	pendingKindChannel, pendingKindAdmin, pendingKindTeam, pendingKindTeamAdmin,
 	pendingKindTeamMember, pendingKindTeamGuest, pendingKindBot, pendingKindWebhook,
-	pendingKindAuditExport,
+	pendingKindBotTransfer, pendingKindWebhookTransfer,
+	pendingKindAuditExport, pendingKindBugReport,
 }
 
 // pendingKindRequestType returns the request type (requestType*) of a
@@ -306,6 +307,8 @@ func (p *Plugin) summarize(config *configuration, kind string, rec storedRequest
 		s.Summary = fmt.Sprintf("%s webhook **%s** in %s%s", capitalize(req.WebhookType), escapeMarkdown(req.DisplayName), p.channelLabel(req.ChannelID), awaitingStep(req.twoStepState))
 	case *auditExportRequest:
 		s.Summary = fmt.Sprintf("Audit export (%s): %s", strings.ToUpper(req.Filter.Format), p.describeExportFilter(req.Filter))
+	case *bugReportRequest:
+		s.Summary = fmt.Sprintf("%s report about %s", bugReportCategoryLabel(req.Category), bugReportAboutLabel(req.AboutKind))
 	}
 	s.Expired = requestExpired(s.CreatedAt, config.ExpiryDays(), model.GetMillis())
 	if days := config.ExpiryDays(); days > 0 && s.CreatedAt > 0 {

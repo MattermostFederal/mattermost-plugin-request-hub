@@ -14,11 +14,13 @@ import (
 )
 
 // stubTokenReminderJob lets cluster jobs started by OnActivate (token
-// reminders + two-step channel reconcile) take their locks and find nothing
-// to do.
+// reminders + two-step channel reconcile + orphan owner scan) take their
+// locks and find nothing to do.
 func stubTokenReminderJob(api *plugintest.API) {
 	isJobKey := mock.MatchedBy(func(key string) bool {
-		return strings.HasSuffix(key, tokenReminderJobKey) || strings.HasSuffix(key, twoStepChannelReconcileJobKey)
+		return strings.HasSuffix(key, tokenReminderJobKey) ||
+			strings.HasSuffix(key, twoStepChannelReconcileJobKey) ||
+			strings.HasSuffix(key, orphanOwnerJobKey)
 	})
 	api.On("KVSetWithOptions", isJobKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", isJobKey, mock.Anything).Return(nil).Maybe()

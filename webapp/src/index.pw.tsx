@@ -55,6 +55,9 @@ test.describe('plugin entry point', () => {
             'RequestOutgoingWebhookModal',
             'AuditHistoryModal',
             'RequestAuditExportModal',
+            'RequestBugReportModal',
+            'BotTransferModal',
+            'WebhookTransferModal',
         ]);
         expect(r.called.filter((c) => c === 'registerChannelHeaderButtonAction')).toHaveLength(1);
         expect(r.menus.map((m) => m.text)).toEqual([

@@ -39,6 +39,15 @@ const (
 	// of the audit history. It has no toggle: who may ask is set by the
 	// security approver pool.
 	requestTypeAuditExport = "audit_export"
+	// requestTypeBugReport is a user report about Request Hub (bug or
+	// feedback) posted to the audit channel for System Admin acknowledge.
+	requestTypeBugReport = "bug_report"
+	// requestTypeBotTransfer transfers or retires an RH-managed bot. It
+	// needs the same two-step (security + system) approval as a bot request.
+	requestTypeBotTransfer = "bot_transfer"
+	// requestTypeWebhookTransfer reassigns or retires a standalone webhook,
+	// through the same two-step approval as a webhook request.
+	requestTypeWebhookTransfer = "webhook_transfer"
 )
 
 // channelPrefix is one entry in the admin-configured list of allowed
@@ -121,6 +130,15 @@ type configuration struct {
 	BotComplianceEnabled   bool
 	BotComplianceStatement string
 	AllowWebhookRequests   bool
+	// AllowBugReportRequests lets any user file a bug/feedback report about
+	// Request Hub into the audit channel.
+	AllowBugReportRequests bool
+	// AllowBotTransferRequests lets an owner (or anyone eligible under the
+	// transfer ACL) ask to transfer or retire an RH-managed bot.
+	AllowBotTransferRequests bool
+	// AllowWebhookTransferRequests lets the same reassign or retire a
+	// standalone RH-managed webhook.
+	AllowWebhookTransferRequests bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how the security reviewer is identified:
@@ -304,6 +322,12 @@ func (c *configuration) RequestEnabled(requestType string) bool {
 		return c.AllowWebhookRequests
 	case requestTypeBot:
 		return c.AllowBotTokenRequests
+	case requestTypeBugReport:
+		return c.AllowBugReportRequests
+	case requestTypeBotTransfer:
+		return c.AllowBotTransferRequests
+	case requestTypeWebhookTransfer:
+		return c.AllowWebhookTransferRequests
 	case requestTypeAuditExport:
 		return true
 	default:

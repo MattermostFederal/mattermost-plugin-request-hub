@@ -285,7 +285,48 @@ type botIndexEntry struct {
 	IntegrationURL     string         `json:"integration_endpoint,omitempty"`
 	HomeTeamID         string         `json:"home_team_id,omitempty"`
 	HomeChannelID      string         `json:"home_channel_id,omitempty"`
-	Compliance         *botCompliance `json:"compliance,omitempty"`
+	// HasToken / HasIncomingWebhook / HasOutgoingWebhook record what was
+	// issued with the bot so inventory can name auth and webhook ownership.
+	HasToken            bool           `json:"has_token,omitempty"`
+	HasIncomingWebhook  bool           `json:"has_incoming_webhook,omitempty"`
+	HasOutgoingWebhook  bool           `json:"has_outgoing_webhook,omitempty"`
+	Compliance          *botCompliance `json:"compliance,omitempty"`
+	// RetiredAt marks a bot retired by a transfer/retire ticket without
+	// dropping the index, so audits and the orphan scanner skip it. We keep
+	// the row (rather than deleting the key) so the inventory still shows a
+	// retired bot and who retired it. Zero means live.
+	RetiredAt int64 `json:"retired_at,omitempty"`
+}
+
+// updateBotIndexOwner records a new owner on a bot's index entry (best-effort).
+func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) {
+	entry, err := p.loadBotIndex(botUserID)
+	if err != nil || entry == nil {
+		return
+	}
+	entry.OwnerUserID = newOwnerID
+	p.saveBotIndexEntry(*entry)
+}
+
+// retireBotIndex marks a bot's index entry retired (best-effort).
+func (p *Plugin) retireBotIndex(botUserID string) {
+	entry, err := p.loadBotIndex(botUserID)
+	if err != nil || entry == nil {
+		return
+	}
+	entry.RetiredAt = model.GetMillis()
+	p.saveBotIndexEntry(*entry)
+}
+
+func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		p.API.LogWarn("failed to marshal bot index entry", "bot_user_id", entry.BotUserID, "error", err.Error())
+		return
+	}
+	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
+		p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
+	}
 }
 
 // writeBotIndex records a bot created for req. Exercise bots are tracked
@@ -307,6 +348,9 @@ func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID strin
 		HostingEnv: req.HostingEnv, HostingOtherDetail: req.HostingOtherDetail,
 		ArchitectureURL: req.ArchitectureURL, IntegrationURL: req.IntegrationURL,
 		HomeTeamID: req.HomeTeamID, HomeChannelID: req.HomeChannelID,
+		HasToken: req.RequestToken,
+		HasIncomingWebhook: req.IncomingWebhookChannelID != "",
+		HasOutgoingWebhook: req.OutgoingWebhookChannelID != "",
 		Compliance: req.Compliance,
 	}
 	data, err := json.Marshal(entry)

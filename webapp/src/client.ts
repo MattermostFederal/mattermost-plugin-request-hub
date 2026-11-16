@@ -90,6 +90,9 @@ export type EnabledRequestTypes = {
     teamGuest: boolean;
     bot: boolean;
     webhook: boolean;
+    bugReport: boolean;
+    botTransfer: boolean;
+    webhookTransfer: boolean;
 };
 
 // fetchEnabledRequestTypes fails open (channel + channelAdmin on) so a
@@ -105,6 +108,9 @@ export async function fetchEnabledRequestTypes(): Promise<EnabledRequestTypes> {
         teamGuest: false,
         bot: true,
         webhook: true,
+        bugReport: true,
+        botTransfer: true,
+        webhookTransfer: true,
     };
     try {
         const response = await fetch(`/plugins/${manifest.id}/api/v1/config`, {
@@ -125,10 +131,79 @@ export async function fetchEnabledRequestTypes(): Promise<EnabledRequestTypes> {
             teamGuest: Boolean(body?.team_guest),
             bot: Boolean(body?.bot),
             webhook: Boolean(body?.webhook),
+            bugReport: Boolean(body?.bug_report),
+            botTransfer: Boolean(body?.bot_transfer),
+            webhookTransfer: Boolean(body?.webhook_transfer),
         };
     } catch {
         return failOpen;
     }
+}
+
+// TransferableAsset is one RH-managed bot or webhook the caller may transfer
+// or retire, as returned by /api/v1/transferable_assets. Read access alone is
+// not enough; the server runs the nominate ACL before listing an asset.
+export type TransferableAsset = {
+    asset_type: 'bot' | 'webhook';
+    asset_id: string;
+    webhook_type?: string;
+    display_name: string;
+    owner_id: string;
+    owner_active: boolean;
+    orphaned: boolean;
+};
+
+export type TransferableAssets = {
+    bots: TransferableAsset[];
+    webhooks: TransferableAsset[];
+};
+
+// fetchTransferableAssets lists the bots and webhooks the caller may act on.
+// Throws on network or server error so the modal can surface a retry.
+export async function fetchTransferableAssets(): Promise<TransferableAssets> {
+    const response = await fetch(`/plugins/${manifest.id}/api/v1/transferable_assets`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to load transferable assets (${response.status})`);
+    }
+    const body = await response.json();
+    return {
+        bots: Array.isArray(body?.bots) ? body.bots : [],
+        webhooks: Array.isArray(body?.webhooks) ? body.webhooks : [],
+    };
+}
+
+export type BotTransferPayload = {
+    bot_user_id: string;
+    action: 'transfer' | 'retire';
+
+    // Supply either an explicit user ID or an @username; the server resolves
+    // a username when no ID is given.
+    new_owner_user_id?: string;
+    new_owner_username?: string;
+    reason?: string;
+    note?: string;
+    rotate_token?: boolean;
+};
+
+export type WebhookTransferPayload = {
+    hook_id: string;
+    action: 'reassign' | 'retire_recreate' | 'retire_only';
+    new_owner_user_id?: string;
+    new_owner_username?: string;
+    reason?: string;
+    note?: string;
+};
+
+export async function submitBotTransferRequest(payload: BotTransferPayload): Promise<ChannelRequestResult> {
+    return postJSON('/api/v1/submit_bot_transfer_request', payload);
+}
+
+export async function submitWebhookTransferRequest(payload: WebhookTransferPayload): Promise<ChannelRequestResult> {
+    return postJSON('/api/v1/submit_webhook_transfer_request', payload);
 }
 
 // getCSRFToken reads the CSRF token Mattermost sets as a cookie, required for authenticated
@@ -608,4 +683,35 @@ export type AuditExportRequestPayload = {
 
 export async function submitAuditExportRequest(payload: AuditExportRequestPayload): Promise<ChannelRequestResult> {
     return postJSON('/api/v1/submit_audit_export_request', payload);
+}
+
+export type BugReportPayload = {
+    category: string;
+    about_kind: string;
+    about_options?: string;
+    related_request_id?: string;
+    description: string;
+};
+
+export async function submitBugReportRequest(payload: BugReportPayload): Promise<ChannelRequestResult> {
+    return postJSON('/api/v1/submit_bug_report_request', payload);
+}
+
+export type MyRequestSummary = {
+    id: string;
+    kind: string;
+    summary: string;
+};
+
+export async function fetchMyRequests(): Promise<MyRequestSummary[]> {
+    const response = await fetch(`/plugins/${manifest.id}/api/v1/my_requests`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to load your requests (${response.status})`);
+    }
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
 }

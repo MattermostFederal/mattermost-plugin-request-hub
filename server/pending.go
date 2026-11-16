@@ -25,6 +25,12 @@ const (
 	pendingKindWebhook    = requestTypeWebhook
 	// pendingKindAuditExport is a request for a copy of the audit history.
 	pendingKindAuditExport = requestTypeAuditExport
+	// pendingKindBugReport is a bug/feedback report about Request Hub.
+	pendingKindBugReport = requestTypeBugReport
+	// pendingKindBotTransfer transfers or retires an RH-managed bot.
+	pendingKindBotTransfer = requestTypeBotTransfer
+	// pendingKindWebhookTransfer reassigns or retires a standalone webhook.
+	pendingKindWebhookTransfer = requestTypeWebhookTransfer
 
 	// pendingUpdateAttempts bounds the compare-and-set retries when the
 	// same user's list is being updated at the same time.
@@ -125,6 +131,27 @@ var pendingKinds = map[string]pendingKindInfo{
 			return errors.New("you already have a pending request for this audit export")
 		},
 	},
+	pendingKindBugReport: {
+		kvPrefix:  kvBugReportRequestPrefix,
+		newRecord: func() storedRequest { return &bugReportRequest{} },
+		duplicate: func(string) error {
+			return errors.New("you already have a pending bug or feedback report like this")
+		},
+	},
+	pendingKindBotTransfer: {
+		kvPrefix:  kvBotTransferRequestPrefix,
+		newRecord: func() storedRequest { return &botTransferRequest{} },
+		duplicate: func(string) error {
+			return errors.New("there's already a pending transfer/retire ticket for this bot")
+		},
+	},
+	pendingKindWebhookTransfer: {
+		kvPrefix:  kvWebhookTransferRequestPrefix,
+		newRecord: func() storedRequest { return &webhookTransferRequest{} },
+		duplicate: func(string) error {
+			return errors.New("there's already a pending transfer/retire ticket for this webhook")
+		},
+	},
 }
 
 // pendingKindForKey returns the kind of request stored under a KV key.
@@ -213,6 +240,22 @@ func (r *webhookRequest) pendingFields() (string, string, *int64) {
 func (r *webhookRequest) pendingKey() string {
 	return r.WebhookType + "/" + r.ChannelID + "/" + strings.ToLower(r.DisplayName)
 }
+
+func (r *botTransferRequest) pendingFields() (string, string, *int64) {
+	return r.ID, r.RequesterID, &r.CreatedAt
+}
+
+// pendingKey identifies a bot transfer by the bot, so one bot has one
+// pending transfer/retire ticket at a time (even across requesters).
+func (r *botTransferRequest) pendingKey() string { return r.BotUserID }
+
+func (r *webhookTransferRequest) pendingFields() (string, string, *int64) {
+	return r.ID, r.RequesterID, &r.CreatedAt
+}
+
+// pendingKey identifies a webhook transfer by the hook, so one hook has one
+// pending transfer/retire ticket at a time.
+func (r *webhookTransferRequest) pendingKey() string { return r.WebhookType + "/" + r.HookID }
 
 // updatePending applies change to a user's pending list with
 // compare-and-set, retrying when another update lands first. An empty

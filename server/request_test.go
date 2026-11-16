@@ -35,8 +35,11 @@ func newTestPlugin(api *plugintest.API) *Plugin {
 		AllowTeamAdminRequests:    true,
 		AllowTeamMemberRequests:   true,
 		AllowTeamGuestRequests:    true,
-		AllowBotTokenRequests:     true,
-		AllowWebhookRequests:      true,
+		AllowBotTokenRequests:        true,
+		AllowWebhookRequests:         true,
+		AllowBugReportRequests:       true,
+		AllowBotTransferRequests:     true,
+		AllowWebhookTransferRequests: true,
 		// Most handler tests act as a System Admin. system_admin mode lets
 		// that actor cover both two-step stamps; attribute/usergroup suites
 		// set their mode explicitly.

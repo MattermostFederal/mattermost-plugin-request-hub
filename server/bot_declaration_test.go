@@ -186,6 +186,8 @@ func TestWriteAndLoadBotIndex(t *testing.T) {
 
 	req := homeBotApproval()
 	req.OwnerUserID = ""
+	req.RequestToken = true
+	req.IncomingWebhookChannelID = "wh-ch"
 	p.writeBotIndex(req, &model.Bot{UserId: "b1", Username: "svcbot"}, "approver")
 
 	require.NotEmpty(t, stored)
@@ -197,6 +199,9 @@ func TestWriteAndLoadBotIndex(t *testing.T) {
 	require.Equal(t, hostingCICD, index.HostingEnv)
 	require.Equal(t, testBotIntegURL, index.IntegrationURL)
 	require.Equal(t, req.RequesterID, index.OwnerUserID, "empty owner is stored as the requester")
+	require.True(t, index.HasToken)
+	require.True(t, index.HasIncomingWebhook)
+	require.False(t, index.HasOutgoingWebhook)
 }
 
 func TestMMPrivilegeLabel_NeverAdmin(t *testing.T) {

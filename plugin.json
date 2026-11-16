@@ -92,6 +92,27 @@
                 "help_text": "When enabled, users can request incoming or outgoing webhooks. Webhook requests require two-step approval (security + system)."
             },
             {
+                "key": "AllowBugReportRequests",
+                "display_name": "Allow bug and feedback reports",
+                "type": "bool",
+                "default": true,
+                "help_text": "When enabled, any user can file a bug or feedback report about Request Hub. Reports post to the audit channel for System Admins to acknowledge (not approve/deny)."
+            },
+            {
+                "key": "AllowBotTransferRequests",
+                "display_name": "Allow bot transfer / retire requests",
+                "type": "bool",
+                "default": true,
+                "help_text": "When enabled, the owner of an RH-managed bot (or anyone eligible under the transfer policy) can request to transfer it to a new owner or retire it. Requires two-step approval (security + system). Also powers the orphaned-bot cards posted when an owner is deactivated."
+            },
+            {
+                "key": "AllowWebhookTransferRequests",
+                "display_name": "Allow webhook transfer / retire requests",
+                "type": "bool",
+                "default": true,
+                "help_text": "When enabled, the owner of an RH-managed standalone webhook (or anyone eligible under the transfer policy) can request to reassign or retire it. Requires two-step approval (security + system)."
+            },
+            {
                 "key": "TwoStepApproverMode",
                 "display_name": "Bot/webhook two-step approver mode",
                 "type": "custom",

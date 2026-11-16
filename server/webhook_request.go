@@ -197,6 +197,7 @@ func (p *Plugin) sendWebhookTicketCreatedDM(req *webhookRequest, requester *mode
 		req.RequesterID,
 		p.webhookApprovalAttachment(req, requester, channel),
 		ticketSubmittedIntro("webhook request"),
+		req.ID,
 	)
 }
 
@@ -406,6 +407,7 @@ func (p *Plugin) webhookApprovalAttachment(req *webhookRequest, requester *model
 
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
+		{Title: "Webhook owner", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
 		{Title: "Type", Value: typeLabel, Short: true},
 		{Title: "Target channel", Value: fmt.Sprintf("~%s", channel.Name), Short: true},
 		{Title: "Display name", Value: escapeMarkdown(req.DisplayName), Short: true},

@@ -32,7 +32,7 @@ func TestPostTicketCreatedDM(t *testing.T) {
 		Title:   "Channel creation request",
 		Actions: []*model.PostAction{{Id: "approve", Name: "Approve"}},
 	}
-	rootID, chID := p.postTicketCreatedDM("u_req", card, ticketSubmittedIntro("channel request"))
+	rootID, chID := p.postTicketCreatedDM("u_req", card, ticketSubmittedIntro("channel request"), "r1")
 	require.Equal(t, "dm-root-1", rootID)
 	require.Equal(t, "dm1", chID)
 }

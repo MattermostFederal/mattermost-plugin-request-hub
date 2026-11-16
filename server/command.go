@@ -46,6 +46,7 @@ const (
 	listApprovals           = "approvals"
 	subcommandApprove       = "approve"
 	subcommandDeny          = "deny"
+	subcommandWithdraw      = "withdraw"
 	subcommandExercise      = "exercise"
 	requestIDArgHint        = "<request ID>"
 )
@@ -59,7 +60,7 @@ func getCommand() *model.Command {
 		Trigger:          commandTrigger,
 		AutoComplete:     true,
 		AutoCompleteDesc: "Request admin-gated permissions (channels, teams, admin roles) or open docs",
-		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|audit|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing]",
+		AutoCompleteHint: "[docs|help|channel|channel-admin|prefixes|list|approve|deny|withdraw|audit|exercise|team-admin|team|team-member|team-guest|bot|webhook-incoming|webhook-outgoing|bug]",
 		AutocompleteData: getAutocompleteData(),
 		DisplayName:      "Mattermost Request Hub",
 	}
@@ -77,6 +78,7 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(list)
 	root.AddCommand(model.NewAutocompleteData(subcommandApprove, requestIDArgHint, "Approve a request by the ID on its approval card"))
 	root.AddCommand(model.NewAutocompleteData(subcommandDeny, requestIDArgHint, "Deny a request by the ID on its approval card"))
+	root.AddCommand(model.NewAutocompleteData(subcommandWithdraw, requestIDArgHint, "Withdraw one of your pending requests by ID"))
 	audit := model.NewAutocompleteData(subcommandAudit, auditArgsHint, "Show a request's audit history, or the latest requests (System Admins); export it (System Admins and security approvers)")
 	audit.AddCommand(model.NewAutocompleteData(auditRecent, "[count]", "List the most recently updated requests"))
 	audit.AddCommand(model.NewAutocompleteData(auditExportSub, auditExportArgsHint, "Request an audit export, or download it when direct export is on"))
@@ -93,6 +95,7 @@ func getAutocompleteData() *model.AutocompleteData {
 	root.AddCommand(model.NewAutocompleteData("bot", "["+botArgsHint+"]", "Request creation of a bot account (no arguments opens the form)"))
 	root.AddCommand(model.NewAutocompleteData("webhook-incoming", "["+incomingWebhookArgsHint+"]", "Request an incoming webhook (external → Mattermost; no arguments opens the form)"))
 	root.AddCommand(model.NewAutocompleteData("webhook-outgoing", "["+outgoingWebhookArgsHint+"]", "Request an outgoing webhook (Mattermost → external; no arguments opens the form)"))
+	root.AddCommand(model.NewAutocompleteData("bug", "", "Report a Request Hub bug or feedback (opens the form)"))
 	return root
 }
 
@@ -151,6 +154,8 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 		return p.executeDecision(args, params, true), nil
 	case subcommandDeny:
 		return p.executeDecision(args, params, false), nil
+	case subcommandWithdraw:
+		return p.executeWithdraw(args, params), nil
 	case subcommandExercise:
 		return p.executeExercise(args, params), nil
 	case subcommandAudit:
@@ -190,6 +195,8 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (res
 			return p.executeWebhookCreateCommand(args, webhookTypeOutgoing, params), nil
 		}
 		return p.executeOutgoingWebhookRequestCommand(args)
+	case "bug", "feedback":
+		return p.executeBugReportCommand(args)
 	default:
 		return ephemeralResponse(fmt.Sprintf("Unknown subcommand %s.\n\n%s", escapeMarkdown(words[1].Text), commandHelpText(p.getConfiguration()))), nil
 	}
@@ -382,6 +389,7 @@ var helpRows = []helpRow{
 	{"", subcommandList + " " + listApprovals, "List the pending requests you can approve and their IDs"},
 	{"", subcommandApprove + " " + requestIDArgHint, "Approve a request, as its Approve button would"},
 	{"", subcommandDeny + " " + requestIDArgHint, "Deny a request, as its Deny button would"},
+	{"", subcommandWithdraw + " " + requestIDArgHint, "Withdraw one of your pending requests"},
 	{"", subcommandAudit + " " + requestIDArgHint, "Show everything that happened to a request (System Admins)"},
 	{"", subcommandAudit + " " + auditRecent + " [count]", "List the most recently updated requests (System Admins)"},
 	{"", subcommandAudit + " " + auditExportSub + " " + auditExportArgsHint, "Request an audit export, which another System Admin approves, or download it when direct export is on (System Admins and security approvers)"},
@@ -400,6 +408,7 @@ var helpRows = []helpRow{
 	{requestTypeWebhook, "webhook-incoming " + incomingWebhookArgsHint, "Request an incoming webhook posting to that channel"},
 	{requestTypeWebhook, "webhook-outgoing", "Request an outgoing webhook (opens the form)"},
 	{requestTypeWebhook, "webhook-outgoing " + outgoingWebhookArgsHint, "Request an outgoing webhook for that channel"},
+	{requestTypeBugReport, "bug", "Report a Request Hub bug or feedback (opens the form)"},
 }
 
 // commandHelpText is the usage table, leaving out request types an admin
@@ -1098,11 +1107,26 @@ func (p *Plugin) kindDecider(kind string) decider {
 		return p.decideBotRequest
 	case pendingKindWebhook:
 		return p.decideWebhookRequest
+	case pendingKindBotTransfer:
+		return p.decideBotTransferRequest
+	case pendingKindWebhookTransfer:
+		return p.decideWebhookTransferRequest
 	case pendingKindAuditExport:
 		return p.decideAuditExportRequest
+	case pendingKindBugReport:
+		return p.decideBugReportRequest
 	default:
 		return nil
 	}
+}
+
+// executeWithdraw withdraws the caller's pending request by ID.
+func (p *Plugin) executeWithdraw(args *model.CommandArgs, params []commandArg) *model.CommandResponse {
+	if len(params) != 1 || !model.IsValidId(params[0].Text) {
+		return ephemeralResponse(fmt.Sprintf("Give the request ID from your ticket DM or `/%s list`: `/%s %s %s`",
+			commandTrigger, commandTrigger, subcommandWithdraw, requestIDArgHint))
+	}
+	return ephemeralResponse(p.decideWithdraw(args.UserId, params[0].Text, "").replyText())
 }
 
 // executeDecision approves or denies a request of any type by ID, through

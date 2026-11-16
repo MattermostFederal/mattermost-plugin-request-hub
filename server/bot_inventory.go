@@ -43,7 +43,13 @@ type inventoryRow struct {
 	RequesterUsername    string `json:"requester_username"`
 	OwnerID              string `json:"owner_id"`
 	OwnerUsername        string `json:"owner_username"`
-	RequestID            string `json:"request_id"`
+	HasToken             bool   `json:"has_token"`
+	HasIncomingWebhook   bool   `json:"has_incoming_webhook"`
+	HasOutgoingWebhook   bool   `json:"has_outgoing_webhook"`
+	// WebhookOwner is the human-readable ownership chain for bot-bundled
+	// hooks, e.g. "@ci-bot (bot owned by @jane)". Empty when the bot had none.
+	WebhookOwner string `json:"webhook_owner,omitempty"`
+	RequestID    string `json:"request_id"`
 	RequestedAt          int64  `json:"requested_at"`
 	ApprovedAt           int64  `json:"approved_at"`
 	ApprovedByID         string `json:"approved_by_id"`
@@ -136,9 +142,13 @@ func (p *Plugin) buildBotInventory(f auditExportFilter, asOf int64) ([]inventory
 			Purpose: e.Purpose, PrivilegeLevel: e.PrivilegeLevel, DataIngestion: e.DataIngestion, HostingEnv: e.HostingEnv,
 			RequesterID: e.RequesterID, RequesterUsername: look.username(e.RequesterID),
 			OwnerID: ownerID, OwnerUsername: look.username(ownerID),
+			HasToken: e.HasToken, HasIncomingWebhook: e.HasIncomingWebhook, HasOutgoingWebhook: e.HasOutgoingWebhook,
 			RequestID: e.RequestID, RequestedAt: e.RequestedAt, ApprovedAt: e.CreatedAt,
 			ApprovedByID: e.ApprovedBy, ApprovedByUsername: look.username(e.ApprovedBy),
 			RHManaged: true, AsOf: asOf,
+		}
+		if e.HasIncomingWebhook || e.HasOutgoingWebhook {
+			row.WebhookOwner = inventoryWebhookOwner(row)
 		}
 		if c := e.Compliance; c != nil {
 			row.ComplianceAccepted, row.ComplianceAcceptedAt, row.ComplianceTextSHA256 = true, c.AcceptedAt, c.TextSHA256
@@ -156,6 +166,9 @@ func (p *Plugin) buildBotInventory(f auditExportFilter, asOf int64) ([]inventory
 			if id := strings.TrimSpace(bot.OwnerId); id != "" {
 				row.OwnerID = id
 				row.OwnerUsername = look.username(id)
+			}
+			if row.HasIncomingWebhook || row.HasOutgoingWebhook {
+				row.WebhookOwner = inventoryWebhookOwner(row)
 			}
 		case isNotFound(appErr):
 			row.BotStatus = botStatusDeleted
@@ -201,6 +214,7 @@ func inventoryCSV(rows []inventoryRow) ([]byte, error) {
 		"home_team_id", "home_team_name", "home_channel_id", "home_channel_name",
 		"purpose", "privilege_level", "data_ingestion", "hosting_env",
 		"requester_id", "requester_username", "owner_id", "owner_username",
+		"has_token", "has_incoming_webhook", "has_outgoing_webhook", "webhook_owner",
 		"request_id", "requested_at_utc", "approved_at_utc", "approved_by_id", "approved_by_username",
 		"compliance_accepted", "compliance_accepted_at_utc", "compliance_text_sha256", "rh_managed", "as_of_utc"))
 	for _, r := range rows {
@@ -208,6 +222,7 @@ func inventoryCSV(rows []inventoryRow) ([]byte, error) {
 			r.HomeTeamID, r.HomeTeamName, r.HomeChannelID, r.HomeChannelName,
 			r.Purpose, r.PrivilegeLevel, r.DataIngestion, r.HostingEnv,
 			r.RequesterID, r.RequesterUsername, r.OwnerID, r.OwnerUsername,
+			strconv.FormatBool(r.HasToken), strconv.FormatBool(r.HasIncomingWebhook), strconv.FormatBool(r.HasOutgoingWebhook), r.WebhookOwner,
 			r.RequestID, rfc3339(r.RequestedAt), rfc3339(r.ApprovedAt), r.ApprovedByID, r.ApprovedByUsername,
 			strconv.FormatBool(r.ComplianceAccepted), rfc3339(r.ComplianceAcceptedAt), r.ComplianceTextSHA256,
 			strconv.FormatBool(r.RHManaged), rfc3339(r.AsOf)))
@@ -259,6 +274,12 @@ func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time
 		if r.OwnerID != "" && r.OwnerID != r.RequesterID {
 			doc.field("Owner", inventoryUser(r.OwnerUsername, r.OwnerID), 9)
 		}
+		if r.HasToken || r.HasIncomingWebhook || r.HasOutgoingWebhook {
+			doc.field("Auth", inventoryAuthSummary(r), 9)
+		}
+		if r.WebhookOwner != "" {
+			doc.field("Webhook owner", r.WebhookOwner, 9)
+		}
 		doc.field("Approved by", inventoryUser(r.ApprovedByUsername, r.ApprovedByID)+" on "+inventoryTime(r.ApprovedAt), 9)
 		compliance := "not recorded"
 		if r.ComplianceAccepted {
@@ -268,6 +289,37 @@ func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time
 		doc.field("Request ID", r.RequestID, 9)
 	}
 	return doc.bytes()
+}
+
+// inventoryWebhookOwner is "@bot (bot owned by @owner)" for bot-bundled hooks.
+// Usernames only (IDs are already on the owner_id / bot_id columns).
+func inventoryWebhookOwner(r inventoryRow) string {
+	bot := "@" + r.BotUsername
+	if r.BotUsername == "" {
+		bot = r.BotID
+	}
+	owner := "@" + r.OwnerUsername
+	if r.OwnerUsername == "" {
+		owner = r.OwnerID
+		if owner == "" {
+			owner = "unknown"
+		}
+	}
+	return fmt.Sprintf("%s (bot owned by %s)", bot, owner)
+}
+
+func inventoryAuthSummary(r inventoryRow) string {
+	var parts []string
+	if r.HasToken {
+		parts = append(parts, "bot access token")
+	}
+	if r.HasIncomingWebhook {
+		parts = append(parts, "incoming webhook")
+	}
+	if r.HasOutgoingWebhook {
+		parts = append(parts, "outgoing webhook")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func inventoryHome(r inventoryRow) string {
