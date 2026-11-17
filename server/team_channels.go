@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -135,7 +136,7 @@ func (p *Plugin) ensureRootApprovalChannel() *model.Channel {
 	ch, appErr := p.API.CreateChannel(&model.Channel{
 		TeamId:      team.Id,
 		Name:        channelName,
-		DisplayName: "Mattermost: Channel Requests",
+		DisplayName: channelRequestsDisplayName,
 		Type:        model.ChannelTypePrivate,
 		Purpose: fmt.Sprintf(
 			"Global channel and governance requests for %s. Reviewed by System and Team Admins.",
@@ -446,7 +447,7 @@ func (p *Plugin) ensureTeamApprovalChannel(teamID string) (*model.Channel, error
 	ch, appErr := p.API.CreateChannel(&model.Channel{
 		TeamId:      teamID,
 		Name:        channelName,
-		DisplayName: "Mattermost: Channel Requests",
+		DisplayName: approvalChannelDisplayName(team, p.isApprovalTeamName(team.Name)),
 		Type:        model.ChannelTypePrivate,
 		Purpose: fmt.Sprintf(
 			"Channel and admin promotion requests for %s. Team Admins review and approve requests here.",
@@ -1869,4 +1870,86 @@ func (p *Plugin) ensureTeamMember(teamID, userID string) error {
 		return appErr
 	}
 	return nil
+}
+
+// channelRequestsDisplayName is the display name of the root Channel
+// Requests channel in the Approval team. Per-team channels add the team's
+// display name (see approvalChannelDisplayName) so someone on several teams
+// can tell them apart.
+const channelRequestsDisplayName = "Mattermost: Channel Requests"
+
+// approvalChannelDisplayName returns the display name for the Channel
+// Requests channel in team: the plain name in the Approval team, otherwise
+// the name followed by the team's display name in parentheses, shortened to
+// fit model.ChannelDisplayNameMaxRunes.
+func approvalChannelDisplayName(team *model.Team, isApprovalTeam bool) string {
+	if isApprovalTeam || team == nil {
+		return channelRequestsDisplayName
+	}
+	teamName := strings.TrimSpace(team.DisplayName)
+	if teamName == "" {
+		teamName = team.Name
+	}
+	if teamName == "" {
+		return channelRequestsDisplayName
+	}
+	const wrapper = " ()"
+	room := model.ChannelDisplayNameMaxRunes - utf8.RuneCountInString(channelRequestsDisplayName) - utf8.RuneCountInString(wrapper)
+	if runes := []rune(teamName); len(runes) > room {
+		teamName = strings.TrimSpace(string(runes[:room-1])) + "…"
+	}
+	return channelRequestsDisplayName + " (" + teamName + ")"
+}
+
+// isGeneratedChannelRequestsName reports whether name is one the plugin
+// gave a Channel Requests channel, so a name an admin chose by hand is never
+// overwritten.
+func isGeneratedChannelRequestsName(name string) bool {
+	if name == channelRequestsDisplayName {
+		return true
+	}
+	return strings.HasPrefix(name, channelRequestsDisplayName+" (") && strings.HasSuffix(name, ")")
+}
+
+// isApprovalTeamName reports whether teamName (the team's URL name) is the
+// configured Approval team.
+func (p *Plugin) isApprovalTeamName(teamName string) bool {
+	approval := strings.TrimSpace(p.getConfiguration().ApprovalTeam)
+	return approval != "" && teamName == approval
+}
+
+// syncApprovalChannelDisplayNames gives every Channel Requests channel the
+// plugin uses its current display name: the plain name in the Approval team,
+// the team's name added everywhere else. Runs on activation and when the
+// Approval team changes, which swaps which channel is the root one. Channels
+// renamed by hand keep their name. Idempotent.
+func (p *Plugin) syncApprovalChannelDisplayNames() {
+	teams, appErr := p.API.GetTeams()
+	if appErr != nil {
+		p.API.LogWarn("channel requests names: failed to list teams", "error", appErr.Error())
+		return
+	}
+	channelName := p.getConfiguration().TeamChannelName()
+	for _, team := range teams {
+		if team == nil || team.DeleteAt != 0 {
+			continue
+		}
+		ch, _ := p.lookupApprovalChannel(team.Id, channelName)
+		if ch == nil {
+			continue
+		}
+		want := approvalChannelDisplayName(team, p.isApprovalTeamName(team.Name))
+		if ch.DisplayName == want || !isGeneratedChannelRequestsName(ch.DisplayName) {
+			continue
+		}
+		patched := ch.DeepCopy()
+		patched.DisplayName = want
+		if _, appErr := p.API.UpdateChannel(patched); appErr != nil {
+			p.API.LogWarn("channel requests names: failed to rename channel",
+				"team_id", team.Id, "channel_id", ch.Id, "error", appErr.Error())
+			continue
+		}
+		p.API.LogInfo("channel requests names: renamed channel",
+			"team_id", team.Id, "channel_id", ch.Id, "from", ch.DisplayName, "to", want)
+	}
 }

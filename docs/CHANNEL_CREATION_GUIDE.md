@@ -56,8 +56,8 @@ Same form from every entry point.
 | **Domain prefix** | Required. Pick the category your admin configured; the final URL is `<prefix><suffix>`. |
 | **Channel name** | The display name people see (e.g. *SRE Team*). Required. |
 | **URL suffix / URL name** | Optional. Leave blank to auto-generate from the channel name. A live **Preview** shows the final URL (e.g. `ops-sre-team`). |
-| **Purpose** | Optional short description of the channel. |
-| **Visibility** | **Public** (anyone can join) or **Private** (invite only). |
+| **Purpose** | Optional short description of the channel. If your admin set a default purpose for the prefix, it shows in the empty box and is used when you leave it blank. |
+| **Visibility** | **Public** (anyone can join) or **Private** (invite only). Some prefixes always create public or private channels; for those the choice is locked and the form says *Channels under &lt;prefix&gt; are always private.* (or public). |
 | **Members to add** | Search and add users who become regular members on approval. |
 | **Channel Admins to add** | Search and add users who become Channel Admins on approval. |
 | **Sidebar category** | Optional. Pick an existing category or type a new name. On approval the channel is placed there for you and listed members; a missing category is created automatically. |
@@ -158,9 +158,15 @@ requester; agents can't approve or deny.
 
 <img src="images/channel-request/mattermost-creation-approval-card.png" alt="Channel creation approval card" width="720">
 
-- **Approve**: creates the channel, adds the requested members, promotes the
-  Channel Admins, places the channel in the requested sidebar category (if any),
-  and posts a welcome message that @-mentions everyone added.
+- **Approve**: creates the channel, adds the plugin bot, the requested members
+  and the prefix's default members, promotes the Channel Admins, sets the
+  prefix's channel header (if any), places the channel in the requested sidebar
+  category (if any), and posts a welcome message that @-mentions everyone added.
+  A default member who isn't an active member of the channel's team is skipped
+  and named in the welcome message (for example *Default members not added:
+  @bob (not on this team)*); it never blocks the approval. When the prefix has a
+  header or default members, the approval card says so in a **Prefix defaults**
+  line.
 - **Deny**: the request is closed and the requester is notified by DM.
 
 Approve checks the request again first. If the team has been archived, the
@@ -200,6 +206,7 @@ Configure the plugin in **System Console → Plugins → Mattermost Request Hub*
 | **Approval team** | The team that owns plugin-managed approval channels. Recommended: without it, a channel request that has no per-team approval channel is sent by direct message to every System Admin instead. |
 | **Allow channel requests** | Enables channel-creation entry points. |
 | **Channel domain prefixes** | **Required.** The prefix list requesters pick from (see below). An empty list rejects every channel request. |
+| **Channel defaults per prefix** | Optional. Visibility, purpose, header and default members for channels requested with each prefix (see [Channel defaults per prefix](#channel-defaults-per-prefix)). |
 | **Team Admins can approve requests** | When on, Team Admins of the approval team can approve/deny channel-creation requests, not just System Admins. |
 | **Per-team approval channels** | Default on. Creates `mattermost-channel-requests` in teams with a Team Admin or System Admin; those teams' channel requests go there (not the primary approval team). Ticket channels (including team-creation) live under sidebar category **Mattermost: Request Hub**. |
 | **Offer tools to Agents** | Off by default. When on, the Mattermost Agents plugin can list prefixes, file requests of every type on a user's behalf and look up pending ones, under the same rules and per-type toggles as the forms. Every request goes to the approvers, including System Admins' requests. Agents can never approve or deny. Takes effect on save; choose which tools agents may use in the Agents plugin's own settings. Needs Mattermost 11.3 or later. |
@@ -228,6 +235,24 @@ are missing. The **Live preview** at the bottom shows exactly what URL a request
 will produce for a given prefix and typed suffix.
 
 <img src="images/admin/mattermost-admin-prefix-preview.png" alt="Load preset and live preview" width="520">
+
+### Channel defaults per prefix
+
+Under **Channel defaults per prefix**, every prefix in the list above has a
+section (click it to open). Leave a prefix empty to change nothing. For each one
+you can set:
+
+| Field | Effect |
+|-------|--------|
+| **Visibility** | **Requester chooses** (default), **Always public** or **Always private**. A forced visibility locks the form's choice, overrides the slash command, dialog and agent requests, and is what the approval card shows. |
+| **Purpose** | Used when the requester leaves the purpose blank. Up to 250 characters. |
+| **Channel header** | Set on the channel when it's created. Up to 1024 characters. |
+| **Default members** | Usernames, separated by commas, added as members when the request is approved. Only active users on the channel's team are added; anyone else is named in the welcome message instead. They are looked up at approval, so a change here applies to requests already pending. |
+
+Defaults for a prefix you remove from the list are kept and shown as **Unused**,
+with a **Remove** button, and apply again if the prefix comes back. Requesters
+see a forced visibility in `/mattermost-request-hub prefixes` (for example
+*(always private)*).
 
 See also the [Admin Guide](admin-guide.md) and open **`/mattermost-request-hub docs`**
 in Mattermost for the bundled HTML guide.

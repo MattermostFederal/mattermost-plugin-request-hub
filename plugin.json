@@ -151,6 +151,12 @@
                 "help_text": "Structured editor: define allowed channel prefixes (team-, project-, etc.) with descriptions and suffix rules. Requesters pick from a dropdown; the resulting channel URL is prefix+suffix."
             },
             {
+                "key": "ChannelPrefixDefaults",
+                "display_name": "Channel defaults per prefix",
+                "type": "custom",
+                "help_text": "Optional settings for every channel requested with a prefix: always public or always private, a purpose used when the requester leaves it blank, a channel header, and default members added on approval if they are on the channel's team."
+            },
+            {
                 "key": "EnableMCP",
                 "display_name": "Offer tools to Agents",
                 "type": "bool",

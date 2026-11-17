@@ -44,6 +44,13 @@ export type ChannelPrefix = {
     prefix: string;
     description: string;
     suffix_regex: string;
+
+    // Set when the prefix always creates public ("O") or private ("P")
+    // channels.
+    channel_type?: string;
+
+    // Used as the purpose when the requester leaves it blank.
+    default_purpose?: string;
 };
 
 // fetchPrefixes returns the admin-configured domain prefix list. An empty

@@ -1029,6 +1029,9 @@ func (p *Plugin) executePrefixesCommand() *model.CommandResponse {
 		if pf.SuffixPatternRaw != "" {
 			fmt.Fprintf(&b, " (suffix rule: %s)", inlineCode(pf.SuffixPatternRaw))
 		}
+		if d, _ := config.defaultsForPrefix(pf.Prefix); d.ChannelType != "" {
+			b.WriteString(" (always " + visibilityWord(d.ChannelType) + ")")
+		}
 		b.WriteString("\n")
 	}
 	return ephemeralResponse(strings.TrimRight(b.String(), "\n"))

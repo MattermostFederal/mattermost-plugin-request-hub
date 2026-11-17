@@ -91,6 +91,13 @@ func stubActiveTeamMember(api *plugintest.API, teamID, userID string) {
 	api.On("GetTeamMember", teamID, userID).Return(&model.TeamMember{TeamId: teamID, UserId: userID}, nil).Maybe()
 }
 
+// stubBotJoinsCreatedChannel lets the plugin bot join a channel created from
+// a request: it is already on teamID and its channel add succeeds.
+func stubBotJoinsCreatedChannel(api *plugintest.API, teamID, channelID string) {
+	stubActiveTeamMember(api, teamID, "bot-user-id")
+	api.On("AddChannelMember", channelID, "bot-user-id").Return(&model.ChannelMember{}, nil)
+}
+
 // stubLiveTeam lets approve-time checks find teamID live.
 func stubLiveTeam(api *plugintest.API, teamID string) {
 	api.On("GetTeam", teamID).Return(&model.Team{Id: teamID, Name: teamID, DisplayName: "Team " + teamID}, nil).Maybe()
