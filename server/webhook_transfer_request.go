@@ -157,10 +157,10 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
-	if err := p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
+	if err = p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
 		return "", err
 	}
-	if err := p.storeWebhookTransferRequest(req); err != nil {
+	if err = p.storeWebhookTransferRequest(req); err != nil {
 		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
 		p.API.LogError("failed to store webhook transfer request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")

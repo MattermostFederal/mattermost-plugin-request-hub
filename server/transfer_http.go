@@ -375,7 +375,7 @@ func (p *Plugin) openOrphanDialog(userID, triggerID, assetType, assetID string, 
 		if retire {
 			action = transferActionRetire
 		}
-		if err := p.openBotTransferDialog(triggerID, assetID, index.Username, action, true); err != nil {
+		if err = p.openBotTransferDialog(triggerID, assetID, index.Username, action, true); err != nil {
 			p.API.LogWarn("failed to open orphan bot dialog", "error", err.Error())
 			return "Could not open the form. Try again."
 		}
@@ -392,7 +392,7 @@ func (p *Plugin) openOrphanDialog(userID, triggerID, assetType, assetID string, 
 		if retire {
 			action = transferActionRetireOnly
 		}
-		if err := p.openWebhookTransferDialog(triggerID, assetID, index.WebhookType, index.DisplayName, action, true); err != nil {
+		if err = p.openWebhookTransferDialog(triggerID, assetID, index.WebhookType, index.DisplayName, action, true); err != nil {
 			p.API.LogWarn("failed to open orphan webhook dialog", "error", err.Error())
 			return "Could not open the form. Try again."
 		}
@@ -405,12 +405,15 @@ func (p *Plugin) openOrphanDialog(userID, triggerID, assetType, assetID string, 
 func (p *Plugin) handleApproveBotTransfer(w http.ResponseWriter, r *http.Request) {
 	p.handleBotTransferAction(w, r, true)
 }
+
 func (p *Plugin) handleDenyBotTransfer(w http.ResponseWriter, r *http.Request) {
 	p.handleBotTransferAction(w, r, false)
 }
+
 func (p *Plugin) handleApproveWebhookTransfer(w http.ResponseWriter, r *http.Request) {
 	p.handleWebhookTransferAction(w, r, true)
 }
+
 func (p *Plugin) handleDenyWebhookTransfer(w http.ResponseWriter, r *http.Request) {
 	p.handleWebhookTransferAction(w, r, false)
 }

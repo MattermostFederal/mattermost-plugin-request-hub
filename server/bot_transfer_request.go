@@ -173,10 +173,10 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
-	if err := p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
+	if err = p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
 		return "", err
 	}
-	if err := p.storeBotTransferRequest(req); err != nil {
+	if err = p.storeBotTransferRequest(req); err != nil {
 		p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
 		p.API.LogError("failed to store bot transfer request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
