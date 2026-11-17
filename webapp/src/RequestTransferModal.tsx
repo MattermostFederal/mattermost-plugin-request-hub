@@ -75,6 +75,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const [action, setAction] = useState(isBot ? 'transfer' : 'reassign');
     const [newOwner, setNewOwner] = useState('');
     const [rotate, setRotate] = useState(false);
+
     // rotateTouched marks an explicit checkbox choice so we only send
     // rotate_token when the user opted in/out; otherwise the server applies
     // its offboarding / owner-deactivated default.
