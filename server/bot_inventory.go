@@ -26,30 +26,30 @@ const (
 
 // inventoryRow is one bot in the inventory.
 type inventoryRow struct {
-	BotID                string `json:"bot_id"`
-	BotUsername          string `json:"bot_username"`
-	BotDisplayName       string `json:"bot_display_name"`
-	BotStatus            string `json:"bot_status"`
-	BotActive            bool   `json:"bot_active"`
-	HomeTeamID           string `json:"home_team_id"`
-	HomeTeamName         string `json:"home_team_name"`
-	HomeChannelID        string `json:"home_channel_id"`
-	HomeChannelName      string `json:"home_channel_name"`
-	Purpose              string `json:"purpose"`
-	PrivilegeLevel       string `json:"privilege_level"`
-	DataIngestion        string `json:"data_ingestion"`
-	HostingEnv           string `json:"hosting_env"`
-	RequesterID          string `json:"requester_id"`
-	RequesterUsername    string `json:"requester_username"`
-	OwnerID              string `json:"owner_id"`
-	OwnerUsername        string `json:"owner_username"`
-	HasToken             bool   `json:"has_token"`
-	HasIncomingWebhook   bool   `json:"has_incoming_webhook"`
-	HasOutgoingWebhook   bool   `json:"has_outgoing_webhook"`
+	BotID              string `json:"bot_id"`
+	BotUsername        string `json:"bot_username"`
+	BotDisplayName     string `json:"bot_display_name"`
+	BotStatus          string `json:"bot_status"`
+	BotActive          bool   `json:"bot_active"`
+	HomeTeamID         string `json:"home_team_id"`
+	HomeTeamName       string `json:"home_team_name"`
+	HomeChannelID      string `json:"home_channel_id"`
+	HomeChannelName    string `json:"home_channel_name"`
+	Purpose            string `json:"purpose"`
+	PrivilegeLevel     string `json:"privilege_level"`
+	DataIngestion      string `json:"data_ingestion"`
+	HostingEnv         string `json:"hosting_env"`
+	RequesterID        string `json:"requester_id"`
+	RequesterUsername  string `json:"requester_username"`
+	OwnerID            string `json:"owner_id"`
+	OwnerUsername      string `json:"owner_username"`
+	HasToken           bool   `json:"has_token"`
+	HasIncomingWebhook bool   `json:"has_incoming_webhook"`
+	HasOutgoingWebhook bool   `json:"has_outgoing_webhook"`
 	// WebhookOwner is the human-readable ownership chain for bot-bundled
 	// hooks, e.g. "@ci-bot (bot owned by @jane)". Empty when the bot had none.
-	WebhookOwner string `json:"webhook_owner,omitempty"`
-	RequestID    string `json:"request_id"`
+	WebhookOwner         string `json:"webhook_owner,omitempty"`
+	RequestID            string `json:"request_id"`
 	RequestedAt          int64  `json:"requested_at"`
 	ApprovedAt           int64  `json:"approved_at"`
 	ApprovedByID         string `json:"approved_by_id"`

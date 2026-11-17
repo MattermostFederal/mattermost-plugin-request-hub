@@ -8,10 +8,10 @@ import (
 
 func TestRequestEnabled(t *testing.T) {
 	c := &configuration{
-		AllowChannelRequests:      true,
-		AllowChannelAdminRequests: true,
-		AllowTeamRequests:         false,
-		AllowTeamAdminRequests:    false,
+		AllowChannelRequests:         true,
+		AllowChannelAdminRequests:    true,
+		AllowTeamRequests:            false,
+		AllowTeamAdminRequests:       false,
 		AllowBotTokenRequests:        true,
 		AllowWebhookRequests:         true,
 		AllowBugReportRequests:       true,

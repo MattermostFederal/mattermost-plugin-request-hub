@@ -83,8 +83,8 @@ const (
 	routeApproveWebhookTransfer      = "/api/v1/approve_webhook_transfer"
 	routeDenyWebhookTransfer         = "/api/v1/deny_webhook_transfer"
 	routeTransferableAssets          = "/api/v1/transferable_assets" // bots + hooks the caller may transfer/retire
-	routeOrphanTransfer              = "/api/v1/orphan_transfer"      // orphan audit-card Transfer button
-	routeOrphanRetire                = "/api/v1/orphan_retire"        // orphan audit-card Retire button
+	routeOrphanTransfer              = "/api/v1/orphan_transfer"     // orphan audit-card Transfer button
+	routeOrphanRetire                = "/api/v1/orphan_retire"       // orphan audit-card Retire button
 
 	// fieldPrefix is the dialog element name for the domain-prefix
 	// dropdown. Kept alongside the other field* constants in request.go.
@@ -1303,12 +1303,12 @@ func (p *Plugin) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	config := p.getConfiguration()
 	writeJSON(w, map[string]bool{
-		requestTypeChannel:      config.RequestEnabled(requestTypeChannel),
-		requestTypeChannelAdmin: config.RequestEnabled(requestTypeChannelAdmin),
-		requestTypeTeam:         config.RequestEnabled(requestTypeTeam),
-		requestTypeTeamAdmin:    config.RequestEnabled(requestTypeTeamAdmin),
-		requestTypeTeamMember:   config.RequestEnabled(requestTypeTeamMember),
-		requestTypeTeamGuest:    config.RequestEnabled(requestTypeTeamGuest),
+		requestTypeChannel:         config.RequestEnabled(requestTypeChannel),
+		requestTypeChannelAdmin:    config.RequestEnabled(requestTypeChannelAdmin),
+		requestTypeTeam:            config.RequestEnabled(requestTypeTeam),
+		requestTypeTeamAdmin:       config.RequestEnabled(requestTypeTeamAdmin),
+		requestTypeTeamMember:      config.RequestEnabled(requestTypeTeamMember),
+		requestTypeTeamGuest:       config.RequestEnabled(requestTypeTeamGuest),
 		requestTypeWebhook:         config.RequestEnabled(requestTypeWebhook),
 		requestTypeBot:             config.RequestEnabled(requestTypeBot),
 		requestTypeBugReport:       config.RequestEnabled(requestTypeBugReport),

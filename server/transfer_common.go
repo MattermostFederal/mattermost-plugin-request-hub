@@ -19,15 +19,15 @@ const (
 	transferActionRetire   = "retire"
 
 	// Webhook transfer actions.
-	transferActionReassign      = "reassign"
+	transferActionReassign       = "reassign"
 	transferActionRetireRecreate = "retire_recreate"
-	transferActionRetireOnly    = "retire_only"
+	transferActionRetireOnly     = "retire_only"
 
 	// Transfer reasons. Free text rides in Note; these two drive the token
 	// rotate default and the "on behalf of" orphan wording.
-	transferReasonVoluntary       = "voluntary"
+	transferReasonVoluntary        = "voluntary"
 	transferReasonOwnerDeactivated = "owner_deactivated"
-	transferReasonOffboarding     = "offboarding"
+	transferReasonOffboarding      = "offboarding"
 
 	maxTransferNoteLen = 500
 )

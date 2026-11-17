@@ -118,7 +118,7 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		assetType: "bot", assetID: botUserID,
 		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
 	}
-	if err := p.canNominateTransfer(requesterID, asset); err != nil {
+	if err = p.canNominateTransfer(requesterID, asset); err != nil {
 		return "", err
 	}
 
@@ -131,13 +131,13 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		}
 	}
 	note := strings.TrimSpace(in.Note)
-	if err := checkTextLen("note", note, maxTransferNoteLen); err != nil {
+	if err = checkTextLen("note", note, maxTransferNoteLen); err != nil {
 		return "", err
 	}
 
 	newOwnerID := strings.TrimSpace(in.NewOwnerUserID)
 	if action == transferActionTransfer {
-		if err := p.checkTransferNewOwner(newOwnerID); err != nil {
+		if err = p.checkTransferNewOwner(newOwnerID); err != nil {
 			return "", err
 		}
 	} else {
@@ -395,8 +395,8 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: false, ApproverUsername: actingUser.Username,
-			CardTitle: "Bot " + transferActionLabel(req.Action) + " Request Denied",
-			CardText:  fmt.Sprintf("Denied by @%s. The request to %s bot **@%s** was not approved.", actingUser.Username, verb, req.BotUsername),
+			CardTitle:  "Bot " + transferActionLabel(req.Action) + " Request Denied",
+			CardText:   fmt.Sprintf("Denied by @%s. The request to %s bot **@%s** was not approved.", actingUser.Username, verb, req.BotUsername),
 			StatusLine: outcome,
 		})
 	}
@@ -466,6 +466,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 			partialErrors = append(partialErrors, "any bot-owned webhooks may need manual cleanup (their hook IDs aren't recorded in the bot index)")
 		}
 		p.retireBotIndex(req.BotUserID)
+		p.clearOrphanNotice("bot", req.BotUserID)
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
 		p.auditTransferApproved(cards, req, actingUser, requester, revoked, 0, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -482,6 +483,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		return p.restoreBotTransferAfterFailure(req, requester, cards, rawReq, key, assignErr)
 	}
 	p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID)
+	p.clearOrphanNotice("bot", req.BotUserID)
 
 	var tokenValue string
 	var tokenExpiresAt int64

@@ -29,12 +29,12 @@ func newTestPlugin(api *plugintest.API) *Plugin {
 	p.botUserID = "bot-user-id"
 	p.auditSink = decisionCardsOnly(p)
 	p.setConfiguration(&configuration{
-		AllowChannelRequests:      true,
-		AllowChannelAdminRequests: true,
-		AllowTeamRequests:         true,
-		AllowTeamAdminRequests:    true,
-		AllowTeamMemberRequests:   true,
-		AllowTeamGuestRequests:    true,
+		AllowChannelRequests:         true,
+		AllowChannelAdminRequests:    true,
+		AllowTeamRequests:            true,
+		AllowTeamAdminRequests:       true,
+		AllowTeamMemberRequests:      true,
+		AllowTeamGuestRequests:       true,
 		AllowBotTokenRequests:        true,
 		AllowWebhookRequests:         true,
 		AllowBugReportRequests:       true,

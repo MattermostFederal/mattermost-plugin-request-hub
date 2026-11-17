@@ -52,6 +52,7 @@ test.describe('BotTransferModal', () => {
         await mount(<StoreHarness pluginState={botOpen}><BotTransferModal/></StoreHarness>);
         await expect(page.getByText(BOT_TITLE)).toBeVisible();
         await page.getByRole('button', {name: 'Submit request'}).click();
+
         // Auto-selects the only bot; still needs a new owner.
         await expect(page.getByRole('alert')).toHaveText('Pick the new owner.');
     });
@@ -60,7 +61,7 @@ test.describe('BotTransferModal', () => {
         await routeAssets(page, botsPayload);
         await mount(<StoreHarness pluginState={botOpen}><BotTransferModal/></StoreHarness>);
         await page.getByLabel('Action').selectOption('retire');
-        await expect(page.getByText('New owner')).toBeHidden();
+        await expect(page.getByPlaceholder('Type a name…')).toBeHidden();
         await expect(page.getByText('Rotate the access token', {exact: false})).toBeHidden();
     });
 
@@ -148,7 +149,7 @@ test.describe('WebhookTransferModal', () => {
         });
         await mount(<StoreHarness pluginState={webhookOpen}><WebhookTransferModal/></StoreHarness>);
         await page.getByLabel('Action').selectOption('retire_only');
-        await expect(page.getByText('New owner')).toBeHidden();
+        await expect(page.getByPlaceholder('Type a name…')).toBeHidden();
         await page.getByRole('button', {name: 'Submit request'}).click();
         await expect(page.getByText('Your request was submitted for approval.')).toBeVisible();
         expect(sent).toEqual({

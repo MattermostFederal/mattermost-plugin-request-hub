@@ -267,30 +267,30 @@ func (p *Plugin) botHomeBlocker(req *botRequest, requester *model.User) string {
 // what was declared for it, so the bot can be listed and traced by its user
 // ID even after the request's history is gone.
 type botIndexEntry struct {
-	BotUserID          string         `json:"bot_user_id"`
-	RequestID          string         `json:"request_id"`
-	Username           string         `json:"username"`
-	DisplayName        string         `json:"display_name,omitempty"`
-	RequesterID        string         `json:"requester_id"`
-	OwnerUserID        string         `json:"owner_user_id,omitempty"`
-	CreatedAt          int64          `json:"created_at"`
-	RequestedAt        int64          `json:"requested_at,omitempty"`
-	ApprovedBy         string         `json:"approved_by,omitempty"`
-	Purpose            string         `json:"purpose,omitempty"`
-	PrivilegeLevel     string         `json:"privilege_level,omitempty"`
-	DataIngestion      string         `json:"data_ingestion,omitempty"`
-	HostingEnv         string         `json:"hosting_env,omitempty"`
-	HostingOtherDetail string         `json:"hosting_other_detail,omitempty"`
-	ArchitectureURL    string         `json:"architecture_url,omitempty"`
-	IntegrationURL     string         `json:"integration_endpoint,omitempty"`
-	HomeTeamID         string         `json:"home_team_id,omitempty"`
-	HomeChannelID      string         `json:"home_channel_id,omitempty"`
+	BotUserID          string `json:"bot_user_id"`
+	RequestID          string `json:"request_id"`
+	Username           string `json:"username"`
+	DisplayName        string `json:"display_name,omitempty"`
+	RequesterID        string `json:"requester_id"`
+	OwnerUserID        string `json:"owner_user_id,omitempty"`
+	CreatedAt          int64  `json:"created_at"`
+	RequestedAt        int64  `json:"requested_at,omitempty"`
+	ApprovedBy         string `json:"approved_by,omitempty"`
+	Purpose            string `json:"purpose,omitempty"`
+	PrivilegeLevel     string `json:"privilege_level,omitempty"`
+	DataIngestion      string `json:"data_ingestion,omitempty"`
+	HostingEnv         string `json:"hosting_env,omitempty"`
+	HostingOtherDetail string `json:"hosting_other_detail,omitempty"`
+	ArchitectureURL    string `json:"architecture_url,omitempty"`
+	IntegrationURL     string `json:"integration_endpoint,omitempty"`
+	HomeTeamID         string `json:"home_team_id,omitempty"`
+	HomeChannelID      string `json:"home_channel_id,omitempty"`
 	// HasToken / HasIncomingWebhook / HasOutgoingWebhook record what was
 	// issued with the bot so inventory can name auth and webhook ownership.
-	HasToken            bool           `json:"has_token,omitempty"`
-	HasIncomingWebhook  bool           `json:"has_incoming_webhook,omitempty"`
-	HasOutgoingWebhook  bool           `json:"has_outgoing_webhook,omitempty"`
-	Compliance          *botCompliance `json:"compliance,omitempty"`
+	HasToken           bool           `json:"has_token,omitempty"`
+	HasIncomingWebhook bool           `json:"has_incoming_webhook,omitempty"`
+	HasOutgoingWebhook bool           `json:"has_outgoing_webhook,omitempty"`
+	Compliance         *botCompliance `json:"compliance,omitempty"`
 	// RetiredAt marks a bot retired by a transfer/retire ticket without
 	// dropping the index, so audits and the orphan scanner skip it. We keep
 	// the row (rather than deleting the key) so the inventory still shows a
@@ -348,10 +348,10 @@ func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID strin
 		HostingEnv: req.HostingEnv, HostingOtherDetail: req.HostingOtherDetail,
 		ArchitectureURL: req.ArchitectureURL, IntegrationURL: req.IntegrationURL,
 		HomeTeamID: req.HomeTeamID, HomeChannelID: req.HomeChannelID,
-		HasToken: req.RequestToken,
+		HasToken:           req.RequestToken,
 		HasIncomingWebhook: req.IncomingWebhookChannelID != "",
 		HasOutgoingWebhook: req.OutgoingWebhookChannelID != "",
-		Compliance: req.Compliance,
+		Compliance:         req.Compliance,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {

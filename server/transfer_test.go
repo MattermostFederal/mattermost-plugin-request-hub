@@ -275,7 +275,7 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 			ID: "t1", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
 			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
 			CallbackURL: "https://hooks.example.com/from-index",
-			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+			Action:      transferActionRetireRecreate, NewOwnerUserID: "u_new",
 		}
 		res := p.fulfillWebhookRetireRecreate(req,
 			&model.User{Id: "admin1", Username: "admin"},

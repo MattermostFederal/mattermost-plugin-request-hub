@@ -169,10 +169,10 @@ func (p *Plugin) submitBugReportRequest(requesterID, category, aboutKind, aboutO
 		CreatedAt:        model.GetMillis(),
 	}
 	sa.built(req, requester)
-	if err := p.reservePending(pendingKindBugReport, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
+	if err = p.reservePending(pendingKindBugReport, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
 		return "", err
 	}
-	if err := p.storeBugReportRequest(req); err != nil {
+	if err = p.storeBugReportRequest(req); err != nil {
 		p.releasePending(pendingKindBugReport, req.RequesterID, req.ID)
 		p.API.LogError("failed to store bug report", "error", err.Error())
 		return "", errors.New("could not save your report; try again")
@@ -343,9 +343,9 @@ func (p *Plugin) decideAcknowledgeBugReport(actingUserID, requestID, clickedPost
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Acknowledged: true, ApproverUsername: actingUser.Username,
-		CardTitle:  "Report Acknowledged",
-		CardText:   fmt.Sprintf("Acknowledged by @%s. Thanks for the report.", actingUser.Username),
-		StatusLine: outcome,
+		CardTitle:   "Report Acknowledged",
+		CardText:    fmt.Sprintf("Acknowledged by @%s. Thanks for the report.", actingUser.Username),
+		StatusLine:  outcome,
 		ThreadReply: fmt.Sprintf("✅ **Acknowledged** by @%s.", actingUser.Username),
 	})
 }

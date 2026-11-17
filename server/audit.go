@@ -70,15 +70,15 @@ const (
 
 // History statuses: where a request ended up, or pending while it is open.
 const (
-	historyPending   = "pending"
-	historyApproved  = "approved"
-	historyDenied    = "denied"
-	historyWithdrawn     = "withdrawn"
-	historyAcknowledged  = "acknowledged"
-	historyExpired       = "expired"
-	historyFailed    = "failed"
-	historyLost      = "lost"
-	historyClosed    = "closed"
+	historyPending      = "pending"
+	historyApproved     = "approved"
+	historyDenied       = "denied"
+	historyWithdrawn    = "withdrawn"
+	historyAcknowledged = "acknowledged"
+	historyExpired      = "expired"
+	historyFailed       = "failed"
+	historyLost         = "lost"
+	historyClosed       = "closed"
 )
 
 // auditNever marks an event that is never posted to the audit channel.

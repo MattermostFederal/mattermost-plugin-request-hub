@@ -115,20 +115,20 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		assetType: "webhook", assetID: hookID,
 		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.ChannelID,
 	}
-	if err := p.canNominateTransfer(requesterID, asset); err != nil {
+	if err = p.canNominateTransfer(requesterID, asset); err != nil {
 		return "", err
 	}
 
 	newOwnerID := strings.TrimSpace(in.NewOwnerUserID)
 	if webhookTransferNeedsNewOwner(action) {
-		if err := p.checkTransferNewOwner(newOwnerID); err != nil {
+		if err = p.checkTransferNewOwner(newOwnerID); err != nil {
 			return "", err
 		}
 	} else {
 		newOwnerID = ""
 	}
 	note := strings.TrimSpace(in.Note)
-	if err := checkTextLen("note", note, maxTransferNoteLen); err != nil {
+	if err = checkTextLen("note", note, maxTransferNoteLen); err != nil {
 		return "", err
 	}
 	reason := strings.TrimSpace(strings.ToLower(in.Reason))
@@ -364,8 +364,8 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: false, ApproverUsername: actingUser.Username,
-			CardTitle: "Webhook " + label + " Request Denied",
-			CardText:  fmt.Sprintf("Denied by @%s. The %s request for the %s webhook **%s** was not approved.", actingUser.Username, strings.ToLower(label), req.WebhookType, escapeMarkdown(req.DisplayName)),
+			CardTitle:  "Webhook " + label + " Request Denied",
+			CardText:   fmt.Sprintf("Denied by @%s. The %s request for the %s webhook **%s** was not approved.", actingUser.Username, strings.ToLower(label), req.WebhookType, escapeMarkdown(req.DisplayName)),
 			StatusLine: outcome,
 		})
 	}
@@ -407,6 +407,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 			partialErrors = append(partialErrors, "Mattermost did not update the webhook creator: "+err.Error()+" — the RH index records the new owner")
 		}
 		p.updateWebhookIndexOwner(req.HookID, req.NewOwnerUserID)
+		p.clearOrphanNotice("webhook", req.HookID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** reassigned to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -421,6 +422,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 			return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
 		}
 		p.retireWebhookIndex(req.HookID)
+		p.clearOrphanNotice("webhook", req.HookID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** retired.", req.WebhookType, escapeMarkdown(req.DisplayName))
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -487,6 +489,7 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		})
 	}
 	p.writeWebhookIndex(synthetic, newHookID, actingUser.Id)
+	p.clearOrphanNotice("webhook", req.HookID)
 
 	outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** recreated under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 	result := p.finish(cards, "", outcome, ticketClose{

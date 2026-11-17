@@ -16,8 +16,8 @@ const CHANNEL_SUBMITTED = 'Your channel request has been submitted for approval.
 // Every subcommand in the help table with the default settings (team guest
 // requests are off by default).
 const DEFAULT_SUBCOMMANDS = [
-    'approve', 'audit', 'bot', 'channel', 'channel-admin', 'deny', 'docs', 'exercise', 'help', 'list', 'prefixes',
-    'team', 'team-admin', 'team-member', 'webhook-incoming', 'webhook-outgoing',
+    'approve', 'audit', 'bot', 'bug', 'channel', 'channel-admin', 'deny', 'docs', 'exercise', 'help', 'list', 'prefixes',
+    'team', 'team-admin', 'team-member', 'webhook-incoming', 'webhook-outgoing', 'withdraw',
 ];
 
 // The reply for arguments readArgs or a flag helper can't use.
@@ -339,7 +339,9 @@ test.describe('inline request forms refuse what they cannot submit', () => {
                 ['list', 'Every request type is currently disabled by an administrator.'],
                 ['list approvals', 'Every request type is currently disabled by an administrator.'],
             ]);
-            expect(helpSubcommands(await hub.slash(user.username, 'help'))).toEqual(['approve', 'audit', 'deny', 'docs', 'exercise', 'help', 'list']);
+            expect(helpSubcommands(await hub.slash(user.username, 'help'))).toEqual([
+                'approve', 'audit', 'deny', 'docs', 'exercise', 'help', 'list', 'withdraw',
+            ]);
         });
         await expectNoRequest(hub, user);
     });

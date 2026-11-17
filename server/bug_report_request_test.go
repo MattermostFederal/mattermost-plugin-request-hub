@@ -34,7 +34,7 @@ func storedBugReport(t *testing.T, store map[string][]byte) *bugReportRequest {
 	req := &bugReportRequest{
 		ID: model.NewId(), RequesterID: "u_req", Category: bugReportCategoryBug,
 		AboutKind: pendingKindChannel, AboutOptions: "prefix ops-", Description: "mobile buttons noop",
-		CreatedAt: model.GetMillis(),
+		CreatedAt:      model.GetMillis(),
 		ApprovalPostID: "card1", ApprovalChannelID: "auditch", DMRootPostID: "dmroot", DMChannelID: "dm1",
 	}
 	store[kvBugReportRequestPrefix+req.ID] = recordJSON(t, req)
@@ -65,8 +65,8 @@ func TestSubmitBugReportRequest_PostsToAuditChannel(t *testing.T) {
 
 	var id string
 	for key := range store {
-		if strings.HasPrefix(key, kvBugReportRequestPrefix) {
-			id = strings.TrimPrefix(key, kvBugReportRequestPrefix)
+		if rest, ok := strings.CutPrefix(key, kvBugReportRequestPrefix); ok {
+			id = rest
 			break
 		}
 	}
