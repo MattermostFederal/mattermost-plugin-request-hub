@@ -1,10 +1,12 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +52,10 @@ func TestWebhookIndexRoundTrip(t *testing.T) {
 	memKV(api)
 	p := newTestPlugin(api)
 
-	req := &webhookRequest{ID: "r1", RequesterID: "u_req", WebhookType: webhookTypeIncoming, ChannelID: "ch1", TeamID: "t1", DisplayName: "Alerts"}
+	req := &webhookRequest{
+		ID: "r1", RequesterID: "u_req", WebhookType: webhookTypeOutgoing, ChannelID: "ch1", TeamID: "t1",
+		DisplayName: "Relay", CallbackURL: "https://hooks.example.com/out",
+	}
 	p.writeWebhookIndex(req, "hook1", "admin1")
 
 	got, err := p.loadWebhookIndex("hook1")
@@ -58,7 +63,8 @@ func TestWebhookIndexRoundTrip(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, "u_req", got.OwnerUserID)
 	require.Equal(t, "u_req", got.RequesterID)
-	require.Equal(t, webhookTypeIncoming, got.WebhookType)
+	require.Equal(t, webhookTypeOutgoing, got.WebhookType)
+	require.Equal(t, "https://hooks.example.com/out", got.CallbackURL)
 	require.Zero(t, got.RetiredAt)
 
 	p.updateWebhookIndexOwner("hook1", "u_new")
@@ -219,4 +225,105 @@ func TestNoticeOrphanSkipsWhenCardExists(t *testing.T) {
 func TestBotIndexOwnerFallsBackToRequester(t *testing.T) {
 	require.Equal(t, "owner", botIndexOwner(botIndexEntry{OwnerUserID: "owner", RequesterID: "req"}))
 	require.Equal(t, "req", botIndexOwner(botIndexEntry{RequesterID: "req"}))
+}
+
+func TestResolveOutgoingWebhookCallback_Seam(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	p := newTestPlugin(api)
+	p.getOutgoingWebhookCallbackFn = func(hookID, adminUserID string) (string, error) {
+		require.Equal(t, "h1", hookID)
+		require.Equal(t, "admin1", adminUserID)
+		return "https://cb.example/out", nil
+	}
+	got, err := p.resolveOutgoingWebhookCallback("h1", "admin1")
+	require.NoError(t, err)
+	require.Equal(t, "https://cb.example/out", got)
+}
+
+func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	memKV(api)
+	stubSiteURL(api, "http://localhost:8065")
+	p := newTestPlugin(api)
+	p.botUserID = "bot"
+	p.auditSink = func(auditEntry, auditEventSpec) {}
+
+	var gotCallback string
+	p.deleteWebhookFn = func(webhookType, hookID string) error {
+		require.Equal(t, webhookTypeOutgoing, webhookType)
+		require.Equal(t, "old-hook", hookID)
+		return nil
+	}
+	p.createWebhookFn = func(req *webhookRequest, adminUserID string) (string, string, error) {
+		gotCallback = req.CallbackURL
+		require.Equal(t, "u_new", req.RequesterID)
+		require.Equal(t, webhookTypeOutgoing, req.WebhookType)
+		return "Outgoing webhook created.", "new-hook", nil
+	}
+	api.On("GetUser", mock.Anything).Return(&model.User{Id: "u_new", Username: "newowner"}, nil).Maybe()
+	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm1"}, nil).Maybe()
+	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
+	api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
+	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+	api.On("KVDelete", mock.Anything).Return(nil).Maybe()
+
+	t.Run("from request snapshot", func(t *testing.T) {
+		gotCallback = ""
+		req := &webhookTransferRequest{
+			ID: "t1", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			CallbackURL: "https://hooks.example.com/from-index",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t1", "", ""), nil, kvWebhookTransferRequestPrefix+"t1")
+		require.Equal(t, "https://hooks.example.com/from-index", gotCallback)
+		require.Contains(t, res.Outcome, "recreated")
+	})
+
+	t.Run("live fetch when snapshot empty", func(t *testing.T) {
+		gotCallback = ""
+		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
+			require.Equal(t, "old-hook", hookID)
+			return "https://hooks.example.com/live", nil
+		}
+		req := &webhookTransferRequest{
+			ID: "t2", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t2", "", ""), nil, kvWebhookTransferRequestPrefix+"t2")
+		require.Equal(t, "https://hooks.example.com/live", gotCallback)
+		require.Contains(t, res.Outcome, "recreated")
+	})
+
+	t.Run("blocks delete when callback cannot be resolved", func(t *testing.T) {
+		deleted := false
+		p.deleteWebhookFn = func(string, string) error {
+			deleted = true
+			return nil
+		}
+		p.getOutgoingWebhookCallbackFn = func(string, string) (string, error) {
+			return "", errors.New("hook gone")
+		}
+		raw := []byte(`{"id":"t3"}`)
+		req := &webhookTransferRequest{
+			ID: "t3", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t3", "", ""), raw, kvWebhookTransferRequestPrefix+"t3")
+		require.False(t, deleted, "must not delete before callback is known")
+		require.True(t, res.audited)
+		require.True(t, strings.Contains(res.Reply, "Couldn't") || strings.Contains(res.Reply, "hook gone") || res.Banner != nil)
+	})
 }

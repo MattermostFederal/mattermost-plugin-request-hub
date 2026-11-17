@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,6 +30,9 @@ type webhookTransferRequest struct {
 	DisplayName string `json:"display_name,omitempty"`
 	ChannelID   string `json:"channel_id,omitempty"`
 	TeamID      string `json:"team_id,omitempty"`
+	// CallbackURL is copied from the webhook index (outgoing only) so
+	// retire+recreate can rebuild without a live GetOutgoingWebhook.
+	CallbackURL string `json:"callback_url,omitempty"`
 	// Action is reassign / retire_recreate / retire_only.
 	Action string `json:"action"`
 	// NewOwnerUserID is required for reassign and retire_recreate.
@@ -144,6 +148,7 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		DisplayName:    index.DisplayName,
 		ChannelID:      index.ChannelID,
 		TeamID:         index.TeamID,
+		CallbackURL:    strings.TrimSpace(index.CallbackURL),
 		Action:         action,
 		NewOwnerUserID: newOwnerID,
 		Reason:         reason,
@@ -432,7 +437,26 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 
 // fulfillWebhookRetireRecreate deletes the old hook and creates a new one
 // owned by the successor, DMing an incoming webhook's URL to the new owner.
+// For outgoing hooks the callback URL is resolved before delete (index →
+// request snapshot → live GetOutgoingWebhook) so recreate cannot orphan
+// the integration without a callback.
 func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string) decisionResult {
+	callbackURL := strings.TrimSpace(req.CallbackURL)
+	if req.WebhookType == webhookTypeOutgoing {
+		if callbackURL == "" {
+			var resolveErr error
+			callbackURL, resolveErr = p.resolveOutgoingWebhookCallback(req.HookID, actingUser.Id)
+			if resolveErr != nil || callbackURL == "" {
+				err := resolveErr
+				if err == nil {
+					err = errors.New("outgoing webhook has no callback URL recorded")
+				}
+				return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
+			}
+			req.CallbackURL = callbackURL
+		}
+	}
+
 	if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil {
 		return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
 	}
@@ -446,6 +470,7 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		TeamID:      req.TeamID,
 		DisplayName: req.DisplayName,
 		Description: "Recreated for transfer to a new owner",
+		CallbackURL: callbackURL,
 	}
 	var partialErrors []string
 	dmMsg, newHookID, createErr := p.createWebhookForRequest(synthetic, actingUser.Id)
@@ -472,13 +497,42 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	})
 	p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 
-	// Only an incoming webhook carries a secret URL; DM it to the new owner.
-	if req.WebhookType == webhookTypeIncoming && dmMsg != "" {
-		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{dmMsg, "⚠️ **Save this now.** This message auto-deletes in ~72 hours."}, true) {
-			p.API.LogError("failed to deliver recreated webhook URL to new owner", "hook_id", newHookID, "new_owner_id", req.NewOwnerUserID)
+	switch req.WebhookType {
+	case webhookTypeIncoming:
+		if dmMsg != "" {
+			if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{dmMsg, "⚠️ **Save this now.** This message auto-deletes in ~72 hours."}, true) {
+				p.API.LogError("failed to deliver recreated webhook URL to new owner", "hook_id", newHookID, "new_owner_id", req.NewOwnerUserID)
+			}
 		}
+	case webhookTypeOutgoing:
+		// Outgoing hooks have no secret URL in the create DM; tell the new
+		// owner the callback was preserved so they know recreate succeeded.
+		notice := fmt.Sprintf("Your outgoing webhook **%s** was recreated under your account.\n**Callback URL (unchanged):** `%s`",
+			escapeMarkdown(req.DisplayName), escapeMarkdown(callbackURL))
+		_ = p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{notice}, false)
 	}
 	return result
+}
+
+// resolveOutgoingWebhookCallback returns the first callback URL for an
+// outgoing hook: live Mattermost GetOutgoingWebhook, then empty.
+func (p *Plugin) resolveOutgoingWebhookCallback(hookID, adminUserID string) (string, error) {
+	if p.getOutgoingWebhookCallbackFn != nil {
+		return p.getOutgoingWebhookCallbackFn(hookID, adminUserID)
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	hook, _, apiErr := client.GetOutgoingWebhook(context.Background(), hookID)
+	if apiErr != nil {
+		return "", errors.Wrap(apiErr, "failed to load outgoing webhook for recreate")
+	}
+	if hook == nil || len(hook.CallbackURLs) == 0 {
+		return "", errors.New("outgoing webhook has no callback URLs")
+	}
+	return strings.TrimSpace(hook.CallbackURLs[0]), nil
 }
 
 func (p *Plugin) restoreWebhookTransferAfterFailure(req *webhookTransferRequest, requester *model.User, cards decisionCards, rawReq []byte, key string, cause error) decisionResult {

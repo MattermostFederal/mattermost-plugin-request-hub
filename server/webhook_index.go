@@ -27,6 +27,9 @@ type webhookIndexEntry struct {
 	ChannelID   string `json:"channel_id,omitempty"`
 	TeamID      string `json:"team_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+	// CallbackURL is the outgoing webhook callback (first URL). Stored so
+	// retire+recreate can rebuild the hook without a live GetOutgoingWebhook.
+	CallbackURL string `json:"callback_url,omitempty"`
 	OwnerUserID string `json:"owner_user_id"`
 	RequesterID string `json:"requester_id,omitempty"`
 	RequestID   string `json:"request_id,omitempty"`
@@ -51,6 +54,7 @@ func (p *Plugin) writeWebhookIndex(req *webhookRequest, hookID, approverID strin
 		ChannelID:   req.ChannelID,
 		TeamID:      req.TeamID,
 		DisplayName: req.DisplayName,
+		CallbackURL: strings.TrimSpace(req.CallbackURL),
 		OwnerUserID: req.RequesterID,
 		RequesterID: req.RequesterID,
 		RequestID:   req.ID,

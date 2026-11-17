@@ -75,6 +75,9 @@ type Plugin struct {
 	// updateWebhookOwnerFn reassigns a standalone webhook's creator/owner via
 	// REST (nil in production).
 	updateWebhookOwnerFn func(webhookType, hookID, newOwnerID, adminUserID string) error
+	// getOutgoingWebhookCallbackFn returns the first callback URL for an
+	// outgoing hook on retire+recreate (nil in production → live REST Get).
+	getOutgoingWebhookCallbackFn func(hookID, adminUserID string) (string, error)
 }
 
 func (p *Plugin) OnActivate() error {
