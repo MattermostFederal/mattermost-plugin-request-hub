@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 
 import {readSiblingSetting} from './ApprovalChannelPicker';
 import {parseRows} from './PrefixEditor';
@@ -138,6 +138,17 @@ export const PrefixDefaultsEditor: React.FC<Props> = (props) => {
     // Members are edited as free text and parsed on blur, so typing a
     // comma or space doesn't fight the input.
     const [memberDrafts, setMemberDrafts] = useState<Record<string, string>>({});
+
+    // Pick up a value changed from outside the editor (System Console reset,
+    // reload after save) so the next edit doesn't write the stale map back.
+    // Our own edits echo back unchanged and are skipped, which keeps drafts.
+    useEffect(() => {
+        if ((value ?? '') === serializeDefaults(map)) {
+            return;
+        }
+        setMap(parseDefaults(value ?? ''));
+        setMemberDrafts({});
+    }, [value]);
 
     const prefixes = useMemo(
         () => parseRows(readSiblingSetting(props, 'ChannelNamePrefixes')).map((r) => r.prefix),

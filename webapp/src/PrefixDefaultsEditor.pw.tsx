@@ -77,4 +77,28 @@ test.describe('PrefixDefaultsEditor', () => {
         await expect(unused).toBeHidden();
         expect(changes.at(-1)).toEqual(['ChannelPrefixDefaults', '{"sec-":{"header":"y"}}']);
     });
+
+    test('re-reads the value when it changes from outside', async ({mount, page}) => {
+        const changes: Change[] = [];
+        const component = await mount(<PrefixDefaultsEditor
+            id='ChannelPrefixDefaults'
+            value='{"sec-": {"header": "Old"}}'
+            onChange={(id, v) => changes.push([id, v])}
+            currentState={consoleState('sec-|Security|32')}
+                                      />);
+        await page.getByRole('button', {name: /sec-/}).click();
+        await page.getByLabel('Default members', {exact: false}).fill('unsaved');
+
+        await component.update(<PrefixDefaultsEditor
+            id='ChannelPrefixDefaults'
+            value='{"sec-": {"channel_type": "O"}}'
+            onChange={(id, v) => changes.push([id, v])}
+            currentState={consoleState('sec-|Security|32')}
+                               />);
+        await expect(page.getByTestId('prefix-defaults-sec-')).toContainText('always public');
+        await expect(page.getByLabel('Default members', {exact: false})).toHaveValue('');
+
+        await page.getByLabel('Channel header').fill('New');
+        expect(changes.at(-1)).toEqual(['ChannelPrefixDefaults', '{"sec-":{"channel_type":"O","header":"New"}}']);
+    });
 });
