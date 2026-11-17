@@ -326,7 +326,9 @@ func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) {
 	}
 	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
 		p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
+		return
 	}
+	p.trackBotIndexKey(entry.BotUserID)
 }
 
 // writeBotIndex records a bot created for req. Exercise bots are tracked
@@ -360,7 +362,9 @@ func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID strin
 	}
 	if appErr := p.API.KVSet(kvBotIndexPrefix+bot.UserId, data); appErr != nil {
 		p.API.LogError("failed to write bot index entry", "bot_user_id", bot.UserId, "request_id", req.ID, "error", appErr.Error())
+		return
 	}
+	p.trackBotIndexKey(bot.UserId)
 }
 
 // loadBotIndex returns the index entry for a bot, or nil when Request Hub
@@ -381,29 +385,26 @@ func (p *Plugin) loadBotIndex(botUserID string) (*botIndexEntry, error) {
 }
 
 // listBotIndex returns every bot index entry. Unreadable entries are
-// logged and skipped.
+// logged and skipped. Prefers the compact bot-index key list so pickers
+// do not page the entire plugin KV store.
 func (p *Plugin) listBotIndex() ([]botIndexEntry, error) {
+	keys, err := p.listBotIndexKeys()
+	if err != nil {
+		return nil, err
+	}
 	var out []botIndexEntry
-	for page := 0; ; page++ {
-		keys, appErr := p.API.KVList(page, botIndexPageSize)
-		if appErr != nil {
-			return nil, appErr
+	for _, key := range keys {
+		if !strings.HasPrefix(key, kvBotIndexPrefix) {
+			continue
 		}
-		for _, key := range keys {
-			if !strings.HasPrefix(key, kvBotIndexPrefix) {
-				continue
-			}
-			entry, err := p.loadBotIndex(strings.TrimPrefix(key, kvBotIndexPrefix))
-			if err != nil {
-				p.API.LogWarn("skipping unreadable bot index entry", "key", key, "error", err.Error())
-				continue
-			}
-			if entry != nil {
-				out = append(out, *entry)
-			}
+		entry, loadErr := p.loadBotIndex(strings.TrimPrefix(key, kvBotIndexPrefix))
+		if loadErr != nil {
+			p.API.LogWarn("skipping unreadable bot index entry", "key", key, "error", loadErr.Error())
+			continue
 		}
-		if len(keys) < botIndexPageSize {
-			return out, nil
+		if entry != nil {
+			out = append(out, *entry)
 		}
 	}
+	return out, nil
 }

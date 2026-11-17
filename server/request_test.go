@@ -85,7 +85,7 @@ func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvApprovalCardsPrefix)
 	})).Return(nil).Maybe()
-	// Open-request / token-expiry indexes updated on store/claim (best-effort).
+	// Open-request / token-expiry / bot+webhook index key lists (best-effort).
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
@@ -94,6 +94,14 @@ func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
 	api.On("KVDelete", kvTokenExpiryIndex).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvBotIndexKeys).Return(nil).Maybe()
+	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvWebhookIndexKeys).Return(nil).Maybe()
 	// TA visibility seed set — mark/clear during AddChannelMember / eviction.
 	api.On("KVGet", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
@@ -215,6 +223,12 @@ func stubLogLevels(api *plugintest.API) {
 	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
 }
 
 // stubApprovalTeamRecord lets approvalTeam read and write its record of the

@@ -73,6 +73,7 @@ func (p *Plugin) storeWebhookIndex(entry webhookIndexEntry) error {
 	if appErr := p.API.KVSet(webhookIndexKey(entry.HookID), data); appErr != nil {
 		return errors.Wrap(appErr, "failed to store webhook index entry")
 	}
+	p.trackWebhookIndexKey(entry.HookID)
 	return nil
 }
 
@@ -93,31 +94,28 @@ func (p *Plugin) loadWebhookIndex(hookID string) (*webhookIndexEntry, error) {
 }
 
 // listWebhookIndex returns every webhook index entry. Unreadable entries are
-// logged and skipped.
+// logged and skipped. Prefers the compact webhook-index key list so pickers
+// do not page the entire plugin KV store.
 func (p *Plugin) listWebhookIndex() ([]webhookIndexEntry, error) {
+	keys, err := p.listWebhookIndexKeys()
+	if err != nil {
+		return nil, err
+	}
 	var out []webhookIndexEntry
-	for page := 0; ; page++ {
-		keys, appErr := p.API.KVList(page, webhookIndexPageSize)
-		if appErr != nil {
-			return nil, appErr
+	for _, key := range keys {
+		if !strings.HasPrefix(key, kvWebhookIndexPrefix) {
+			continue
 		}
-		for _, key := range keys {
-			if !strings.HasPrefix(key, kvWebhookIndexPrefix) {
-				continue
-			}
-			entry, err := p.loadWebhookIndex(strings.TrimPrefix(key, kvWebhookIndexPrefix))
-			if err != nil {
-				p.API.LogWarn("skipping unreadable webhook index entry", "key", key, "error", err.Error())
-				continue
-			}
-			if entry != nil {
-				out = append(out, *entry)
-			}
+		entry, loadErr := p.loadWebhookIndex(strings.TrimPrefix(key, kvWebhookIndexPrefix))
+		if loadErr != nil {
+			p.API.LogWarn("skipping unreadable webhook index entry", "key", key, "error", loadErr.Error())
+			continue
 		}
-		if len(keys) < webhookIndexPageSize {
-			return out, nil
+		if entry != nil {
+			out = append(out, *entry)
 		}
 	}
+	return out, nil
 }
 
 // retireWebhookIndex marks a hook retired (best-effort).

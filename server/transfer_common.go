@@ -197,6 +197,13 @@ func (p *Plugin) updateWebhookOwner(webhookType, hookID, newOwnerID, adminUserID
 		if _, _, upErr := client.UpdateOutgoingWebhook(ctx, hook); upErr != nil {
 			return errors.Wrap(upErr, "failed to update outgoing webhook owner")
 		}
+		after, _, afterErr := client.GetOutgoingWebhook(ctx, hookID)
+		if afterErr != nil {
+			return errors.Wrap(afterErr, "failed to verify outgoing webhook owner after update")
+		}
+		if after == nil || after.CreatorId != newOwnerID {
+			return errors.New("Mattermost did not change the outgoing webhook creator (server keeps the original owner); use Retire & recreate instead")
+		}
 	default:
 		return errors.Errorf("unknown webhook type %q", webhookType)
 	}

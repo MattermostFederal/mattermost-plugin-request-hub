@@ -75,7 +75,11 @@ func (p *Plugin) decideWithdraw(actingUserID, requestID, clickedPostID string) d
 	if res, ok := p.claimRecord(pendingKinds[kind].kvPrefix+requestID, raw, cards, "withdrawn request"); !ok {
 		return res
 	}
-	p.releasePending(kind, requesterID, requestID)
+	if assetKey := transferPendingAssetKey(rec); assetKey != "" {
+		p.releaseTransferTicket(kind, requesterID, requestID, assetKey)
+	} else {
+		p.releasePending(kind, requesterID, requestID)
+	}
 
 	summary := p.summarize(p.getConfiguration(), kind, rec)
 	note := fmt.Sprintf("@%s withdrew their %s request", actingUser.Username, aKind(kind))

@@ -148,6 +148,9 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const ownerUsername = newOwner.split(',')[0]?.trim().replace(/^@/, '') ?? '';
 
     const submit = async () => {
+        if (submitting) {
+            return;
+        }
         if (!assetId) {
             setError(`Pick the ${kind} to act on.`);
             return;
@@ -269,7 +272,14 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                 id='transfer-action'
                                 className='form-control'
                                 value={action}
-                                onChange={(e) => setAction(e.target.value)}
+                                onChange={(e) => {
+                                    const next = e.target.value;
+                                    setAction(next);
+                                    if (next !== 'transfer') {
+                                        setRotate(false);
+                                        setRotateTouched(false);
+                                    }
+                                }}
                             >
                                 {actions.map(([value, label]) => (
                                     <option

@@ -42,6 +42,9 @@ func stubBotHome(api *plugintest.API) {
 // stubBotIndexWrite accepts the bot index entry written on approval.
 func stubBotIndexWrite(api *plugintest.API) {
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) }), mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
 }
 
 // homeBotApproval is a request with its security step done, a full
@@ -177,6 +180,7 @@ func TestBotRequestCommand_RefusesOutsideATeamChannel(t *testing.T) {
 
 func TestWriteAndLoadBotIndex(t *testing.T) {
 	api := &plugintest.API{}
+	stubLogs(api)
 	stubBotHome(api)
 	var stored []byte
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) }), mock.Anything).

@@ -422,17 +422,18 @@ func (p *Plugin) lostRequest(cards decisionCards, kind, requesterID, actingUsern
 // expiredRequest describes a pending request that was approved or denied
 // after it expired.
 type expiredRequest struct {
-	kvKey       string
-	raw         []byte
-	kind        string // pendingKind*
-	requestID   string
-	requesterID string
-	dmRootID    string // requester's ticket DM root
-	dmChannelID string
-	days        int
-	cardTitle   string // requester's ticket card
-	cardText    string
-	audit       string // audit line
+	kvKey            string
+	raw              []byte
+	kind             string // pendingKind*
+	requestID        string
+	requesterID      string
+	dmRootID         string // requester's ticket DM root
+	dmChannelID      string
+	days             int
+	transferAssetKey string // bot/webhook transfer pendingKey; releases the asset claim
+	cardTitle        string // requester's ticket card
+	cardText         string
+	audit            string // audit line
 }
 
 // expireRequest closes an expired request: it claims the record like an
@@ -442,7 +443,11 @@ func (p *Plugin) expireRequest(cards decisionCards, e expiredRequest) decisionRe
 	if res, ok := p.claimRecord(e.kvKey, e.raw, cards, "expired request"); !ok {
 		return res
 	}
-	p.releasePending(e.kind, e.requesterID, e.requestID)
+	if e.transferAssetKey != "" {
+		p.releaseTransferTicket(e.kind, e.requesterID, e.requestID, e.transferAssetKey)
+	} else {
+		p.releasePending(e.kind, e.requesterID, e.requestID)
+	}
 	// Expiry is the plugin's doing; whoever acted on the card only noticed.
 	expired := cards
 	expired.subject.actor = nil

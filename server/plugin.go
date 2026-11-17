@@ -73,7 +73,14 @@ type Plugin struct {
 	updateWebhookOwnerFn func(webhookType, hookID, newOwnerID, adminUserID string) error
 	// getOutgoingWebhookCallbackFn returns the first callback URL for an
 	// outgoing hook on retire+recreate (nil in production → live REST Get).
+	// Prefer getOutgoingWebhookForRecreateFn when tests need full fidelity.
 	getOutgoingWebhookCallbackFn func(hookID, adminUserID string) (string, error)
+	// getOutgoingWebhookForRecreateFn returns the live outgoing fields to copy
+	// on retire+recreate (nil in production → live REST Get).
+	getOutgoingWebhookForRecreateFn func(hookID, adminUserID string) (*outgoingWebhookRecreate, error)
+	// createOutgoingWebhookFromRecreateFn creates an outgoing hook from a
+	// recreate snapshot (nil in production → REST CreateOutgoingWebhook).
+	createOutgoingWebhookFromRecreateFn func(req *webhookRequest, snap *outgoingWebhookRecreate, adminUserID string) (dmMsg, hookID string, err error)
 }
 
 func (p *Plugin) OnActivate() error {
@@ -138,6 +145,8 @@ func (p *Plugin) OnActivate() error {
 		// plugin KV scan (histories, anchors, bot index, …).
 		p.rebuildOpenRequestIndex()
 		p.rebuildTokenExpiryIndex()
+		p.rebuildBotIndexKeys()
+		p.rebuildWebhookIndexKeys()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

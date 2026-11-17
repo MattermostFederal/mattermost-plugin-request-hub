@@ -35,6 +35,33 @@ func memKV(api *plugintest.API) map[string][]byte {
 		}
 		return keys
 	}, func(int, int) *model.AppError { return nil })
+	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(key string, old, value []byte) (bool, *model.AppError) {
+			cur, ok := store[key]
+			if old == nil {
+				if ok && len(cur) > 0 {
+					return false, nil
+				}
+				store[key] = value
+				return true, nil
+			}
+			if !ok || string(cur) != string(old) {
+				return false, nil
+			}
+			store[key] = value
+			return true, nil
+		},
+	).Maybe()
+	api.On("KVCompareAndDelete", mock.Anything, mock.Anything).Return(
+		func(key string, old []byte) (bool, *model.AppError) {
+			cur, ok := store[key]
+			if !ok || string(cur) != string(old) {
+				return false, nil
+			}
+			delete(store, key)
+			return true, nil
+		},
+	).Maybe()
 	return store
 }
 
@@ -44,6 +71,31 @@ func TestRotateDefaultOn(t *testing.T) {
 	require.True(t, rotateDefaultOn("  Offboarding  "))
 	require.False(t, rotateDefaultOn(transferReasonVoluntary))
 	require.False(t, rotateDefaultOn(""))
+}
+
+func TestClaimTransferAsset_CAS(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := fakeKV(api)
+	p := newTestPlugin(api)
+
+	require.NoError(t, p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-a"))
+	require.Equal(t, "req-a", string(store[transferAssetClaimKey(pendingKindBotTransfer, "bot1")]))
+
+	// Live holder blocks a second claim.
+	store[kvBotTransferRequestPrefix+"req-a"] = []byte(`{"id":"req-a"}`)
+	err := p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already")
+
+	// Stale holder (request gone) is overwritten.
+	delete(store, kvBotTransferRequestPrefix+"req-a")
+	require.NoError(t, p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-b"))
+	require.Equal(t, "req-b", string(store[transferAssetClaimKey(pendingKindBotTransfer, "bot1")]))
+
+	p.releaseTransferAssetClaim(pendingKindBotTransfer, "bot1", "req-b")
+	_, held := store[transferAssetClaimKey(pendingKindBotTransfer, "bot1")]
+	require.False(t, held)
 }
 
 func TestWebhookIndexRoundTrip(t *testing.T) {
@@ -253,11 +305,19 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
 	api.On("KVDelete", mock.Anything).Return(nil).Maybe()
 
-	t.Run("falls back to request snapshot when live fetch fails", func(t *testing.T) {
+	defaultDelete := p.deleteWebhookFn
+	t.Run("refuses when live fetch fails even if snapshot has a callback", func(t *testing.T) {
+		// Snapshot alone cannot prove triggers / extra callbacks were absent.
 		gotCallback = ""
+		deleted := false
+		p.deleteWebhookFn = func(string, string) error {
+			deleted = true
+			return nil
+		}
 		p.getOutgoingWebhookCallbackFn = func(string, string) (string, error) {
 			return "", errors.New("live unavailable")
 		}
+		raw := []byte(`{"id":"t1"}`)
 		req := &webhookTransferRequest{
 			ID: "t1", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
 			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
@@ -267,13 +327,16 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 		res := p.fulfillWebhookRetireRecreate(req,
 			&model.User{Id: "admin1", Username: "admin"},
 			&model.User{Id: "u_req", Username: "req"},
-			newDecisionCards("t1", "", ""), nil, kvWebhookTransferRequestPrefix+"t1")
-		require.Equal(t, "https://hooks.example.com/from-index", gotCallback)
-		require.Contains(t, res.Outcome, "recreated")
+			newDecisionCards("t1", "", ""), raw, kvWebhookTransferRequestPrefix+"t1")
+		require.False(t, deleted, "must not delete when live fields cannot be confirmed")
+		require.Empty(t, gotCallback)
+		require.True(t, res.audited)
+		p.deleteWebhookFn = defaultDelete
 	})
 
 	t.Run("prefers live callback over stale snapshot", func(t *testing.T) {
 		gotCallback = ""
+		p.deleteWebhookFn = defaultDelete
 		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
 			require.Equal(t, "old-hook", hookID)
 			return "https://hooks.example.com/live", nil
