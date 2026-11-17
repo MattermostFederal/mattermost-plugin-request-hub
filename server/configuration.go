@@ -108,6 +108,11 @@ type configuration struct {
 	// fallback.
 	ChannelNamePrefixes string
 
+	// ChannelPrefixDefaults is a JSON object keyed by prefix holding the
+	// channel defaults for that prefix (see prefixDefaults): visibility,
+	// purpose, header and default members.
+	ChannelPrefixDefaults string
+
 	// --- 3. Approver policy ---
 	AllowTeamAdminApprovers bool
 	// AllowApprovalTeamAdminsForTeamRequests lets Team Admins of the approval
@@ -199,6 +204,7 @@ type configuration struct {
 
 	// --- Parsed / computed (unexported) ---
 	prefixes            []channelPrefix
+	prefixDefaults      map[string]prefixDefaults
 	maxPending          int
 	expiryDays          int
 	tokenLifetimeMonths int
@@ -264,12 +270,7 @@ func (c *configuration) AuditChannelLevel() int {
 // that prefix's suffix rule. The longest matching prefix is used, as in
 // resolvePrefixedName.
 func (c *configuration) allowsChannelName(name string) bool {
-	var entry *channelPrefix
-	for i := range c.prefixes {
-		if strings.HasPrefix(name, c.prefixes[i].Prefix) && (entry == nil || len(c.prefixes[i].Prefix) > len(entry.Prefix)) {
-			entry = &c.prefixes[i]
-		}
-	}
+	entry := c.matchPrefix(name)
 	if entry == nil {
 		return false
 	}
@@ -398,6 +399,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	// entries are logged and skipped rather than failing the whole
 	// activation — a typo in one line should not wedge the plugin.
 	configuration.prefixes = parsePrefixList(configuration.ChannelNamePrefixes, p.API.LogError)
+	configuration.prefixDefaults = parsePrefixDefaults(configuration.ChannelPrefixDefaults, configuration.prefixes, p.API.LogError)
 	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
 	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
 	configuration.tokenLifetimeMonths = parseTokenLifetimeMonths(configuration.BotTokenLifetimeMonths, p.API.LogWarn)
@@ -449,8 +451,23 @@ func (p *Plugin) OnConfigurationChange() error {
 			if prevTeam != "" {
 				p.evictStalePrimaryVisibilityForNamedTeam(prevTeam)
 			}
+			if newTeam != "" && p.botUserID != "" {
+				// Set the new Approval team up now rather than on the first
+				// request or the next restart: all five shared channels,
+				// System Admins in each, and the security pool in bot and
+				// webhook channels, whatever the Team Admin toggles say.
+				for _, ch := range p.primaryTicketChannels() {
+					p.addSystemAdminsToChannel(ch.Id)
+				}
+				p.syncTwoStepApproverChannels()
+			}
 			if newTeam != "" {
 				p.syncPrimaryTeamAdminVisibility()
+			}
+			// The old Approval team's root channel is now a per-team one, and
+			// the new team's per-team channel is now the root one.
+			if p.botUserID != "" {
+				p.syncApprovalChannelDisplayNames()
 			}
 		}()
 	} else if taVisibilityTogglesChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {

@@ -265,4 +265,48 @@ test.describe('RequestChannelModal', () => {
             await expect(membersBox.getByText('@bob')).toBeVisible();
         });
     });
+    test.describe('prefix defaults', () => {
+        const withDefaults = [
+            {prefix: 'team-', description: 'Team channels', suffix_regex: ''},
+            {prefix: 'sec-', description: 'Security', suffix_regex: '', channel_type: 'P', default_purpose: 'SOC work'},
+        ];
+
+        test('locks the visibility the prefix forces and sends it', async ({mount, page}) => {
+            await routePrefixes(page, withDefaults);
+            await routeUsers(page);
+            let sent: Record<string, unknown> = {};
+            await page.route(`${API}/create`, async (route) => {
+                sent = route.request().postDataJSON();
+                await route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'Request sent for approval.'})});
+            });
+            await mount(<StoreHarness requestOpen={true}><RequestChannelModal/></StoreHarness>);
+
+            const visibility = page.getByLabel('Visibility');
+            await expect(visibility).toBeEnabled();
+            await visibility.selectOption('O');
+
+            await page.getByLabel('Domain prefix').selectOption('sec-');
+            await expect(visibility).toBeDisabled();
+            await expect(visibility).toHaveValue('P');
+            await expect(page.getByText('Channels under sec- are always private.')).toBeVisible();
+            await expect(page.getByLabel('Purpose (optional)')).toHaveAttribute('placeholder', 'Leave blank to use: SOC work');
+
+            await page.getByLabel('Channel name').fill('Phish');
+            await page.getByRole('button', {name: 'Submit request'}).click();
+            await expect(page.getByText('Request sent for approval.')).toBeVisible();
+            expect(sent.channel_type).toBe('P');
+            expect(sent.purpose).toBe('');
+        });
+
+        test('unlocks the visibility for a prefix without defaults', async ({mount, page}) => {
+            await routePrefixes(page, withDefaults);
+            await mount(<StoreHarness requestOpen={true}><RequestChannelModal/></StoreHarness>);
+
+            await page.getByLabel('Domain prefix').selectOption('sec-');
+            await page.getByLabel('Domain prefix').selectOption('team-');
+            await expect(page.getByLabel('Visibility')).toBeEnabled();
+            await expect(page.getByLabel('Visibility')).toHaveValue('O');
+            await expect(page.getByLabel('Purpose (optional)')).not.toHaveAttribute('placeholder', /.+/);
+        });
+    });
 });

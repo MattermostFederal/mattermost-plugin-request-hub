@@ -85,7 +85,7 @@ const PRESET_PACKS: Array<{name: string; description: string; rows: PrefixRow[]}
 //   - a legacy regex string (any non-numeric) -> best-effort extract
 //     the {2,N} bound if present; else fall back to DEFAULT_MAX_LENGTH
 //   - missing/empty                     -> DEFAULT_MAX_LENGTH
-function parseRows(raw: string): PrefixRow[] {
+export function parseRows(raw: string): PrefixRow[] {
     if (!raw) {
         return [];
     }

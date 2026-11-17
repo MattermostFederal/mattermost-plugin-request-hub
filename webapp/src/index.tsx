@@ -11,6 +11,7 @@ import {fetchEnabledRequestTypes} from './client';
 import {HeaderIcon} from './HeaderIcon';
 import {installIntegrationsPageOverride} from './integrationsPageOverride';
 import {installMembersPanelButton} from './membersPanelButton';
+import {PrefixDefaultsEditor} from './PrefixDefaultsEditor';
 import {PrefixEditor} from './PrefixEditor';
 import {RequestAuditExportModal} from './RequestAuditExportModal';
 import {RequestBotModal} from './RequestBotModal';
@@ -294,6 +295,11 @@ export default class Plugin {
             registry.registerAdminConsoleCustomSetting(
                 'ChannelNamePrefixes',
                 PrefixEditor,
+                {showTitle: true},
+            );
+            registry.registerAdminConsoleCustomSetting(
+                'ChannelPrefixDefaults',
+                PrefixDefaultsEditor,
                 {showTitle: true},
             );
         }

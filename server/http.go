@@ -526,13 +526,20 @@ func (p *Plugin) handlePrefixes(w http.ResponseWriter, r *http.Request) {
 		Prefix      string `json:"prefix"`
 		Description string `json:"description"`
 		SuffixRegex string `json:"suffix_regex"`
+		// ChannelType is "O" or "P" when the prefix forces the visibility.
+		ChannelType string `json:"channel_type,omitempty"`
+		// DefaultPurpose fills the purpose when the requester leaves it blank.
+		DefaultPurpose string `json:"default_purpose,omitempty"`
 	}
 	out := make([]prefixDTO, 0, len(config.prefixes))
 	for _, p := range config.prefixes {
+		d, _ := config.defaultsForPrefix(p.Prefix)
 		out = append(out, prefixDTO{
-			Prefix:      p.Prefix,
-			Description: p.Description,
-			SuffixRegex: p.SuffixPatternRaw,
+			Prefix:         p.Prefix,
+			Description:    p.Description,
+			SuffixRegex:    p.SuffixPatternRaw,
+			ChannelType:    d.ChannelType,
+			DefaultPurpose: d.Purpose,
 		})
 	}
 	writeJSON(w, out)
@@ -589,6 +596,7 @@ func (p *Plugin) openRequestDialog(triggerID, teamID string) error {
 			Name:        fieldType,
 			Type:        "radio",
 			Default:     channelTypeOpen,
+			HelpText:    "Some prefixes always create public or private channels; the approval card shows the final visibility.",
 			Options: []*model.PostActionOptions{
 				{Text: "Public", Value: channelTypeOpen},
 				{Text: "Private", Value: channelTypePrivate},

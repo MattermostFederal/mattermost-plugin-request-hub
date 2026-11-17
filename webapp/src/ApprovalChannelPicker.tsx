@@ -46,7 +46,7 @@ type Props = {
 // nests plugin config under PluginSettings.Plugins.<plugin-id> — we
 // try both currentState (unsaved) and config (saved), preferring the
 // former. Returns "" if the key isn't found.
-function readSiblingSetting(props: Props, key: string): string {
+export function readSiblingSetting(props: Pick<Props, 'config' | 'currentState'>, key: string): string {
     const pluginID = manifest.id;
     const readFrom = (source?: Record<string, unknown>): string | undefined => {
         if (!source) {

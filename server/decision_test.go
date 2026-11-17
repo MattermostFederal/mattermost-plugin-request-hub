@@ -84,6 +84,7 @@ func mockChannelCreate(api *plugintest.API) {
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x", TeamId: "team1"}, nil)
 	api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "u_req", channelAdminRoleString).Return(&model.ChannelMember{}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 }
 
 func TestExecuteDecision_NeedsOneValidID(t *testing.T) {
