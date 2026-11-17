@@ -179,6 +179,15 @@ func (p *Plugin) updateWebhookOwner(webhookType, hookID, newOwnerID, adminUserID
 		if _, _, upErr := client.UpdateIncomingWebhook(ctx, hook); upErr != nil {
 			return errors.Wrap(upErr, "failed to update incoming webhook owner")
 		}
+		// Some Mattermost builds keep the stored UserId on update. Re-read
+		// and refuse a silent no-op so callers can fall back to recreate.
+		after, _, afterErr := client.GetIncomingWebhook(ctx, hookID, "")
+		if afterErr != nil {
+			return errors.Wrap(afterErr, "failed to verify incoming webhook owner after update")
+		}
+		if after == nil || after.UserId != newOwnerID {
+			return errors.New("Mattermost did not change the incoming webhook creator (server keeps the original owner); use Retire & recreate instead")
+		}
 	case webhookTypeOutgoing:
 		hook, _, getErr := client.GetOutgoingWebhook(ctx, hookID)
 		if getErr != nil {
@@ -204,17 +213,26 @@ func (p *Plugin) revokeBotTokens(botUserID string) (int, error) {
 		return 0, errors.Wrap(err, "failed to list tracked bot tokens")
 	}
 	revoked := 0
+	var failMsgs []string
 	for _, key := range keys {
 		rec, _, loadErr := p.loadBotTokenExpiry(key)
-		if loadErr != nil || rec == nil || rec.BotUserID != botUserID {
+		if loadErr != nil {
+			failMsgs = append(failMsgs, "load "+key+": "+loadErr.Error())
+			continue
+		}
+		if rec == nil || rec.BotUserID != botUserID {
 			continue
 		}
 		if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil {
 			p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
+			failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
 			continue
 		}
 		p.deleteBotTokenExpiry(key)
 		revoked++
+	}
+	if len(failMsgs) > 0 {
+		return revoked, errors.Errorf("revoked %d token(s); failures: %s", revoked, strings.Join(failMsgs, "; "))
 	}
 	return revoked, nil
 }

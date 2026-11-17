@@ -253,8 +253,11 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
 	api.On("KVDelete", mock.Anything).Return(nil).Maybe()
 
-	t.Run("from request snapshot", func(t *testing.T) {
+	t.Run("falls back to request snapshot when live fetch fails", func(t *testing.T) {
 		gotCallback = ""
+		p.getOutgoingWebhookCallbackFn = func(string, string) (string, error) {
+			return "", errors.New("live unavailable")
+		}
 		req := &webhookTransferRequest{
 			ID: "t1", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
 			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
@@ -269,7 +272,7 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 		require.Contains(t, res.Outcome, "recreated")
 	})
 
-	t.Run("live fetch when snapshot empty", func(t *testing.T) {
+	t.Run("prefers live callback over stale snapshot", func(t *testing.T) {
 		gotCallback = ""
 		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
 			require.Equal(t, "old-hook", hookID)
@@ -278,13 +281,33 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 		req := &webhookTransferRequest{
 			ID: "t2", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
 			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
-			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+			CallbackURL: "https://hooks.example.com/stale",
+			Action:      transferActionRetireRecreate, NewOwnerUserID: "u_new",
 		}
 		res := p.fulfillWebhookRetireRecreate(req,
 			&model.User{Id: "admin1", Username: "admin"},
 			&model.User{Id: "u_req", Username: "req"},
 			newDecisionCards("t2", "", ""), nil, kvWebhookTransferRequestPrefix+"t2")
 		require.Equal(t, "https://hooks.example.com/live", gotCallback)
+		require.Contains(t, res.Outcome, "recreated")
+	})
+
+	t.Run("live fetch when snapshot empty", func(t *testing.T) {
+		gotCallback = ""
+		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
+			require.Equal(t, "old-hook", hookID)
+			return "https://hooks.example.com/live-only", nil
+		}
+		req := &webhookTransferRequest{
+			ID: "t2b", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t2b", "", ""), nil, kvWebhookTransferRequestPrefix+"t2b")
+		require.Equal(t, "https://hooks.example.com/live-only", gotCallback)
 		require.Contains(t, res.Outcome, "recreated")
 	})
 

@@ -152,6 +152,12 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
+	if held, holdErr := p.transferAssetPendingElsewhere(pendingKindWebhookTransfer, req.pendingKey(), ""); holdErr != nil {
+		p.API.LogWarn("failed to check for existing webhook transfer ticket", "hook_id", hookID, "error", holdErr.Error())
+		return "", errors.New("could not check for an existing transfer ticket; try again")
+	} else if held {
+		return "", duplicateRequestError(pendingKindWebhookTransfer, req.pendingKey())
+	}
 	if err = p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -369,6 +375,10 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		})
 	}
 
+	if msg := p.webhookTransferApprovalBlocker(req); msg != "" {
+		return decisionResult{Reply: msg}
+	}
+
 	newState := p.applyTwoStepApproval(req.twoStepState, step, actingUser, model.GetMillis())
 	if !newState.complete() {
 		newReq := *req
@@ -383,8 +393,19 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 	if res, ok := p.claimRecord(key, rawReq, cards, "webhook transfer request"); !ok {
 		return res
 	}
-	p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
+	// Keep the pending reservation until fulfill succeeds (released there).
 	return p.fulfillWebhookTransferRequest(req, actingUser, requester, cards, rawReq, key)
+}
+
+// webhookTransferApprovalBlocker re-checks successor validity before final
+// approval (same idea as botTransferApprovalBlocker).
+func (p *Plugin) webhookTransferApprovalBlocker(req *webhookTransferRequest) string {
+	if webhookTransferNeedsNewOwner(req.Action) {
+		if err := p.checkTransferNewOwner(req.NewOwnerUserID); err != nil {
+			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
+		}
+	}
+	return ""
 }
 
 // fulfillWebhookTransferRequest carries out a fully approved webhook
@@ -400,6 +421,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		}
 		p.updateWebhookIndexOwner(req.HookID, req.NewOwnerUserID)
 		p.clearOrphanNotice("webhook", req.HookID)
+		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** reassigned to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -415,6 +437,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		}
 		p.retireWebhookIndex(req.HookID)
 		p.clearOrphanNotice("webhook", req.HookID)
+		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** retired.", req.WebhookType, escapeMarkdown(req.DisplayName))
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -431,30 +454,29 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 
 // fulfillWebhookRetireRecreate deletes the old hook and creates a new one
 // owned by the successor, DMing an incoming webhook's URL to the new owner.
-// For outgoing hooks the callback URL is resolved before delete (index →
-// request snapshot → live GetOutgoingWebhook) so recreate cannot orphan
-// the integration without a callback.
+// For outgoing hooks the live callback is preferred, then the request/index
+// snapshot, so recreate cannot orphan the integration without a callback.
 func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string) decisionResult {
 	callbackURL := strings.TrimSpace(req.CallbackURL)
 	if req.WebhookType == webhookTypeOutgoing {
-		if callbackURL == "" {
-			var resolveErr error
-			callbackURL, resolveErr = p.resolveOutgoingWebhookCallback(req.HookID, actingUser.Id)
-			if resolveErr != nil || callbackURL == "" {
-				err := resolveErr
-				if err == nil {
-					err = errors.New("outgoing webhook has no callback URL recorded")
-				}
-				return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
+		if live, liveErr := p.resolveOutgoingWebhookCallback(req.HookID, actingUser.Id); liveErr == nil && strings.TrimSpace(live) != "" {
+			callbackURL = strings.TrimSpace(live)
+		} else if callbackURL == "" {
+			err := liveErr
+			if err == nil {
+				err = errors.New("outgoing webhook has no callback URL recorded")
 			}
-			req.CallbackURL = callbackURL
+			return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
 		}
+		req.CallbackURL = callbackURL
 	}
 
 	if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil {
 		return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
 	}
 	p.retireWebhookIndex(req.HookID)
+	// Old hook is gone — drop any leftover orphan-notice card even if recreate fails.
+	p.clearOrphanNotice("webhook", req.HookID)
 
 	synthetic := &webhookRequest{
 		ID:          req.ID,
@@ -471,6 +493,7 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	if createErr != nil {
 		// Old hook is already gone; record the gap for an admin to recreate.
 		partialErrors = append(partialErrors, "the replacement webhook could not be created: "+createErr.Error()+" — the old hook was deleted; recreate manually")
+		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
 		outcome := fmt.Sprintf("⚠️ Fully approved, but the replacement %s webhook could not be created; the old one was deleted.", req.WebhookType)
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -481,32 +504,35 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		})
 	}
 	p.writeWebhookIndex(synthetic, newHookID, actingUser.Id)
-	p.clearOrphanNotice("webhook", req.HookID)
-
-	outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** recreated under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
-	result := p.finish(cards, "", outcome, ticketClose{
-		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
-		Approved: true, ApproverUsername: actingUser.Username,
-		CardTitle: "Webhook Recreated", CardText: fmt.Sprintf("Fully approved. A new %s webhook **%s** was created under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID})),
-		StatusLine: outcome,
-	})
-	p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
 
 	switch req.WebhookType {
 	case webhookTypeIncoming:
 		if dmMsg != "" {
 			if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{dmMsg, "⚠️ **Save this now.** This message auto-deletes in ~72 hours."}, true) {
 				p.API.LogError("failed to deliver recreated webhook URL to new owner", "hook_id", newHookID, "new_owner_id", req.NewOwnerUserID)
+				partialErrors = append(partialErrors, "the new incoming webhook URL could not be DM'd to the new owner — recreate or rotate manually")
 			}
 		}
 	case webhookTypeOutgoing:
 		// Outgoing hooks have no secret URL in the create DM; tell the new
 		// owner the callback was preserved so they know recreate succeeded.
-		notice := fmt.Sprintf("Your outgoing webhook **%s** was recreated under your account.\n**Callback URL (unchanged):** `%s`",
-			escapeMarkdown(req.DisplayName), escapeMarkdown(callbackURL))
+		notice := fmt.Sprintf("Your outgoing webhook **%s** was recreated under your account.\n**Callback URL (unchanged):** %s",
+			escapeMarkdown(req.DisplayName), inlineCode(callbackURL))
 		_ = p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{notice}, false)
 	}
-	return result
+
+	p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
+	outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** recreated under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
+	if len(partialErrors) > 0 {
+		outcome = fmt.Sprintf("⚠️ Fully approved with issues. %s webhook **%s** recreated under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
+	}
+	p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
+	return p.finish(cards, "", outcome, ticketClose{
+		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
+		Approved: true, ApproverUsername: actingUser.Username,
+		CardTitle: "Webhook Recreated", CardText: fmt.Sprintf("Fully approved. A new %s webhook **%s** was created under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID})),
+		StatusLine: outcome,
+	})
 }
 
 // resolveOutgoingWebhookCallback returns the first callback URL for an

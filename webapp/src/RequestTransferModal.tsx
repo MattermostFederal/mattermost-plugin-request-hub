@@ -75,6 +75,10 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const [action, setAction] = useState(isBot ? 'transfer' : 'reassign');
     const [newOwner, setNewOwner] = useState('');
     const [rotate, setRotate] = useState(false);
+    // rotateTouched marks an explicit checkbox choice so we only send
+    // rotate_token when the user opted in/out; otherwise the server applies
+    // its offboarding / owner-deactivated default.
+    const [rotateTouched, setRotateTouched] = useState(false);
     const [note, setNote] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
@@ -105,6 +109,16 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         };
     }, [isOpen, isBot]);
 
+    useEffect(() => {
+        if (!isBot || rotateTouched || !assetId) {
+            return;
+        }
+        const selected = assets.find((a) => a.asset_id === assetId);
+        if (selected?.orphaned) {
+            setRotate(true);
+        }
+    }, [assetId, assets, isBot, rotateTouched]);
+
     const reset = () => {
         setAssets([]);
         setLoadError('');
@@ -112,6 +126,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         setAction(isBot ? 'transfer' : 'reassign');
         setNewOwner('');
         setRotate(false);
+        setRotateTouched(false);
         setNote('');
         setError('');
         setSuccess('');
@@ -143,13 +158,16 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         setSubmitting(true);
         setError('');
         try {
-            const result = isBot ? await submitBotTransferRequest({
+            const botPayload: Parameters<typeof submitBotTransferRequest>[0] = {
                 bot_user_id: assetId,
                 action: action as 'transfer' | 'retire',
                 new_owner_username: ownerUsername,
-                rotate_token: rotate,
                 note: note.trim(),
-            }) : await submitWebhookTransferRequest({
+            };
+            if (rotateTouched) {
+                botPayload.rotate_token = rotate;
+            }
+            const result = isBot ? await submitBotTransferRequest(botPayload) : await submitWebhookTransferRequest({
                 hook_id: assetId,
                 action: action as 'reassign' | 'retire_recreate' | 'retire_only',
                 new_owner_username: ownerUsername,
@@ -279,7 +297,10 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                     <input
                                         type='checkbox'
                                         checked={rotate}
-                                        onChange={(e) => setRotate(e.target.checked)}
+                                        onChange={(e) => {
+                                            setRotateTouched(true);
+                                            setRotate(e.target.checked);
+                                        }}
                                     />
                                     {'Rotate the access token (revoke the old one, issue a fresh one to the new owner)'}
                                 </label>

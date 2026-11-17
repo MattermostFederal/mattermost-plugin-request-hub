@@ -246,7 +246,8 @@ func (r *botTransferRequest) pendingFields() (string, string, *int64) {
 }
 
 // pendingKey identifies a bot transfer by the bot, so one bot has one
-// pending transfer/retire ticket at a time (even across requesters).
+// pending transfer/retire ticket at a time (even across requesters — see
+// transferAssetPendingElsewhere).
 func (r *botTransferRequest) pendingKey() string { return r.BotUserID }
 
 func (r *webhookTransferRequest) pendingFields() (string, string, *int64) {
@@ -254,8 +255,58 @@ func (r *webhookTransferRequest) pendingFields() (string, string, *int64) {
 }
 
 // pendingKey identifies a webhook transfer by the hook, so one hook has one
-// pending transfer/retire ticket at a time.
+// pending transfer/retire ticket at a time (even across requesters — see
+// transferAssetPendingElsewhere).
 func (r *webhookTransferRequest) pendingKey() string { return r.WebhookType + "/" + r.HookID }
+
+// transferAssetPendingElsewhere reports whether another open bot/webhook
+// transfer ticket already covers assetKey (pendingKey value). Per-user
+// reservePending alone cannot see another requester's list.
+func (p *Plugin) transferAssetPendingElsewhere(kind, assetKey, excludeID string) (bool, error) {
+	if kind != pendingKindBotTransfer && kind != pendingKindWebhookTransfer {
+		return false, nil
+	}
+	prefix := requestKVPrefix(kind)
+	keys, err := p.listRequestKeys()
+	if err != nil {
+		return false, err
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		id := strings.TrimPrefix(key, prefix)
+		if id == "" || id == excludeID {
+			continue
+		}
+		raw, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return false, errors.Wrap(appErr, "failed to load transfer request while checking duplicates")
+		}
+		if raw == nil {
+			continue
+		}
+		switch kind {
+		case pendingKindBotTransfer:
+			var req botTransferRequest
+			if err := json.Unmarshal(raw, &req); err != nil {
+				continue
+			}
+			if req.pendingKey() == assetKey {
+				return true, nil
+			}
+		case pendingKindWebhookTransfer:
+			var req webhookTransferRequest
+			if err := json.Unmarshal(raw, &req); err != nil {
+				continue
+			}
+			if req.pendingKey() == assetKey {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
 
 // updatePending applies change to a user's pending list with
 // compare-and-set, retrying when another update lands first. An empty

@@ -160,6 +160,12 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
+	if held, holdErr := p.transferAssetPendingElsewhere(pendingKindBotTransfer, req.pendingKey(), ""); holdErr != nil {
+		p.API.LogWarn("failed to check for existing bot transfer ticket", "bot_user_id", botUserID, "error", holdErr.Error())
+		return "", errors.New("could not check for an existing transfer ticket; try again")
+	} else if held {
+		return "", duplicateRequestError(pendingKindBotTransfer, req.pendingKey())
+	}
 	if err = p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
 		return "", err
 	}
@@ -414,7 +420,8 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 	if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
 		return res
 	}
-	p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
+	// Keep the pending reservation until fulfill succeeds so MaxPending and
+	// restore-after-failure stay consistent (release happens in fulfill*).
 	return p.fulfillBotTransferRequest(req, actingUser, requester, cards, rawReq, key)
 }
 
@@ -451,8 +458,9 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		}
 		p.retireBotIndex(req.BotUserID)
 		p.clearOrphanNotice("bot", req.BotUserID)
+		p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
-		p.auditTransferApproved(cards, req, actingUser, requester, revoked, 0, partialErrors)
+		p.auditTransferApproved(cards, req, actingUser, requester, revoked, 0, false, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: true, ApproverUsername: actingUser.Username,
@@ -472,17 +480,21 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 	var tokenValue string
 	var tokenExpiresAt int64
 	revoked := 0
+	rotated := false
 	if req.RotateToken {
 		var rotErr error
 		revoked, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, req.ID)
 		if rotErr != nil {
 			partialErrors = append(partialErrors, "token rotation failed: "+rotErr.Error())
+		} else {
+			rotated = tokenValue != ""
 		}
 	}
 
+	p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
 	outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** transferred to %s.",
 		req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
-	p.auditTransferApproved(cards, req, actingUser, requester, revoked, tokenExpiresAt, partialErrors)
+	p.auditTransferApproved(cards, req, actingUser, requester, revoked, tokenExpiresAt, rotated, partialErrors)
 	result := p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: true, ApproverUsername: actingUser.Username,
@@ -528,7 +540,7 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, request
 	return result
 }
 
-func (p *Plugin) auditTransferApproved(cards decisionCards, req *botTransferRequest, actingUser, requester *model.User, tokensRevoked int, tokenExpiresAt int64, partialErrors []string) {
+func (p *Plugin) auditTransferApproved(cards decisionCards, req *botTransferRequest, actingUser, requester *model.User, tokensRevoked int, tokenExpiresAt int64, rotated bool, partialErrors []string) {
 	verb := strings.ToLower(transferActionLabel(req.Action))
 	event, problems := eventApproved, ""
 	if len(partialErrors) > 0 {
@@ -536,7 +548,7 @@ func (p *Plugin) auditTransferApproved(cards decisionCards, req *botTransferRequ
 	}
 	detail := map[string]any{
 		"bot_user_id": req.BotUserID, "action": req.Action, "tokens_revoked": tokensRevoked,
-		"rotated": req.RotateToken && tokenExpiresAt > 0,
+		"rotated": rotated, "token_expires_at": tokenExpiresAt,
 	}
 	if req.Action == transferActionTransfer {
 		detail["new_owner_id"] = req.NewOwnerUserID
