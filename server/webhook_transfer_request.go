@@ -483,21 +483,22 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	callbackURL := strings.TrimSpace(req.CallbackURL)
 	if req.WebhookType == webhookTypeOutgoing {
 		live, liveErr := p.loadOutgoingWebhookForRecreate(req.HookID, actingUser.Id)
-		if liveErr == nil && live != nil && len(live.CallbackURLs) > 0 {
+		switch {
+		case liveErr == nil && live != nil && len(live.CallbackURLs) > 0:
 			outgoingSnap = live
 			callbackURL = strings.TrimSpace(live.CallbackURLs[0])
-		} else if callbackURL == "" {
+		case callbackURL == "":
 			err := liveErr
 			if err == nil {
 				err = errors.New("outgoing webhook has no callback URL recorded")
 			}
 			return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
-		} else if liveErr != nil {
+		case liveErr != nil:
 			// Snapshot has one callback but we could not confirm triggers /
 			// extra callbacks — refuse rather than silently drop them.
 			return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key,
 				errors.Wrap(liveErr, "could not load the live outgoing webhook to preserve triggers and callbacks; deny and recreate manually, or retry"))
-		} else {
+		default:
 			outgoingSnap = &outgoingWebhookRecreate{CallbackURLs: []string{callbackURL}}
 		}
 		req.CallbackURL = callbackURL
