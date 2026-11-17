@@ -37,8 +37,8 @@ type webhookTransferRequest struct {
 	NewOwnerUserID string `json:"new_owner_user_id,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	Note           string `json:"note,omitempty"`
-	CreatedAt int64 `json:"created_at,omitempty"`
-	Exercise  bool  `json:"exercise,omitempty"`
+	CreatedAt      int64  `json:"created_at,omitempty"`
+	Exercise       bool   `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -147,9 +147,9 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		CallbackURL:    strings.TrimSpace(index.CallbackURL),
 		Action:         action,
 		NewOwnerUserID: newOwnerID,
-		Reason:    reason,
-		Note:      note,
-		CreatedAt: model.GetMillis(),
+		Reason:         reason,
+		Note:           note,
+		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
 	if err = p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {

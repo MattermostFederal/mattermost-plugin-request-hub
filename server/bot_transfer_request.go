@@ -155,9 +155,9 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		Action:         action,
 		NewOwnerUserID: newOwnerID,
 		Reason:         reason,
-		RotateToken: rotate,
-		Note:        note,
-		CreatedAt:   model.GetMillis(),
+		RotateToken:    rotate,
+		Note:           note,
+		CreatedAt:      model.GetMillis(),
 	}
 	sa.built(req, requester)
 	if err = p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
