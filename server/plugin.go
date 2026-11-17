@@ -51,10 +51,6 @@ type Plugin struct {
 	// tokenReminderJob sends the bot token expiry reminders.
 	tokenReminderJob *cluster.Job
 
-	// orphanOwnerJob scans the bot/webhook indexes for assets whose owner
-	// was deactivated and posts transfer/retire cards to the audit channel.
-	orphanOwnerJob *cluster.Job
-
 	// securityPoolCapWarned tracks pool labels we already warned about hitting
 	// securityPoolMaxMembers (sync.Map: pool string → struct{}). Cleared when
 	// a later listing for that pool is under the cap so a new overrun warns again.
@@ -154,7 +150,6 @@ func (p *Plugin) OnActivate() error {
 
 	p.startTwoStepChannelReconciler()
 	p.startTokenReminderJob()
-	p.startOrphanOwnerJob()
 
 	// Delete any token DM posts whose 72-hour window lapsed while the plugin
 	// was not running, and re-arm in-process timers for the remainder.
@@ -166,7 +161,6 @@ func (p *Plugin) OnActivate() error {
 func (p *Plugin) OnDeactivate() error {
 	p.stopTwoStepChannelReconciler()
 	p.stopTokenReminderJob()
-	p.stopOrphanOwnerJob()
 	p.stopMCPServer()
 	return nil
 }

@@ -23,8 +23,8 @@ const (
 	transferActionRetireRecreate = "retire_recreate"
 	transferActionRetireOnly     = "retire_only"
 
-	// Transfer reasons. Free text rides in Note; these two drive the token
-	// rotate default and the "on behalf of" orphan wording.
+	// Transfer reasons. Free text rides in Note; offboarding /
+	// owner_deactivated drive the token-rotate default.
 	transferReasonVoluntary        = "voluntary"
 	transferReasonOwnerDeactivated = "owner_deactivated"
 	transferReasonOffboarding      = "offboarding"

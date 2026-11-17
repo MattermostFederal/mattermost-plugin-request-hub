@@ -103,7 +103,7 @@
                 "display_name": "Allow bot transfer / retire requests",
                 "type": "bool",
                 "default": true,
-                "help_text": "When enabled, the owner of an RH-managed bot (or anyone eligible under the transfer policy) can request to transfer it to a new owner or retire it. Requires two-step approval (security + system). Also powers the orphaned-bot cards posted when an owner is deactivated."
+                "help_text": "When enabled, the owner of an RH-managed bot (or anyone eligible under the transfer policy) can request to transfer it to a new owner or retire it. Requires two-step approval (security + system). Mattermost core already notifies System Admins when a bot owner is deactivated; use this Request Hub flow for the governed handoff."
             },
             {
                 "key": "AllowWebhookTransferRequests",

@@ -292,9 +292,9 @@ type botIndexEntry struct {
 	HasOutgoingWebhook bool           `json:"has_outgoing_webhook,omitempty"`
 	Compliance         *botCompliance `json:"compliance,omitempty"`
 	// RetiredAt marks a bot retired by a transfer/retire ticket without
-	// dropping the index, so audits and the orphan scanner skip it. We keep
-	// the row (rather than deleting the key) so the inventory still shows a
-	// retired bot and who retired it. Zero means live.
+	// dropping the index, so transfer pickers skip it. We keep the row
+	// (rather than deleting the key) so the inventory still shows a retired
+	// bot and who retired it. Zero means live.
 	RetiredAt int64 `json:"retired_at,omitempty"`
 }
 

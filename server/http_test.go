@@ -1136,7 +1136,6 @@ var (
 		routeSubmitBotWebapp, routeSubmitIncomingWebhookWebapp,
 		routeSubmitOutgoingWebhookWebapp,
 		routeSubmitBugReportWebapp, routeBugReportDialog,
-		routeBotTransferDialog, routeWebhookTransferDialog,
 		routeSubmitBotTransferWebapp, routeSubmitWebhookTransferWebapp,
 	}
 	// untoggledSubmitRoutes take requests of a type with no admin toggle.
@@ -1153,7 +1152,6 @@ var (
 		routeApproveBot, routeDenyBot, routeApproveWebhook, routeDenyWebhook,
 		routeApproveBotTransfer, routeDenyBotTransfer,
 		routeApproveWebhookTransfer, routeDenyWebhookTransfer,
-		routeOrphanTransfer, routeOrphanRetire,
 		routeApproveAuditExport, routeDenyAuditExport, routeAcknowledgeBugReport,
 	}
 )

@@ -13,14 +13,6 @@ import (
 const (
 	kvBotTransferRequestPrefix = "bot_transfer_request_"
 
-	botTransferDialogCallbackID = "bot_transfer_dialog"
-	fieldTransferBotID          = "transfer_bot_id"
-	fieldTransferAction         = "transfer_action"
-	fieldTransferNewOwner       = "transfer_new_owner"
-	fieldTransferReason         = "transfer_reason"
-	fieldTransferRotate         = "transfer_rotate"
-	fieldTransferNote           = "transfer_note"
-
 	botTransferRequestsDisabledMsg = "Bot transfer/retire requests are currently disabled by an administrator."
 )
 
@@ -46,9 +38,6 @@ type botTransferRequest struct {
 	Note        string `json:"note,omitempty"`
 	CreatedAt   int64  `json:"created_at,omitempty"`
 	Exercise    bool   `json:"exercise,omitempty"`
-	// FromOrphanCard marks a ticket opened from an audit-channel orphan card
-	// "on behalf of" a deactivated owner.
-	FromOrphanCard bool `json:"from_orphan_card,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -69,8 +58,7 @@ type botTransferInput struct {
 	RotateToken    bool
 	// RotateSet marks RotateToken as explicitly chosen, so the reason-based
 	// default only applies when the caller left it unset.
-	RotateSet      bool
-	FromOrphanCard bool
+	RotateSet bool
 }
 
 func transferActionLabel(action string) string {
@@ -167,10 +155,9 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		Action:         action,
 		NewOwnerUserID: newOwnerID,
 		Reason:         reason,
-		RotateToken:    rotate,
-		Note:           note,
-		FromOrphanCard: in.FromOrphanCard,
-		CreatedAt:      model.GetMillis(),
+		RotateToken: rotate,
+		Note:        note,
+		CreatedAt:   model.GetMillis(),
 	}
 	sa.built(req, requester)
 	if err = p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
@@ -263,9 +250,6 @@ func (p *Plugin) botTransferApprovalAttachment(req *botTransferRequest, requeste
 			rotate = "yes — a fresh token is issued to the new owner"
 		}
 		fields = append(fields, &model.MessageAttachmentField{Title: "Rotate token", Value: rotate, Short: true})
-	}
-	if req.FromOrphanCard {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Origin", Value: "orphaned-owner card (on behalf of the deactivated owner)", Short: false})
 	}
 	if req.Reason != "" {
 		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: req.Reason, Short: true})
@@ -552,7 +536,7 @@ func (p *Plugin) auditTransferApproved(cards decisionCards, req *botTransferRequ
 	}
 	detail := map[string]any{
 		"bot_user_id": req.BotUserID, "action": req.Action, "tokens_revoked": tokensRevoked,
-		"rotated": req.RotateToken && tokenExpiresAt > 0, "from_orphan_card": req.FromOrphanCard,
+		"rotated": req.RotateToken && tokenExpiresAt > 0,
 	}
 	if req.Action == transferActionTransfer {
 		detail["new_owner_id"] = req.NewOwnerUserID

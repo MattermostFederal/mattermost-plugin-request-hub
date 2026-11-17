@@ -206,22 +206,6 @@ func TestSubmitWebhookTransferRejects(t *testing.T) {
 	})
 }
 
-// TestNoticeOrphanSkipsWhenCardExists verifies the per-asset dedupe: with a
-// notice marker already present, a rescan posts nothing. CreatePost is left
-// unregistered, so any attempt to post fails the test.
-func TestNoticeOrphanSkipsWhenCardExists(t *testing.T) {
-	api := &plugintest.API{}
-	stubLogs(api)
-	store := memKV(api)
-	store[orphanNoticeKey("bot", "b1")] = []byte("existing-orphan-post")
-
-	p := newTestPlugin(api)
-	p.noticeOrphan("bot", "b1", "@svcbot", "owner")
-
-	api.AssertNotCalled(t, "CreatePost", mock.Anything)
-	require.Equal(t, []byte("existing-orphan-post"), store[orphanNoticeKey("bot", "b1")])
-}
-
 func TestBotIndexOwnerFallsBackToRequester(t *testing.T) {
 	require.Equal(t, "owner", botIndexOwner(botIndexEntry{OwnerUserID: "owner", RequesterID: "req"}))
 	require.Equal(t, "req", botIndexOwner(botIndexEntry{RequesterID: "req"}))

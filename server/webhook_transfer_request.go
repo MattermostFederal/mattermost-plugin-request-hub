@@ -14,8 +14,6 @@ import (
 const (
 	kvWebhookTransferRequestPrefix = "webhook_transfer_request_"
 
-	webhookTransferDialogCallbackID = "webhook_transfer_dialog"
-
 	webhookTransferRequestsDisabledMsg = "Webhook transfer/retire requests are currently disabled by an administrator."
 )
 
@@ -39,9 +37,8 @@ type webhookTransferRequest struct {
 	NewOwnerUserID string `json:"new_owner_user_id,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	Note           string `json:"note,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	Exercise       bool   `json:"exercise,omitempty"`
-	FromOrphanCard bool   `json:"from_orphan_card,omitempty"`
+	CreatedAt int64 `json:"created_at,omitempty"`
+	Exercise  bool  `json:"exercise,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -57,7 +54,6 @@ type webhookTransferInput struct {
 	NewOwnerUserID string
 	Reason         string
 	Note           string
-	FromOrphanCard bool
 }
 
 func webhookTransferActionLabel(action string) string {
@@ -151,10 +147,9 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		CallbackURL:    strings.TrimSpace(index.CallbackURL),
 		Action:         action,
 		NewOwnerUserID: newOwnerID,
-		Reason:         reason,
-		Note:           note,
-		FromOrphanCard: in.FromOrphanCard,
-		CreatedAt:      model.GetMillis(),
+		Reason:    reason,
+		Note:      note,
+		CreatedAt: model.GetMillis(),
 	}
 	sa.built(req, requester)
 	if err = p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
@@ -228,9 +223,6 @@ func (p *Plugin) webhookTransferApprovalAttachment(req *webhookTransferRequest, 
 	}
 	if webhookTransferNeedsNewOwner(req.Action) {
 		fields = append(fields, &model.MessageAttachmentField{Title: "New owner", Value: p.mentionList([]string{req.NewOwnerUserID}), Short: true})
-	}
-	if req.FromOrphanCard {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Origin", Value: "orphaned-owner card (on behalf of the deactivated owner)", Short: false})
 	}
 	if req.Reason != "" {
 		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: req.Reason, Short: true})
@@ -563,7 +555,7 @@ func (p *Plugin) auditWebhookTransferApproved(cards decisionCards, req *webhookT
 	if len(partialErrors) > 0 {
 		event, problems = eventApprovedPartial, "; "+escapeMarkdown(strings.Join(partialErrors, "; "))
 	}
-	detail := map[string]any{"hook_id": req.HookID, "action": req.Action, "webhook_type": req.WebhookType, "from_orphan_card": req.FromOrphanCard}
+	detail := map[string]any{"hook_id": req.HookID, "action": req.Action, "webhook_type": req.WebhookType}
 	if webhookTransferNeedsNewOwner(req.Action) {
 		detail["new_owner_id"] = req.NewOwnerUserID
 	}

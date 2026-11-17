@@ -9,9 +9,9 @@ import (
 )
 
 // Standalone webhooks (those created by a webhook request, not bundled with a
-// bot) had no Request Hub index. Without one, transfer/retire tickets and the
-// orphaned-owner scanner can't find them, so each successful standalone create
-// now writes a webhookIndexEntry keyed by hook ID.
+// bot) had no Request Hub index. Without one, transfer/retire tickets can't
+// find them, so each successful standalone create now writes a
+// webhookIndexEntry keyed by hook ID.
 
 const (
 	kvWebhookIndexPrefix = "webhook_index_"
@@ -34,8 +34,8 @@ type webhookIndexEntry struct {
 	RequesterID string `json:"requester_id,omitempty"`
 	RequestID   string `json:"request_id,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
-	// RetiredAt marks a retired hook without deleting the index, so audits
-	// and the orphan scanner skip it. Zero means live.
+	// RetiredAt marks a retired hook without deleting the index, so transfer
+	// pickers skip it. Zero means live.
 	RetiredAt int64 `json:"retired_at,omitempty"`
 }
 

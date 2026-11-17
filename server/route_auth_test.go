@@ -262,8 +262,6 @@ func TestSubmitRoutes_TurnedOffTypeRefusesBeforeReadingTheBody(t *testing.T) {
 		routeSubmitOutgoingWebhookWebapp: webhookRequestsDisabledMsg,
 		routeSubmitBugReportWebapp:       bugReportRequestsDisabledMsg,
 		routeBugReportDialog:             bugReportRequestsDisabledMsg,
-		routeBotTransferDialog:           botTransferRequestsDisabledMsg,
-		routeWebhookTransferDialog:       webhookTransferRequestsDisabledMsg,
 		routeSubmitBotTransferWebapp:     botTransferRequestsDisabledMsg,
 		routeSubmitWebhookTransferWebapp: webhookTransferRequestsDisabledMsg,
 	}
