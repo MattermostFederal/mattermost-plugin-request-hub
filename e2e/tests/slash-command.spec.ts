@@ -319,6 +319,7 @@ test.describe('inline request forms refuse what they cannot submit', () => {
         const off = {
             allowchannelrequests: false, allowchanneladminrequests: false, allowteamrequests: false, allowteamadminrequests: false,
             allowteammemberrequests: false, allowteamguestrequests: false, allowbottokenrequests: false, allowwebhookrequests: false,
+            allowbugreportrequests: false, allowbottransferrequests: false, allowwebhooktransferrequests: false,
         };
         await hub.withPluginConfig(off, async () => {
             const disabled = (what: string) => `${what} requests are currently disabled by an administrator.`;

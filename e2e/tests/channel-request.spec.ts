@@ -347,8 +347,8 @@ test.describe('approval', () => {
         expect(await pendingIds(hub, 'channel', requester.id)).toEqual([requestId]);
 
         const dm = await hub.findDM(requester.username, displayName);
-        expect(dm.message).toBe('Your channel request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers.');
-        expect(cardActions(dm)).toEqual([]);
+        expect(dm.message).toBe('Your channel request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers. Use Withdraw if you no longer need this request.');
+        expect(cardActions(dm)).toEqual(['withdraw']);
 
         expect(await click(hub, ADMIN, card, 'approve')).toEqual({reply: ''});
 
