@@ -600,7 +600,7 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	}
 	// Index the new standalone hook so transfer/retire can find it by hook
 	// ID (no-op for exercise hooks).
-	p.writeWebhookIndex(req, hookID, actingUser.Id)
+	_ = p.writeWebhookIndex(req, hookID, actingUser.Id)
 
 	// Best-effort: reopen the requester DM if submit-time open failed.
 	if req.DMChannelID == "" {

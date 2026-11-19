@@ -480,20 +480,22 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 	if req.Action == transferActionRetire {
 		// Disable first so the bot stops acting before token revoke races.
 		if disErr := p.disableBot(req.BotUserID, actingUser.Id); disErr != nil {
-			return p.restoreBotTransferAfterFailure(req, requester, cards, rawReq, key, disErr)
+			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, disErr)
 		}
-		revoked, revErr := p.revokeBotTokens(req.BotUserID)
+		revoked, revErr := p.revokeBotTokens(req.BotUserID, actingUser.Id)
 		if revErr != nil {
-			partialErrors = append(partialErrors, "revoking tracked tokens failed: "+revErr.Error())
+			partialErrors = append(partialErrors, "revoking bot tokens failed: "+revErr.Error())
 		}
 		if index, _ := p.loadBotIndex(req.BotUserID); index != nil && (index.HasIncomingWebhook || index.HasOutgoingWebhook) {
 			partialErrors = append(partialErrors, "any bot-owned webhooks may need manual cleanup (their hook IDs aren't recorded in the bot index)")
 		}
-		p.retireBotIndex(req.BotUserID)
+		if idxErr := p.retireBotIndex(req.BotUserID); idxErr != nil {
+			partialErrors = append(partialErrors, "bot index could not be marked retired: "+idxErr.Error())
+		}
 		p.clearOrphanNotice("bot", req.BotUserID)
 		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
-		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tracked tokens revoked.", req.BotUsername)
+		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tokens revoked.", req.BotUsername)
 		if len(partialErrors) > 0 {
 			outcome = fmt.Sprintf("⚠️ Fully approved with issues. Bot **@%s** retired.", req.BotUsername)
 			cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** was disabled, but: %s.", req.BotUsername, escapeMarkdown(strings.Join(partialErrors, "; ")))
@@ -510,9 +512,11 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 
 	// Transfer.
 	if assignErr := p.assignBot(req.BotUserID, req.NewOwnerUserID, actingUser.Id); assignErr != nil {
-		return p.restoreBotTransferAfterFailure(req, requester, cards, rawReq, key, assignErr)
+		return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, assignErr)
 	}
-	p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID)
+	if idxErr := p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID); idxErr != nil {
+		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
+	}
 	p.clearOrphanNotice("bot", req.BotUserID)
 
 	var tokenValue string
@@ -521,7 +525,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 	rotated := false
 	if req.RotateToken {
 		var rotErr error
-		revoked, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, req.ID)
+		revoked, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUser.Id, req.ID)
 		if rotErr != nil {
 			// Owner already moved; keep the ticket closed but surface the gap
 			// so an admin can rotate manually. Restoring would re-open a
@@ -550,28 +554,39 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 	p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
 	outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** transferred to %s.",
 		req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
+	cardText := fmt.Sprintf("Fully approved. Bot **@%s** now belongs to %s.", req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
 	if len(partialErrors) > 0 {
 		outcome = fmt.Sprintf("⚠️ Fully approved with issues. Bot **@%s** transferred to %s.",
 			req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
+		cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** transferred to %s, but: %s.",
+			req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}), escapeMarkdown(strings.Join(partialErrors, "; ")))
 	}
 	p.auditTransferApproved(cards, req, actingUser, requester, revoked, tokenExpiresAt, rotated, partialErrors)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: true, ApproverUsername: actingUser.Username,
 		CardTitle:  "Bot Transfer Approved",
-		CardText:   fmt.Sprintf("Fully approved. Bot **@%s** now belongs to %s.", req.BotUsername, p.mentionList([]string{req.NewOwnerUserID})),
+		CardText:   cardText,
 		StatusLine: outcome,
 	})
 }
 
 // restoreBotTransferAfterFailure re-stores the pending request after a REST
 // side effect failed, so approvers can retry or deny.
-func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, requester *model.User, cards decisionCards, rawReq []byte, key string, cause error) decisionResult {
+func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string, cause error) decisionResult {
 	verb := strings.ToLower(transferActionLabel(req.Action))
+	approverName := ""
+	if actingUser != nil {
+		approverName = actingUser.Username
+	}
 	p.API.LogError("failed to carry out bot transfer/retire on approval", "action", req.Action, "error", cause.Error())
+	if !p.transferClaimStillHeld(pendingKindBotTransfer, req.pendingKey(), req.ID) {
+		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
+			fmt.Sprintf("Could not %s the bot (%s), and another transfer ticket took over this bot — ask the requester to resubmit if needed.", verb, cause.Error()))
+	}
 	if restoreErr := p.putPendingRequestKV(key, rawReq); restoreErr != nil {
 		p.API.LogError("failed to restore bot transfer request after failure", "error", restoreErr.Error())
-		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, "",
+		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the bot (%s), and the request could not be saved — ask the requester to resubmit.", verb, cause.Error()))
 	}
 	notice := func(clicked bool) string {

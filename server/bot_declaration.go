@@ -298,37 +298,44 @@ type botIndexEntry struct {
 	RetiredAt int64 `json:"retired_at,omitempty"`
 }
 
-// updateBotIndexOwner records a new owner on a bot's index entry (best-effort).
-func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) {
+// updateBotIndexOwner records a new owner on a bot's index entry.
+func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) error {
 	entry, err := p.loadBotIndex(botUserID)
-	if err != nil || entry == nil {
-		return
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return errors.New("bot index entry not found")
 	}
 	entry.OwnerUserID = newOwnerID
-	p.saveBotIndexEntry(*entry)
+	return p.saveBotIndexEntry(*entry)
 }
 
-// retireBotIndex marks a bot's index entry retired (best-effort).
-func (p *Plugin) retireBotIndex(botUserID string) {
+// retireBotIndex marks a bot's index entry retired.
+func (p *Plugin) retireBotIndex(botUserID string) error {
 	entry, err := p.loadBotIndex(botUserID)
-	if err != nil || entry == nil {
-		return
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return nil
 	}
 	entry.RetiredAt = model.GetMillis()
-	p.saveBotIndexEntry(*entry)
+	return p.saveBotIndexEntry(*entry)
 }
 
-func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) {
+func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		p.API.LogWarn("failed to marshal bot index entry", "bot_user_id", entry.BotUserID, "error", err.Error())
-		return
+		return errors.Wrap(err, "failed to marshal bot index entry")
 	}
 	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
 		p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
-		return
+		return errors.Wrap(appErr, "failed to update bot index entry")
 	}
 	p.trackBotIndexKey(entry.BotUserID)
+	return nil
 }
 
 // writeBotIndex records a bot created for req. Exercise bots are tracked

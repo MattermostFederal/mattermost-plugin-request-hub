@@ -80,7 +80,8 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const teamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
 
     const [assets, setAssets] = useState<TransferableAsset[]>([]);
-    const [assetsLoading, setAssetsLoading] = useState(false);
+    // Start true so the first paint does not flash "Nothing you can transfer".
+    const [assetsLoading, setAssetsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
     const [assetId, setAssetId] = useState('');
     const [action, setAction] = useState(isBot ? 'transfer' : 'reassign');
@@ -125,16 +126,26 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     }, [isOpen, isBot]);
 
     useEffect(() => {
-        if (!isBot || rotateTouched || !assetId) {
+        if (!isBot || !assetId) {
             return;
         }
         const selected = assets.find((a) => a.asset_id === assetId);
-        if (selected?.orphaned) {
-            // Mark touched so the checked UI matches what we submit.
-            setRotate(true);
-            setRotateTouched(true);
+        // Reset rotate when switching bots so an orphaned default does not
+        // carry over to a live bot.
+        setRotate(Boolean(selected?.orphaned));
+        setRotateTouched(Boolean(selected?.orphaned));
+    }, [assetId, assets, isBot]);
+
+    useEffect(() => {
+        if (isBot || !assetId) {
+            return;
         }
-    }, [assetId, assets, isBot, rotateTouched]);
+        const selected = assets.find((a) => a.asset_id === assetId);
+        const allowed = selected?.allowed_actions;
+        if (allowed && allowed.length > 0 && !allowed.includes(action)) {
+            setAction(allowed[0]);
+        }
+    }, [assetId, assets, action, isBot]);
 
     const reset = () => {
         setAssets([]);
@@ -207,7 +218,16 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     };
 
     const title = isBot ? 'Transfer or retire a bot' : 'Transfer or retire a webhook';
-    const actions = isBot ? BOT_ACTIONS : WEBHOOK_ACTIONS;
+    const selectedAsset = assets.find((a) => a.asset_id === assetId);
+    const actions = (() => {
+        const base = isBot ? BOT_ACTIONS : WEBHOOK_ACTIONS;
+        const allowed = selectedAsset?.allowed_actions;
+        if (!allowed || allowed.length === 0) {
+            return base;
+        }
+        const filtered = base.filter(([value]) => allowed.includes(value));
+        return filtered.length ? filtered : base;
+    })();
     const titleId = `transfer-title-${kind}`;
 
     return (

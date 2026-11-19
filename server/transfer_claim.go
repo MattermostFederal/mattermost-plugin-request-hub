@@ -131,3 +131,19 @@ func (p *Plugin) releaseTransferTicket(kind, userID, requestID, assetKey string)
 	p.releasePending(kind, userID, requestID)
 	p.releaseTransferAssetClaim(kind, assetKey, requestID)
 }
+
+// transferClaimStillHeld reports whether requestID still owns the per-asset
+// claim. Used by restore-after-failure so a concurrent submit that stole the
+// claim during fulfill cannot leave two live tickets.
+func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) bool {
+	assetKey = strings.TrimSpace(assetKey)
+	requestID = strings.TrimSpace(requestID)
+	if assetKey == "" || requestID == "" {
+		return false
+	}
+	raw, appErr := p.API.KVGet(transferAssetClaimKey(kind, assetKey))
+	if appErr != nil || raw == nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == requestID
+}

@@ -8,14 +8,26 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 )
 
+const kvWebhookIndexBackfillDone = "migration_webhook_index_backfill_v1"
+
 // backfillWebhookIndexFromHistory writes webhook_index_* rows for standalone
-// webhooks that were approved before the index existed. Best-effort: skips
-// exercise hooks, already-indexed hooks, and histories without a hook_id.
+// webhooks that were approved before the index existed. One-shot per
+// deployment (marker key); skips exercise hooks, incomplete snapshots, and
+// already-indexed hooks. Uses CAS-from-nil so a concurrent reassign/retire wins.
 func (p *Plugin) backfillWebhookIndexFromHistory() {
+	raw, appErr := p.API.KVGet(kvWebhookIndexBackfillDone)
+	if appErr != nil {
+		p.API.LogWarn("webhook index backfill: marker read failed", "error", appErr.Error())
+		return
+	}
+	if raw != nil {
+		return
+	}
+
 	for page := 0; ; page++ {
-		keys, appErr := p.API.KVList(page, webhookIndexPageSize)
-		if appErr != nil {
-			p.API.LogWarn("webhook index backfill: KVList failed", "error", appErr.Error())
+		keys, listErr := p.API.KVList(page, webhookIndexPageSize)
+		if listErr != nil {
+			p.API.LogWarn("webhook index backfill: KVList failed", "error", listErr.Error())
 			return
 		}
 		for _, key := range keys {
@@ -35,10 +47,17 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 				continue
 			}
 			var snap webhookRequest
-			if len(h.Request) > 0 {
-				_ = json.Unmarshal(h.Request, &snap)
+			if len(h.Request) == 0 {
+				continue
+			}
+			if uErr := json.Unmarshal(h.Request, &snap); uErr != nil {
+				p.API.LogWarn("webhook index backfill: skipping unreadable request snapshot", "request_id", h.RequestID, "error", uErr.Error())
+				continue
 			}
 			if snap.Exercise {
+				continue
+			}
+			if strings.TrimSpace(snap.WebhookType) == "" || (snap.WebhookType != webhookTypeIncoming && snap.WebhookType != webhookTypeOutgoing) {
 				continue
 			}
 			if snap.RequesterID == "" {
@@ -47,11 +66,32 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 			if snap.ID == "" {
 				snap.ID = h.RequestID
 			}
-			p.writeWebhookIndex(&snap, hookID, "")
+			entry := webhookIndexEntry{
+				HookID:      hookID,
+				WebhookType: snap.WebhookType,
+				ChannelID:   snap.ChannelID,
+				TeamID:      snap.TeamID,
+				DisplayName: snap.DisplayName,
+				Description: strings.TrimSpace(snap.Description),
+				CallbackURL: strings.TrimSpace(snap.CallbackURL),
+				OwnerUserID: snap.RequesterID,
+				RequesterID: snap.RequesterID,
+				RequestID:   snap.ID,
+				CreatedAt:   model.GetMillis(),
+			}
+			if snap.WebhookType == webhookTypeIncoming {
+				entry.TransferHandle = model.NewId()
+			}
+			if _, storeErr := p.storeWebhookIndexIfAbsent(entry); storeErr != nil {
+				p.API.LogWarn("webhook index backfill: store failed", "hook_id", hookID, "error", storeErr.Error())
+			}
 		}
 		if len(keys) < webhookIndexPageSize {
-			return
+			break
 		}
+	}
+	if setErr := p.API.KVSet(kvWebhookIndexBackfillDone, []byte("1")); setErr != nil {
+		p.API.LogWarn("webhook index backfill: failed to set done marker", "error", setErr.Error())
 	}
 }
 

@@ -299,33 +299,68 @@ func (p *Plugin) updateWebhookOwner(webhookType, hookID, newOwnerID, adminUserID
 	return nil
 }
 
-// revokeBotTokens revokes every tracked access token for a bot and stops
-// their reminders. Returns how many were revoked. The plugin API can't list
-// tokens, so this scans the bot_token_expiry_* index for matching BotUserID
-// (see token_reminders.go).
-func (p *Plugin) revokeBotTokens(botUserID string) (int, error) {
-	keys, err := p.listTokenExpiryKeys()
-	if err != nil {
-		return 0, errors.Wrap(err, "failed to list tracked bot tokens")
-	}
+// revokeBotTokens revokes every access token on the bot (including ones the
+// owner created by hand) via an admin session, then cleans tracked reminder
+// rows. Already-revoked / not-found tokens count as success.
+func (p *Plugin) revokeBotTokens(botUserID, adminUserID string) (int, error) {
 	revoked := 0
 	var failMsgs []string
-	for _, key := range keys {
-		rec, _, loadErr := p.loadBotTokenExpiry(key)
-		if loadErr != nil {
-			failMsgs = append(failMsgs, "load "+key+": "+loadErr.Error())
-			continue
+	seen := map[string]struct{}{}
+
+	if adminUserID != "" {
+		client, cleanup, clientErr := p.transferClient(adminUserID)
+		if clientErr != nil {
+			failMsgs = append(failMsgs, "list tokens: "+clientErr.Error())
+		} else {
+			defer cleanup()
+			tokens, _, listErr := client.GetUserAccessTokensForUser(context.Background(), botUserID, 0, 200)
+			if listErr != nil {
+				failMsgs = append(failMsgs, "list tokens: "+listErr.Error())
+			} else {
+				for _, tok := range tokens {
+					if tok == nil || tok.Id == "" {
+						continue
+					}
+					seen[tok.Id] = struct{}{}
+					if appErr := p.API.RevokeUserAccessToken(tok.Id); appErr != nil {
+						if isNotFound(appErr) {
+							revoked++
+							continue
+						}
+						p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", tok.Id, "error", appErr.Error())
+						failMsgs = append(failMsgs, "revoke "+tok.Id+": "+appErr.Error())
+						continue
+					}
+					revoked++
+				}
+			}
 		}
-		if rec == nil || rec.BotUserID != botUserID {
-			continue
+	}
+
+	// Drop reminder rows for RH-tracked tokens (and revoke any the list missed).
+	keys, err := p.listTokenExpiryKeys()
+	if err != nil {
+		failMsgs = append(failMsgs, "list tracked: "+err.Error())
+	} else {
+		for _, key := range keys {
+			rec, _, loadErr := p.loadBotTokenExpiry(key)
+			if loadErr != nil {
+				failMsgs = append(failMsgs, "load "+key+": "+loadErr.Error())
+				continue
+			}
+			if rec == nil || rec.BotUserID != botUserID {
+				continue
+			}
+			if _, already := seen[rec.TokenID]; !already {
+				if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
+					p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
+					failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
+					continue
+				}
+				revoked++
+			}
+			p.deleteBotTokenExpiry(key)
 		}
-		if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil {
-			p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
-			failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
-			continue
-		}
-		p.deleteBotTokenExpiry(key)
-		revoked++
 	}
 	if len(failMsgs) > 0 {
 		return revoked, errors.Errorf("revoked %d token(s); failures: %s", revoked, strings.Join(failMsgs, "; "))
@@ -349,11 +384,11 @@ func (p *Plugin) loadBotTokenExpiry(key string) (*botTokenExpiry, []byte, error)
 	return &rec, raw, nil
 }
 
-// rotateBotToken revokes the bot's tracked tokens and issues a fresh one,
+// rotateBotToken revokes every token on the bot and issues a fresh one,
 // tracked for the new owner so expiry reminders reach them. Returns the new
 // token (value + expiry) for the DM; an empty value means none was created.
-func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, requestID string) (revoked int, tokenValue string, expiresAt int64, err error) {
-	revoked, err = p.revokeBotTokens(botUserID)
+func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenValue string, expiresAt int64, err error) {
+	revoked, err = p.revokeBotTokens(botUserID, adminUserID)
 	if err != nil {
 		return revoked, "", 0, err
 	}

@@ -106,6 +106,9 @@ type transferableAsset struct {
 	OwnerID     string `json:"owner_id"`
 	OwnerActive bool   `json:"owner_active"`
 	Orphaned    bool   `json:"orphaned"`
+	// AllowedActions, when set, limits the transfer modal's action list
+	// (orphaned incoming hooks must not offer Reassign — same secret URL).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 // handleTransferableAssets lists RH-managed bots and webhooks the caller may
@@ -151,10 +154,18 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		active := p.userActive(e.OwnerUserID)
-		out["webhooks"] = append(out["webhooks"], transferableAsset{
-			AssetType: "webhook", AssetID: e.HookID, WebhookType: e.WebhookType, DisplayName: e.DisplayName, OwnerID: e.OwnerUserID,
+		entry := e
+		assetID := p.ensureIncomingTransferHandle(&entry)
+		item := transferableAsset{
+			AssetType: "webhook", AssetID: assetID, WebhookType: e.WebhookType, DisplayName: e.DisplayName, OwnerID: e.OwnerUserID,
 			OwnerActive: active, Orphaned: !active,
-		})
+		}
+		// Incoming hook IDs are the secret URL. Orphaned incoming hooks must
+		// not be reassigned (same URL stays live); only retire / recreate.
+		if e.WebhookType == webhookTypeIncoming && !active {
+			item.AllowedActions = []string{transferActionRetireRecreate, transferActionRetireOnly}
+		}
+		out["webhooks"] = append(out["webhooks"], item)
 	}
 	writeJSON(w, out)
 }
