@@ -55,7 +55,8 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByLabel('Reason').fill('quarterly review');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
-        await expect(page.getByText('ok')).toBeVisible();
+        // exact: true — KIND_OPTIONS labels like "Webhook" contain the substring "ok".
+        await expect(page.getByText('ok', {exact: true})).toBeVisible();
         expect(body).toMatchObject({type: 'full_histories', format: 'json', kind: 'bot', requester: 'alice', reason: 'quarterly review'});
         expect(body.since).toBe(new Date('2026-10-01T00:00:00').getTime());
         expect(body.until).toBe(new Date('2026-10-31T23:59:59.999').getTime());
@@ -83,7 +84,7 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByLabel('Reason').fill('fleet review');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
-        await expect(page.getByText('ok')).toBeVisible();
+        await expect(page.getByText('ok', {exact: true})).toBeVisible();
         expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'cloud_or_k8s', reason: 'fleet review'});
     });
 
@@ -112,7 +113,7 @@ test.describe('RequestAuditExportModal', () => {
         await expect(submit).toBeEnabled();
         await submit.click();
 
-        await expect(page.getByText('ok')).toBeVisible();
+        await expect(page.getByText('ok', {exact: true})).toBeVisible();
         expect(body).toEqual({
             type: 'bot_forensic',
             format: 'json',
@@ -138,7 +139,7 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByLabel('Reason').fill('why');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
-        await expect(page.getByText('ok')).toBeVisible();
+        await expect(page.getByText('ok', {exact: true})).toBeVisible();
         expect(body).toEqual({type: 'bot_inventory', format: 'json', env: 'lab', reason: 'why'});
     });
 
