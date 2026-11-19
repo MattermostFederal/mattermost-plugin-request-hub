@@ -58,6 +58,16 @@ function actionNeedsOwner(action: string): boolean {
     return action === 'transfer' || action === 'reassign' || action === 'retire_recreate';
 }
 
+function assetPlaceholder(loading: boolean, count: number): string {
+    if (loading) {
+        return 'Loading…';
+    }
+    if (count) {
+        return 'Select…';
+    }
+    return 'Nothing you can transfer or retire';
+}
+
 type Props = {kind: Kind};
 
 // RequestTransferModal collects a transfer/retire request for a bot or a
@@ -260,7 +270,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                     onChange={(e) => setAssetId(e.target.value)}
                                     disabled={assetsLoading}
                                 >
-                                    <option value=''>{assetsLoading ? 'Loading…' : (assets.length ? 'Select…' : 'Nothing you can transfer or retire')}</option>
+                                    <option value=''>{assetPlaceholder(assetsLoading, assets.length)}</option>
                                     {assets.map((a) => (
                                         <option
                                             key={a.asset_id}

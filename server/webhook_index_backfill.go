@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -55,8 +56,7 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 }
 
 func webhookHookIDFromHistory(h *requestHistory) string {
-	for i := len(h.Events) - 1; i >= 0; i-- {
-		ev := h.Events[i]
+	for _, ev := range slices.Backward(h.Events) {
 		if ev.Event != eventApproved && ev.Event != eventApprovedPartial {
 			continue
 		}
