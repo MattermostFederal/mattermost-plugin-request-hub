@@ -104,6 +104,9 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 
 	indexOwner := botIndexOwner(*index)
 	ownerID, liveErr := p.liveBotOwnerID(botUserID, indexOwner)
+	if errors.Is(liveErr, errBotGone) {
+		return "", errors.New("that bot no longer exists")
+	}
 	if liveErr != nil {
 		p.API.LogWarn("failed to load live bot owner for transfer", "bot_user_id", botUserID, "error", liveErr.Error())
 		return "", errors.New("could not verify the bot's current owner; try again")
@@ -421,7 +424,7 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		})
 	}
 
-	if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
+	if res, ok := p.claimTransferForFulfill(req.ID, key, rawReq, cards, "bot transfer request"); !ok {
 		return res
 	}
 	// Keep the pending reservation until fulfill succeeds so MaxPending and
@@ -528,13 +531,13 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
 	}
 
-	var tokenValue string
+	var tokenID, tokenValue string
 	var tokenExpiresAt int64
 	revoked := 0
 	rotated := false
 	if req.RotateToken {
 		var rotErr error
-		revoked, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUser.Id, req.ID)
+		revoked, tokenID, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUser.Id, req.ID)
 		if rotErr != nil {
 			// Owner already moved; keep the ticket closed but surface the gap
 			// so an admin can rotate manually. Restoring would re-open a
@@ -560,7 +563,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, true) {
 			p.API.LogError("failed to deliver rotated bot token to new owner", "bot_user_id", req.BotUserID, "new_owner_id", req.NewOwnerUserID)
 			// Do not leave an undelivered secret live under the new owner.
-			if revErr := p.revokeNewlyIssuedBotToken(req.BotUserID, tokenValue); revErr != nil {
+			if revErr := p.revokeNewlyIssuedBotToken(tokenID); revErr != nil {
 				partialErrors = append(partialErrors, "the new bot token could not be DM'd and could not be revoked automatically: "+revErr.Error())
 			} else {
 				partialErrors = append(partialErrors, "the new bot token could not be DM'd to the new owner, so it was revoked — rotate again")

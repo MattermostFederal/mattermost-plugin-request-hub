@@ -106,7 +106,7 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	}
 	index, err := p.loadWebhookIndex(hookID)
 	if err != nil {
-		p.API.LogWarn("failed to load webhook index for transfer", "hook_id", hookID, "error", err.Error())
+		p.API.LogWarn("failed to load webhook index for transfer", "requester_id", requesterID, "error", err.Error())
 		return "", errors.New("could not look up that webhook; try again")
 	}
 	if index == nil {
@@ -178,7 +178,7 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	}
 	sa.built(req, requester)
 	if held, holdErr := p.transferAssetPendingElsewhere(pendingKindWebhookTransfer, req.pendingKey(), ""); holdErr != nil {
-		p.API.LogWarn("failed to check for existing webhook transfer ticket", "hook_id", hookID, "error", holdErr.Error())
+		p.API.LogWarn("failed to check for existing webhook transfer ticket", "request_id", req.ID, "error", holdErr.Error())
 		return "", errors.New("could not check for an existing transfer ticket; try again")
 	} else if held {
 		return "", duplicateRequestError(pendingKindWebhookTransfer, req.pendingKey())
@@ -424,7 +424,7 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		})
 	}
 
-	if res, ok := p.claimRecord(key, rawReq, cards, "webhook transfer request"); !ok {
+	if res, ok := p.claimTransferForFulfill(req.ID, key, rawReq, cards, "webhook transfer request"); !ok {
 		return res
 	}
 	// Keep the pending reservation until fulfill succeeds (released there).
@@ -614,6 +614,17 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 
 	oldDeleted := true
 	if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil && !webhookDeleteAlreadyGone(err) {
+		if req.WebhookType == webhookTypeOutgoing {
+			// The new outgoing hook runs on a temporary trigger (or would
+			// double every callback next to the old one), so take it back
+			// down and leave the old hook and the ticket as they were.
+			cause := "the old outgoing webhook could not be deleted: " + err.Error() + "; the new hook was removed and the old one left in place"
+			if delErr := p.deleteWebhook(req.WebhookType, newHookID, actingUser.Id); delErr != nil && !webhookDeleteAlreadyGone(delErr) {
+				p.API.LogError("failed to delete replacement outgoing webhook after old delete failed", "hook_id", newHookID, "error", delErr.Error())
+				cause = "the old outgoing webhook could not be deleted: " + err.Error() + ", and the new hook could not be removed either (a System Admin should delete the extra outgoing webhook in this channel before retrying)"
+			}
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, errors.New(cause))
+		}
 		oldDeleted = false
 		// Replacement exists; old still present. Do not retire the old index
 		// row — the hub must still be able to target the live old hook.
@@ -625,7 +636,7 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		}
 		if req.WebhookType == webhookTypeOutgoing && outgoingSnap != nil {
 			if trigErr := p.restoreOutgoingWebhookTriggers(newHookID, actingUser.Id, outgoingSnap); trigErr != nil {
-				partialErrors = append(partialErrors, "recreated webhook triggers could not be restored: "+trigErr.Error()+" — update the new outgoing webhook's trigger words manually")
+				partialErrors = append(partialErrors, "recreated webhook triggers could not be restored: "+trigErr.Error()+" — set the new outgoing webhook's trigger words manually to: "+strings.Join(outgoingSnap.TriggerWords, ", "))
 			}
 		}
 	}
@@ -796,9 +807,8 @@ func (p *Plugin) restoreOutgoingWebhookTriggers(hookID, adminUserID string, snap
 	if snap == nil || len(snap.TriggerWords) == 0 || strings.TrimSpace(hookID) == "" {
 		return nil
 	}
-	if p.createOutgoingWebhookFromRecreateFn != nil {
-		// Tests that stub create also stub trigger restore as a no-op.
-		return nil
+	if p.restoreOutgoingWebhookTriggersFn != nil {
+		return p.restoreOutgoingWebhookTriggersFn(hookID, adminUserID, snap)
 	}
 	client, cleanup, err := p.transferClient(adminUserID)
 	if err != nil {

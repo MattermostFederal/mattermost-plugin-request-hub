@@ -48,11 +48,18 @@ type transferAsset struct {
 	channelID   string // bot home channel, or the webhook's target channel
 }
 
+// errBotGone is returned by liveBotOwnerID when the bot no longer exists.
+var errBotGone = errors.New("the bot no longer exists")
+
 // liveBotOwnerID prefers Mattermost's bot OwnerId when set, falling back to
-// the Request Hub index owner. Lookup failures fail closed.
+// the Request Hub index owner. Lookup failures fail closed; a deleted bot
+// returns errBotGone.
 func (p *Plugin) liveBotOwnerID(botUserID, indexOwner string) (string, error) {
 	bot, appErr := p.API.GetBot(botUserID, true)
 	if appErr != nil {
+		if isNotFound(appErr) {
+			return "", errBotGone
+		}
 		return "", errors.Wrap(appErr, "failed to load bot")
 	}
 	if bot != nil {
@@ -434,42 +441,27 @@ func (p *Plugin) loadBotTokenExpiry(key string) (*botTokenExpiry, []byte, error)
 }
 
 // revokeNewlyIssuedBotToken revokes a just-created token whose secret could
-// not be delivered, and drops its expiry reminder row when found.
-func (p *Plugin) revokeNewlyIssuedBotToken(botUserID, tokenValue string) error {
-	tokenValue = strings.TrimSpace(tokenValue)
-	if tokenValue == "" {
-		return nil
+// not be delivered, by its ID, and drops its expiry reminder row.
+func (p *Plugin) revokeNewlyIssuedBotToken(tokenID string) error {
+	tokenID = strings.TrimSpace(tokenID)
+	if tokenID == "" {
+		return errors.New("the new token's ID is unknown")
 	}
-	keys, err := p.listTokenExpiryKeys()
-	if err != nil {
-		return err
+	if appErr := p.API.RevokeUserAccessToken(tokenID); appErr != nil && !isNotFound(appErr) {
+		return errors.Wrap(appErr, "failed to revoke undelivered bot token")
 	}
-	var revokeErr error
-	for _, key := range keys {
-		rec, _, loadErr := p.loadBotTokenExpiry(key)
-		if loadErr != nil || rec == nil || rec.BotUserID != botUserID {
-			continue
-		}
-		if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
-			revokeErr = errors.Wrap(appErr, "failed to revoke undelivered bot token")
-			continue
-		}
-		p.deleteBotTokenExpiry(key)
-		return nil
-	}
-	if revokeErr != nil {
-		return revokeErr
-	}
-	return errors.New("could not find the undelivered token to revoke")
+	p.deleteBotTokenExpiry(botTokenExpiryKey(tokenID))
+	return nil
 }
 
 // rotateBotToken revokes every token on the bot and issues a fresh one,
 // tracked for the new owner so expiry reminders reach them. Returns the new
-// token (value + expiry) for the DM; an empty value means none was created.
+// token (ID, value and expiry) for the DM; an empty value means none was
+// created.
 // A partial revoke still issues the replacement, so the bot is never left
 // with its working tokens gone and nothing new; the revoke error is
 // returned alongside the token.
-func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenValue string, expiresAt int64, err error) {
+func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenID, tokenValue string, expiresAt int64, err error) {
 	revoked, revokeErr := p.revokeBotTokens(botUserID, adminUserID)
 	tok, tokErr := p.createBotToken(botUserID, "Rotated API token for @"+botUsername)
 	if tokErr != nil {
@@ -477,10 +469,10 @@ func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID,
 		if revokeErr != nil {
 			tokErr = errors.Errorf("%s; %s", revokeErr.Error(), tokErr.Error())
 		}
-		return revoked, "", 0, tokErr
+		return revoked, "", "", 0, tokErr
 	}
 	p.trackBotTokenExpiry(tok, botUsername, newOwnerID, requestID)
-	return revoked, tok.Token, tok.ExpiresAt, revokeErr
+	return revoked, tok.Id, tok.Token, tok.ExpiresAt, revokeErr
 }
 
 // sendTransferSecretsDM DMs the new owner the rotated secrets (token or

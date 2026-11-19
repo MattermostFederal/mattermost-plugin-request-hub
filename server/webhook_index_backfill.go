@@ -52,7 +52,7 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 			}
 			existing, loadErr := p.loadWebhookIndex(hookID)
 			if loadErr != nil {
-				p.API.LogWarn("webhook index backfill: index load failed", "hook_id", hookID, "error", loadErr.Error())
+				p.API.LogWarn("webhook index backfill: index load failed", "request_id", h.RequestID, "error", loadErr.Error())
 				hadErr = true
 				continue
 			}
@@ -96,7 +96,7 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 				entry.TransferHandle = model.NewId()
 			}
 			if _, storeErr := p.storeWebhookIndexIfAbsent(entry); storeErr != nil {
-				p.API.LogWarn("webhook index backfill: store failed", "hook_id", hookID, "error", storeErr.Error())
+				p.API.LogWarn("webhook index backfill: store failed", "request_id", h.RequestID, "error", storeErr.Error())
 				hadErr = true
 			}
 		}

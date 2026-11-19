@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 // handleSubmitBotTransferWebapp takes the hub tile's bot transfer/retire form.
@@ -131,7 +133,15 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		if e.RetiredAt != 0 {
 			continue
 		}
-		owner := botIndexOwner(e)
+		// Same owner submit and approval use, so who may nominate and the
+		// orphaned (rotate default) flag agree with what the server decides.
+		owner, ownerErr := p.liveBotOwnerID(e.BotUserID, botIndexOwner(e))
+		if ownerErr != nil {
+			if !errors.Is(ownerErr, errBotGone) {
+				p.API.LogWarn("failed to load live bot owner for transfer picker", "bot_user_id", e.BotUserID, "error", ownerErr.Error())
+			}
+			continue
+		}
 		asset := transferAsset{assetType: "bot", assetID: e.BotUserID, ownerUserID: owner, requesterID: e.RequesterID, channelID: e.HomeChannelID}
 		if p.canNominateTransfer(userID, asset) != nil {
 			continue

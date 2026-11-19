@@ -90,30 +90,63 @@ func (p *Plugin) writeWebhookIndex(req *webhookRequest, hookID, approverID strin
 	return nil
 }
 
+// storeWebhookIndex writes a whole index row, for a hook RH just created.
+// Changes to an existing row go through mutateWebhookIndex.
 func (p *Plugin) storeWebhookIndex(entry webhookIndexEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal webhook index entry")
 	}
-	key := webhookIndexKey(entry.HookID)
+	if appErr := p.API.KVSet(webhookIndexKey(entry.HookID), data); appErr != nil {
+		return errors.Wrap(appErr, "failed to store webhook index entry")
+	}
+	p.trackWebhookIndexKey(entry.HookID)
+	if err := p.ensureTransferHandleMap(entry); err != nil {
+		p.API.LogWarn("failed to store webhook transfer handle", "transfer_handle", entry.TransferHandle, "request_id", entry.RequestID, "error", err.Error())
+	}
+	return nil
+}
+
+// mutateWebhookIndex loads a webhook index row, applies fn, and CAS-writes
+// it back against the value it read, retrying on a concurrent change, so a
+// stale copy (a picker listing, say) never overwrites a retire or an owner
+// change. fn receives nil when the row does not exist; nothing is written
+// then. Returns the row as written.
+func (p *Plugin) mutateWebhookIndex(hookID string, fn func(*webhookIndexEntry) error) (*webhookIndexEntry, error) {
+	key := webhookIndexKey(hookID)
 	for range webhookIndexCASRetries {
-		old, appErr := p.API.KVGet(key)
+		raw, appErr := p.API.KVGet(key)
 		if appErr != nil {
-			return errors.Wrap(appErr, "failed to load webhook index entry for update")
+			return nil, errors.Wrap(appErr, "failed to load webhook index entry")
 		}
-		ok, casErr := p.API.KVCompareAndSet(key, old, data)
+		var entry *webhookIndexEntry
+		if raw != nil {
+			var e webhookIndexEntry
+			if err := json.Unmarshal(raw, &e); err != nil {
+				return nil, errors.Wrap(err, "failed to unmarshal webhook index entry")
+			}
+			entry = &e
+		}
+		if err := fn(entry); err != nil {
+			return nil, err
+		}
+		if entry == nil {
+			return nil, nil
+		}
+		data, err := json.Marshal(*entry)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to marshal webhook index entry")
+		}
+		ok, casErr := p.API.KVCompareAndSet(key, raw, data)
 		if casErr != nil {
-			return errors.Wrap(casErr, "failed to store webhook index entry")
+			return nil, errors.Wrap(casErr, "failed to update webhook index entry")
 		}
 		if ok {
-			p.trackWebhookIndexKey(entry.HookID)
-			if err := p.ensureTransferHandleMap(entry); err != nil {
-				p.API.LogWarn("failed to store webhook transfer handle", "transfer_handle", entry.TransferHandle, "request_id", entry.RequestID, "error", err.Error())
-			}
-			return nil
+			p.trackWebhookIndexKey(hookID)
+			return entry, nil
 		}
 	}
-	return errors.New("failed to store webhook index entry after concurrent updates")
+	return nil, errors.New("failed to update webhook index entry after concurrent updates")
 }
 
 // ensureTransferHandleMap writes the opaque handle → hook ID map for an
@@ -201,16 +234,14 @@ func (p *Plugin) listWebhookIndex() ([]webhookIndexEntry, error) {
 // retireWebhookIndex marks a hook retired. Returns an error when the index
 // could not be updated (caller may surface as a partial approval).
 func (p *Plugin) retireWebhookIndex(hookID string) error {
-	entry, err := p.loadWebhookIndex(hookID)
-	if err != nil {
-		return err
-	}
-	if entry == nil {
+	_, err := p.mutateWebhookIndex(hookID, func(e *webhookIndexEntry) error {
+		if e != nil {
+			e.RetiredAt = model.GetMillis()
+		}
 		return nil
-	}
-	entry.RetiredAt = model.GetMillis()
-	if err := p.storeWebhookIndex(*entry); err != nil {
-		p.API.LogWarn("failed to mark webhook index retired", "request_id", entry.RequestID, "transfer_handle", entry.TransferHandle, "webhook_type", entry.WebhookType, "error", err.Error())
+	})
+	if err != nil {
+		p.API.LogWarn("failed to mark webhook index retired", "error", err.Error())
 		return err
 	}
 	return nil
@@ -218,17 +249,16 @@ func (p *Plugin) retireWebhookIndex(hookID string) error {
 
 // updateWebhookIndexOwner records a new owner on a webhook index entry.
 func (p *Plugin) updateWebhookIndexOwner(hookID, newOwnerID string) error {
-	entry, err := p.loadWebhookIndex(hookID)
+	_, err := p.mutateWebhookIndex(hookID, func(e *webhookIndexEntry) error {
+		if e == nil {
+			return errors.New("webhook index entry not found")
+		}
+		e.OwnerUserID = newOwnerID
+		return nil
+	})
 	if err != nil {
+		p.API.LogWarn("failed to update webhook index owner", "error", err.Error())
 		return err
-	}
-	if entry == nil {
-		return errors.New("webhook index entry not found")
-	}
-	entry.OwnerUserID = newOwnerID
-	if storeErr := p.storeWebhookIndex(*entry); storeErr != nil {
-		p.API.LogWarn("failed to update webhook index owner", "request_id", entry.RequestID, "transfer_handle", entry.TransferHandle, "webhook_type", entry.WebhookType, "error", storeErr.Error())
-		return storeErr
 	}
 	return nil
 }
@@ -252,12 +282,24 @@ func (p *Plugin) ensureIncomingTransferHandle(entry *webhookIndexEntry) string {
 		}
 		return entry.TransferHandle
 	}
-	entry.TransferHandle = model.NewId()
-	if err := p.storeWebhookIndex(*entry); err != nil {
-		p.API.LogWarn("failed to persist incoming webhook transfer handle", "request_id", entry.RequestID, "error", err.Error())
-		entry.TransferHandle = ""
+	// Only the handle is set, on the current row: entry is a listing copy
+	// that may be stale, and must not overwrite a retire or owner change.
+	written, err := p.mutateWebhookIndex(entry.HookID, func(e *webhookIndexEntry) error {
+		if e == nil {
+			return errors.New("webhook index entry not found")
+		}
+		if e.TransferHandle == "" {
+			e.TransferHandle = model.NewId()
+		}
+		return nil
+	})
+	if err != nil || written == nil {
+		if err != nil {
+			p.API.LogWarn("failed to persist incoming webhook transfer handle", "request_id", entry.RequestID, "error", err.Error())
+		}
 		return ""
 	}
+	entry.TransferHandle = written.TransferHandle
 	if err := p.ensureTransferHandleMap(*entry); err != nil {
 		p.API.LogWarn("failed to store incoming webhook transfer handle map", "transfer_handle", entry.TransferHandle, "error", err.Error())
 		return ""

@@ -81,6 +81,9 @@ type Plugin struct {
 	// createOutgoingWebhookFromRecreateFn creates an outgoing hook from a
 	// recreate snapshot (nil in production → REST CreateOutgoingWebhook).
 	createOutgoingWebhookFromRecreateFn func(req *webhookRequest, snap *outgoingWebhookRecreate, adminUserID string) (dmMsg, hookID string, err error)
+	// restoreOutgoingWebhookTriggersFn replaces the REST trigger restore
+	// after an outgoing recreate (tests only).
+	restoreOutgoingWebhookTriggersFn func(hookID, adminUserID string, snap *outgoingWebhookRecreate) error
 	// listBotAccessTokensFn lists every access token on a bot for revoke-all
 	// (nil in production → paged REST GetUserAccessTokensForUser).
 	listBotAccessTokensFn func(botUserID, adminUserID string) ([]*model.UserAccessToken, error)

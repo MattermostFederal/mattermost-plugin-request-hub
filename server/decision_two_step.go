@@ -402,6 +402,11 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		p.API.LogError("bot token created but no DM channel for delivery; deleting bot", "bot_user_id", bot.UserId)
 		if delErr := p.API.PermanentDeleteBot(bot.UserId); delErr != nil {
 			p.API.LogError("failed to delete bot after token delivery failure", "bot_user_id", bot.UserId, "error", delErr.Error())
+			// The bot and its token are still live: index them so
+			// Transfer/Retire can find the bot.
+			if idxErr := p.writeBotIndex(req, bot, actingUser.Id, true, incomingWebhookURL != "", outgoingWebhookCreated); idxErr != nil {
+				p.API.LogError("failed to index bot that could not be removed", "bot_user_id", bot.UserId, "error", idxErr.Error())
+			}
 			return p.endUndelivered(cards,
 				fmt.Sprintf("⚠️ Fully approved, but the token could not be delivered and bot @%s could not be removed automatically — an admin should delete it.", bot.Username),
 				false, botUndeliveredTicket(req))
@@ -411,14 +416,18 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 			true, botUndeliveredTicket(req))
 	}
 
+	// incomingHookExists tracks whether the bot still has an incoming hook,
+	// for the index, even when its URL is not delivered.
+	incomingHookExists := incomingWebhookURL != ""
 	// Incoming webhook URL is also a secret — delete the hook if undeliverable.
 	if incomingWebhookURL != "" && req.DMChannelID == "" {
 		p.API.LogError("bot incoming webhook created but no DM channel for URL delivery")
 		if hookID := hookIDFromPublicURL(incomingWebhookURL); hookID != "" {
 			if delErr := p.deleteWebhook(webhookTypeIncoming, hookID, actingUser.Id); delErr != nil {
-				p.API.LogError("failed to delete undeliverable bot incoming webhook", "hook_id", hookID, "error", delErr.Error())
+				p.API.LogError("failed to delete undeliverable bot incoming webhook", "bot_user_id", bot.UserId, "error", delErr.Error())
 				partialErrors = append(partialErrors, "incoming webhook URL could not be delivered and the hook could not be removed automatically")
 			} else {
+				incomingHookExists = false
 				partialErrors = append(partialErrors, "incoming webhook URL could not be delivered, so the hook was removed")
 			}
 		} else {
@@ -427,7 +436,7 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		incomingWebhookURL = ""
 	}
 
-	if idxErr := p.writeBotIndex(req, bot, actingUser.Id, tokenValue != "", incomingWebhookURL != "", outgoingWebhookCreated); idxErr != nil {
+	if idxErr := p.writeBotIndex(req, bot, actingUser.Id, tokenValue != "", incomingHookExists, outgoingWebhookCreated); idxErr != nil {
 		partialErrors = append(partialErrors, "bot index could not be written: "+idxErr.Error()+" — Transfer/Retire may not list this bot")
 	}
 
@@ -618,9 +627,9 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	// Deliver via the existing ticket thread. If DM channel is missing for
 	// an incoming webhook (secret URL), delete the hook.
 	if req.WebhookType == webhookTypeIncoming && req.DMChannelID == "" {
-		p.API.LogError("webhook created but no DM channel for URL delivery", "hook_id", hookID)
+		p.API.LogError("webhook created but no DM channel for URL delivery", "request_id", req.ID)
 		if delErr := p.deleteWebhook(req.WebhookType, hookID, actingUser.Id); delErr != nil {
-			p.API.LogError("failed to delete webhook after URL delivery failure", "hook_id", hookID, "error", delErr.Error())
+			p.API.LogError("failed to delete webhook after URL delivery failure", "request_id", req.ID, "error", delErr.Error())
 			return p.endUndelivered(cards,
 				fmt.Sprintf("⚠️ Fully approved, but the URL could not be delivered and the %s webhook **%s** could not be removed automatically — an admin should delete it.", req.WebhookType, escapeMarkdown(req.DisplayName)),
 				false, webhookUndeliveredTicket(req))

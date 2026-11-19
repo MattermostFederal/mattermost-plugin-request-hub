@@ -87,12 +87,11 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const [assetId, setAssetId] = useState('');
     const [action, setAction] = useState(isBot ? 'transfer' : 'reassign');
     const [newOwner, setNewOwner] = useState('');
-    const [rotate, setRotate] = useState(false);
 
-    // rotateTouched marks an explicit checkbox choice so we only send
-    // rotate_token when the user opted in/out; otherwise the server applies
-    // its offboarding / owner-deactivated default.
-    const [rotateTouched, setRotateTouched] = useState(false);
+    // The checkbox value is always sent for a bot transfer, so the box the
+    // requester sees is what the server does. It starts checked for a bot
+    // whose owner is deactivated.
+    const [rotate, setRotate] = useState(false);
     const [note, setNote] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
@@ -135,10 +134,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
             return;
         }
 
-        // Visual default only — leave rotateTouched false so the server
-        // applies rotateDefaultOn(reason) until the user toggles explicitly.
         setRotate(selectedOrphaned);
-        setRotateTouched(false);
     }, [assetId, isBot, selectedOrphaned]);
 
     useEffect(() => {
@@ -160,7 +156,6 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         setAction(isBot ? 'transfer' : 'reassign');
         setNewOwner('');
         setRotate(false);
-        setRotateTouched(false);
         setNote('');
         setError('');
         setSuccess('');
@@ -205,7 +200,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                 new_owner_username: ownerUsername,
                 note: note.trim(),
             };
-            if (rotateTouched) {
+            if (action === 'transfer') {
                 botPayload.rotate_token = rotate;
             }
             const result = isBot ? await submitBotTransferRequest(botPayload) : await submitWebhookTransferRequest({
@@ -322,15 +317,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                 onChange={(e) => {
                                     const next = e.target.value;
                                     setAction(next);
-                                    if (next === 'transfer') {
-                                        // Re-apply the orphaned visual default
-                                        // without marking an explicit choice.
-                                        setRotate(selectedOrphaned);
-                                        setRotateTouched(false);
-                                    } else {
-                                        setRotate(false);
-                                        setRotateTouched(false);
-                                    }
+                                    setRotate(next === 'transfer' && selectedOrphaned);
                                 }}
                             >
                                 {actions.map(([value, label]) => (
@@ -365,10 +352,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                     <input
                                         type='checkbox'
                                         checked={rotate}
-                                        onChange={(e) => {
-                                            setRotateTouched(true);
-                                            setRotate(e.target.checked);
-                                        }}
+                                        onChange={(e) => setRotate(e.target.checked)}
                                     />
                                     {'Rotate the access token (revoke the old one, issue a fresh one to the new owner)'}
                                 </label>

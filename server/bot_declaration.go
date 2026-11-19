@@ -371,29 +371,20 @@ func (p *Plugin) mutateBotIndex(botUserID string, fn func(*botIndexEntry) error)
 	return errors.New("failed to update bot index entry after concurrent updates")
 }
 
+// saveBotIndexEntry writes a whole index row, for a bot RH just created.
+// Changes to an existing row go through mutateBotIndex.
 func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		p.API.LogWarn("failed to marshal bot index entry", "bot_user_id", entry.BotUserID, "error", err.Error())
 		return errors.Wrap(err, "failed to marshal bot index entry")
 	}
-	key := kvBotIndexPrefix + entry.BotUserID
-	for range botIndexCASRetries {
-		old, appErr := p.API.KVGet(key)
-		if appErr != nil {
-			return errors.Wrap(appErr, "failed to load bot index entry for update")
-		}
-		ok, casErr := p.API.KVCompareAndSet(key, old, data)
-		if casErr != nil {
-			p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", casErr.Error())
-			return errors.Wrap(casErr, "failed to update bot index entry")
-		}
-		if ok {
-			p.trackBotIndexKey(entry.BotUserID)
-			return nil
-		}
+	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
+		p.API.LogWarn("failed to write bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
+		return errors.Wrap(appErr, "failed to write bot index entry")
 	}
-	return errors.New("failed to update bot index entry after concurrent updates")
+	p.trackBotIndexKey(entry.BotUserID)
+	return nil
 }
 
 // writeBotIndex records a bot created for req. Credential flags reflect what

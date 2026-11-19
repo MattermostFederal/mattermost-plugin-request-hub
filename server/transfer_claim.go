@@ -1,8 +1,11 @@
 package main
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
 )
 
@@ -15,11 +18,21 @@ import (
 // treating an in-flight claim as stale).
 //
 // Final approval deletes the pending record before REST side effects run.
-// During that window pendingRequestExists is false, so stale overwrite is
-// gated on the holder's request history being terminal — otherwise a
-// concurrent submit would steal the claim mid-fulfill.
+// During that window pendingRequestExists is false, so final approval first
+// writes a fulfill marker for the request, and a stale overwrite is refused
+// while that marker is fresh. The marker is timestamped rather than trusted
+// forever, so a crash or restart mid-fulfill frees the asset once
+// transferFulfillWindow has passed instead of locking it for good.
 
-const kvTransferAssetClaimPrefix = "transfer_asset_claim_"
+const (
+	kvTransferAssetClaimPrefix = "transfer_asset_claim_"
+	kvTransferFulfillingPrefix = "transfer_fulfilling_"
+
+	// transferFulfillWindow bounds how long a fulfill marker protects a
+	// claim. It is well above the longest fulfill (a handful of REST calls,
+	// each capped by transferRESTTimeout).
+	transferFulfillWindow = 15 * time.Minute
+)
 
 func transferAssetClaimKey(kind, assetKey string) string {
 	return kvTransferAssetClaimPrefix + kind + "_" + assetKey
@@ -38,22 +51,50 @@ func transferPendingAssetKey(rec storedRequest) string {
 	}
 }
 
-// transferHistoryTerminal reports whether a request's history shows it has
-// left the open/in-flight set, so its asset claim may be treated as stale.
-func transferHistoryTerminal(status string) bool {
-	switch status {
-	case historyApproved, historyDenied, historyWithdrawn, historyAcknowledged,
-		historyExpired, historyFailed, historyLost, historyClosed:
-		return true
-	default:
-		return false
+func transferFulfillingKey(requestID string) string {
+	return kvTransferFulfillingPrefix + requestID
+}
+
+// markTransferFulfilling records that requestID's final approval is about
+// to delete its pending record and run the side effects. It must be written
+// before the record is claimed.
+func (p *Plugin) markTransferFulfilling(requestID string) error {
+	stamp := strconv.FormatInt(model.GetMillis(), 10)
+	if appErr := p.API.KVSet(transferFulfillingKey(requestID), []byte(stamp)); appErr != nil {
+		return errors.Wrap(appErr, "failed to mark transfer as being carried out")
 	}
+	return nil
+}
+
+// clearTransferFulfilling drops requestID's fulfill marker.
+func (p *Plugin) clearTransferFulfilling(requestID string) {
+	if appErr := p.API.KVDelete(transferFulfillingKey(requestID)); appErr != nil {
+		p.API.LogWarn("failed to clear transfer fulfill marker", "request_id", requestID, "error", appErr.Error())
+	}
+}
+
+// transferFulfillInProgress reports whether requestID's final approval
+// started within transferFulfillWindow.
+func (p *Plugin) transferFulfillInProgress(requestID string) (bool, error) {
+	raw, appErr := p.API.KVGet(transferFulfillingKey(requestID))
+	if appErr != nil {
+		return false, errors.Wrap(appErr, "failed to read transfer fulfill marker")
+	}
+	if raw == nil {
+		return false, nil
+	}
+	started, parseErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if parseErr != nil {
+		// Unreadable marker: treat as in progress until it is cleared.
+		return true, nil
+	}
+	return model.GetMillis()-started < transferFulfillWindow.Milliseconds(), nil
 }
 
 // claimTransferAsset CAS-writes requestID as the holder of assetKey. If
 // another live request already holds the claim (or another open ticket
 // covers the asset), returns a duplicate error. Stale claims are overwritten
-// only when the holder request is gone, its history is terminal, and no
+// only when the holder request is gone, it is not being carried out, and no
 // other open ticket covers the asset.
 func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if kind != pendingKindBotTransfer && kind != pendingKindWebhookTransfer {
@@ -100,13 +141,13 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if exists {
 		return duplicateRequestError(kind, assetKey)
 	}
-	// Holder record missing: refuse while history is still open/in-flight
-	// (final approval deletes the record before REST calls finish).
-	h, histErr := p.loadHistory(holder)
-	if histErr != nil {
+	// Holder record missing: refuse while its final approval is still
+	// being carried out (the record is deleted before the REST calls).
+	fulfilling, fulfillErr := p.transferFulfillInProgress(holder)
+	if fulfillErr != nil {
 		return errors.New("could not check for an existing transfer ticket; try again")
 	}
-	if h == nil || !transferHistoryTerminal(h.Status) {
+	if fulfilling {
 		return duplicateRequestError(kind, assetKey)
 	}
 	held, holdErr := p.transferAssetPendingElsewhere(kind, assetKey, requestID)
@@ -150,11 +191,25 @@ func (p *Plugin) releaseTransferAssetClaim(kind, assetKey, requestID string) {
 	}
 }
 
-// releaseTransferTicket drops the requester's pending list entry and the
-// per-asset claim together.
+// releaseTransferTicket drops the requester's pending list entry, the
+// per-asset claim and any fulfill marker together.
 func (p *Plugin) releaseTransferTicket(kind, userID, requestID, assetKey string) {
 	p.releasePending(kind, userID, requestID)
 	p.releaseTransferAssetClaim(kind, assetKey, requestID)
+	p.clearTransferFulfilling(requestID)
+}
+
+// claimTransferForFulfill marks requestID as being carried out, then claims
+// its pending record. The marker goes first so the asset claim is never
+// unprotected while the record is gone. On a lost claim the marker is left
+// for the winner (or the window) to clear: a concurrent final approval of
+// the same request shares it.
+func (p *Plugin) claimTransferForFulfill(requestID, key string, rawReq []byte, cards decisionCards, what string) (decisionResult, bool) {
+	if err := p.markTransferFulfilling(requestID); err != nil {
+		p.API.LogError("failed to mark "+what+" as being carried out", "request_id", requestID, "error", err.Error())
+		return decisionResult{Reply: "Could not process that request; try Approve again."}, false
+	}
+	return p.claimRecord(key, rawReq, cards, what)
 }
 
 // transferClaimStillHeld reports whether requestID still owns the per-asset
