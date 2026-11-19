@@ -424,7 +424,7 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		})
 	}
 
-	if res, ok := p.claimTransferForFulfill(req.ID, key, rawReq, cards, "bot transfer request"); !ok {
+	if res, ok := p.claimTransferForFulfill(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "bot transfer request"); !ok {
 		return res
 	}
 	// Keep the pending reservation until fulfill succeeds so MaxPending and
@@ -488,13 +488,14 @@ func (p *Plugin) botTransferApprovalBlockerFor(req *botTransferRequest, actingUs
 // retire with the approving admin's session.
 func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string) decisionResult {
 	var partialErrors []string
+	lease := req.transferLease()
 
 	if req.Action == transferActionRetire {
 		// Disable first so the bot stops acting before token revoke races.
 		if disErr := p.disableBot(req.BotUserID, actingUser.Id); disErr != nil {
 			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, disErr)
 		}
-		revoked, revErr := p.revokeBotTokens(req.BotUserID, actingUser.Id, req.ID)
+		revoked, revErr := p.revokeBotTokens(req.BotUserID, actingUser.Id, lease)
 		if revErr != nil {
 			partialErrors = append(partialErrors, "revoking bot tokens failed: "+revErr.Error())
 		}
@@ -537,46 +538,13 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
 	}
 
-	var tokenID, tokenValue string
 	var tokenExpiresAt int64
 	revoked := 0
 	rotated := false
 	if req.RotateToken {
-		var rotErr error
-		revoked, tokenID, tokenValue, tokenExpiresAt, rotErr = p.rotateBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUser.Id, req.ID)
-		if rotErr != nil {
-			// Owner already moved; keep the ticket closed but surface the gap
-			// so an admin can rotate manually. Restoring would re-open a
-			// transfer against an already-reassigned bot.
-			if tokenValue != "" {
-				partialErrors = append(partialErrors, "a new token was issued, but not every old token could be revoked: "+rotErr.Error()+" — revoke the remaining tokens manually")
-			} else {
-				partialErrors = append(partialErrors, "token rotation failed: "+rotErr.Error()+" — rotate manually for the new owner")
-			}
-		}
-		rotated = tokenValue != ""
-	}
-
-	if tokenValue != "" {
-		lines := []string{
-			fmt.Sprintf("🔑 **New access token for bot @%s**", req.BotUsername),
-			fmt.Sprintf("`%s`", tokenValue),
-			"⚠️ **Save this now.** This message auto-deletes in ~72 hours and the token cannot be retrieved again.",
-		}
-		if tokenExpiresAt > 0 {
-			lines = append(lines, fmt.Sprintf("⏳ The token expires on **%s**.", tokenExpiryDate(tokenExpiresAt)))
-		}
-		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, true) {
-			p.API.LogError("failed to deliver rotated bot token to new owner", "bot_user_id", req.BotUserID, "new_owner_id", req.NewOwnerUserID)
-			// Do not leave an undelivered secret live under the new owner.
-			if revErr := p.revokeNewlyIssuedBotToken(tokenID); revErr != nil {
-				partialErrors = append(partialErrors, "the new bot token could not be DM'd and could not be revoked automatically: "+revErr.Error())
-			} else {
-				partialErrors = append(partialErrors, "the new bot token could not be DM'd to the new owner, so it was revoked — rotate again")
-				tokenExpiresAt = 0
-				rotated = false
-			}
-		}
+		rotation := p.rotateBotTokenForTransfer(req, actingUser.Id, lease)
+		revoked, rotated, tokenExpiresAt = rotation.revoked, rotation.rotated, rotation.expiresAt
+		partialErrors = append(partialErrors, rotation.partialErrors...)
 	}
 
 	p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
@@ -597,6 +565,79 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		CardText:   cardText,
 		StatusLine: outcome,
 	})
+}
+
+// transferLease names this ticket's per-asset claim, which long side
+// effects renew while they run.
+func (req *botTransferRequest) transferLease() transferLease {
+	return transferLease{kind: pendingKindBotTransfer, assetKey: req.pendingKey(), requestID: req.ID}
+}
+
+// botTokenRotation is what a transfer's token rotation ended up doing.
+type botTokenRotation struct {
+	revoked       int
+	expiresAt     int64
+	rotated       bool
+	partialErrors []string
+}
+
+// rotateBotTokenForTransfer issues the successor's replacement token and
+// retires the ones the bot already had. A voluntary handover hands the new
+// secret over first: if that DM fails, the previous owner's tokens are
+// left working and only the undelivered replacement is revoked. An
+// offboarding or owner-deactivated handover revokes first, because cutting
+// the previous owner off is the point of the rotation.
+func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID string, lease transferLease) botTokenRotation {
+	var out botTokenRotation
+	issued, issueErr := p.issueReplacementBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUserID, req.ID)
+	if issueErr != nil {
+		out.partialErrors = append(out.partialErrors, "token rotation failed: "+issueErr.Error()+" — rotate manually for the new owner")
+		return out
+	}
+
+	deliverFirst := req.Reason == transferReasonVoluntary
+	if deliverFirst && !p.deliverRotatedBotToken(req, issued) {
+		out.partialErrors = append(out.partialErrors, p.dropUndeliveredBotToken(req, issued.tokenID,
+			"the old tokens were left working — rotate again"))
+		return out
+	}
+
+	revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, issued.targets)
+	out.revoked = revoked
+	if revokeErr != nil {
+		out.partialErrors = append(out.partialErrors, "a new token was issued, but not every old token could be revoked: "+revokeErr.Error()+" — revoke the remaining tokens manually")
+	}
+	if !deliverFirst && !p.deliverRotatedBotToken(req, issued) {
+		out.partialErrors = append(out.partialErrors, p.dropUndeliveredBotToken(req, issued.tokenID, "rotate again"))
+		return out
+	}
+	out.rotated = true
+	out.expiresAt = issued.expiresAt
+	return out
+}
+
+// deliverRotatedBotToken DMs the successor the replacement token.
+func (p *Plugin) deliverRotatedBotToken(req *botTransferRequest, issued issuedBotToken) bool {
+	lines := []string{
+		fmt.Sprintf("🔑 **New access token for bot @%s**", req.BotUsername),
+		fmt.Sprintf("`%s`", issued.token),
+		"⚠️ **Save this now.** This message auto-deletes in ~72 hours and the token cannot be retrieved again.",
+	}
+	if issued.expiresAt > 0 {
+		lines = append(lines, fmt.Sprintf("⏳ The token expires on **%s**.", tokenExpiryDate(issued.expiresAt)))
+	}
+	return p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, true)
+}
+
+// dropUndeliveredBotToken revokes a replacement token whose DM never
+// arrived, so no live secret is left that nobody holds, and returns the
+// line for the approval summary.
+func (p *Plugin) dropUndeliveredBotToken(req *botTransferRequest, tokenID, advice string) string {
+	p.API.LogError("failed to deliver rotated bot token to new owner", "bot_user_id", req.BotUserID, "new_owner_id", req.NewOwnerUserID)
+	if revErr := p.revokeNewlyIssuedBotToken(tokenID); revErr != nil {
+		return "the new bot token could not be DM'd and could not be revoked automatically: " + revErr.Error()
+	}
+	return "the new bot token could not be DM'd to the new owner, so it was revoked — " + advice
 }
 
 // restoreBotTransferAfterFailure re-stores the pending request after a REST

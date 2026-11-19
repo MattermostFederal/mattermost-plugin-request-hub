@@ -186,3 +186,15 @@ func ticketSubmittedIntro(kindLabel string) string {
 		kindLabel,
 	)
 }
+
+// ticketAcknowledgedIntro introduces a ticket that is acknowledged rather
+// than approved or denied, so the DM does not promise a decision.
+func ticketAcknowledgedIntro(kindLabel string) string {
+	if kindLabel == "" {
+		kindLabel = "report"
+	}
+	return fmt.Sprintf(
+		"Your %s is with the System Admins to acknowledge — there's nothing to approve or deny. Reply to this thread to add context; your reply will be forwarded to them. Use Withdraw if you no longer need it.",
+		kindLabel,
+	)
+}

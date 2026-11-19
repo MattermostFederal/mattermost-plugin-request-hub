@@ -202,7 +202,7 @@ func (p *Plugin) submitBugReportRequest(requesterID, category, aboutKind, aboutO
 	req.ApprovalChannelID = approvalChannelID
 
 	req.DMRootPostID, req.DMChannelID = p.postTicketCreatedDM(req.RequesterID,
-		p.bugReportAttachment(req, requester), ticketSubmittedIntro("bug/feedback report"), req.ID)
+		p.bugReportAttachment(req, requester), ticketAcknowledgedIntro("bug/feedback report"), req.ID)
 
 	p.persistTicketPosts(ticketPersist{
 		KVKey: kvBugReportRequestPrefix + req.ID, RawBefore: rawBefore, Record: req,
@@ -213,7 +213,13 @@ func (p *Plugin) submitBugReportRequest(requesterID, category, aboutKind, aboutO
 			Kind: requestTypeBugReport,
 		},
 	})
-	return "Your report was sent to the System Admins in the audit channel. You'll get a DM update when one acknowledges it.", nil
+	// No approval post means there was no audit channel to post into, so
+	// the card went out as a DM to each System Admin instead.
+	where := "to the System Admins in the audit channel"
+	if approvalPostID == "" {
+		where = "directly to the System Admins"
+	}
+	return "Your report was sent " + where + ". You'll get a DM update when one acknowledges it.", nil
 }
 
 func (p *Plugin) bugReportAttachment(req *bugReportRequest, requester *model.User) *model.MessageAttachment {

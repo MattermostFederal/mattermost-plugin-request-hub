@@ -67,6 +67,29 @@ func (p *Plugin) writeWebhookIndex(req *webhookRequest, hookID, approverID strin
 	if req.Exercise || strings.TrimSpace(hookID) == "" {
 		return nil
 	}
+	if err := p.storeWebhookIndex(newWebhookIndexEntry(req, hookID)); err != nil {
+		p.API.LogError("failed to write webhook index entry", "request_id", req.ID, "approver_id", approverID, "webhook_type", req.WebhookType, "error", err.Error())
+		return err
+	}
+	return nil
+}
+
+// writeWebhookIndexIfAbsent records a hook RH created, leaving any existing
+// row alone. A retire+recreate cutover can run this more than once (the
+// first attempt and every resume), and a row written by a later owner must
+// win over a replay.
+func (p *Plugin) writeWebhookIndexIfAbsent(req *webhookRequest, hookID string) error {
+	if req.Exercise || strings.TrimSpace(hookID) == "" {
+		return nil
+	}
+	if _, err := p.storeWebhookIndexIfAbsent(newWebhookIndexEntry(req, hookID)); err != nil {
+		p.API.LogError("failed to write webhook index entry", "request_id", req.ID, "webhook_type", req.WebhookType, "error", err.Error())
+		return err
+	}
+	return nil
+}
+
+func newWebhookIndexEntry(req *webhookRequest, hookID string) webhookIndexEntry {
 	entry := webhookIndexEntry{
 		HookID:      hookID,
 		WebhookType: req.WebhookType,
@@ -83,11 +106,7 @@ func (p *Plugin) writeWebhookIndex(req *webhookRequest, hookID, approverID strin
 	if req.WebhookType == webhookTypeIncoming {
 		entry.TransferHandle = model.NewId()
 	}
-	if err := p.storeWebhookIndex(entry); err != nil {
-		p.API.LogError("failed to write webhook index entry", "request_id", req.ID, "approver_id", approverID, "webhook_type", req.WebhookType, "error", err.Error())
-		return err
-	}
-	return nil
+	return entry
 }
 
 // storeWebhookIndex writes a whole index row, for a hook RH just created.

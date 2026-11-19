@@ -273,17 +273,24 @@ func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.Us
 	if p.listBotAccessTokensFn != nil {
 		return p.listBotAccessTokensFn(botUserID, adminUserID)
 	}
-	client, cleanup, err := p.transferClient(adminUserID)
-	if err != nil {
-		return nil, err
+	fetch := p.listBotAccessTokensPageFn
+	if fetch == nil {
+		client, cleanup, err := p.transferClient(adminUserID)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+		ctx := context.Background()
+		fetch = func(botUserID, _ string, page int) ([]*model.UserAccessToken, error) {
+			tokens, _, listErr := client.GetUserAccessTokensForUser(ctx, botUserID, page, botAccessTokenListPerPage)
+			return tokens, listErr
+		}
 	}
-	defer cleanup()
-	ctx := context.Background()
 	walk := func() (map[string]*model.UserAccessToken, []string, error) {
 		byID := map[string]*model.UserAccessToken{}
 		var order []string
 		for page := 0; ; page++ {
-			tokens, _, listErr := client.GetUserAccessTokensForUser(ctx, botUserID, page, botAccessTokenListPerPage)
+			tokens, listErr := fetch(botUserID, adminUserID, page)
 			if listErr != nil {
 				return nil, nil, errors.Wrap(listErr, "failed to list bot access tokens")
 			}
@@ -292,7 +299,10 @@ func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.Us
 					continue
 				}
 				if _, dup := byID[tok.Id]; dup {
-					continue
+					// The same row on two pages means the window shifted
+					// mid-walk, so some other token was skipped. Fail
+					// closed instead of reporting a short list as complete.
+					return nil, nil, errors.New("the bot's token list shifted while it was being read; try again")
 				}
 				byID[tok.Id] = tok
 				order = append(order, tok.Id)
@@ -462,40 +472,83 @@ func (p *Plugin) collectBotTokens(botUserID, adminUserID string) botTokenTargets
 	return targets
 }
 
-// botTokenRevokeRenewEvery is how many revoke attempts pass between fulfill
-// marker renewals during a long revoke-all.
+// botTokenRevokeRenewEvery is how many revoke attempts pass between claim
+// lease renewals during a long revoke-all.
 const botTokenRevokeRenewEvery = 25
+
+// tokenRevokeFailures collects revoke problems by token ID, so a token that
+// fails on the API list and then succeeds (or reads as already gone) from
+// its tracked row is not reported as a failure.
+type tokenRevokeFailures struct {
+	general []string
+	order   []string
+	byID    map[string]string
+}
+
+func (f *tokenRevokeFailures) failed(id, msg string) {
+	if f.byID == nil {
+		f.byID = map[string]string{}
+	}
+	if _, seen := f.byID[id]; !seen {
+		f.order = append(f.order, id)
+	}
+	f.byID[id] = msg
+}
+
+func (f *tokenRevokeFailures) cleared(id string) { delete(f.byID, id) }
+
+func (f *tokenRevokeFailures) messages() []string {
+	out := append([]string(nil), f.general...)
+	for _, id := range f.order {
+		if msg, ok := f.byID[id]; ok {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
 
 // revokeBotTokenTargets revokes a captured token set and cleans the tracked
 // reminder rows. Already-revoked / not-found tokens count as success. Expiry
 // rows are dropped only after a confirmed revoke so reminders keep retrying
-// on transient failures. requestID, when set, renews the transfer fulfill
-// marker as the loop runs.
-func (p *Plugin) revokeBotTokenTargets(botUserID, requestID string, targets botTokenTargets) (int, error) {
+// on transient failures. The lease, when set, is renewed as the loop runs;
+// losing it stops the walk before the next revoke.
+func (p *Plugin) revokeBotTokenTargets(botUserID string, lease transferLease, targets botTokenTargets) (int, error) {
 	revoked := 0
 	seen := map[string]struct{}{}
-	failMsgs := append([]string(nil), targets.listFailure...)
+	fails := tokenRevokeFailures{general: append([]string(nil), targets.listFailure...)}
 	attempts := 0
-	renew := func() {
+	renew := func() error {
 		attempts++
-		if attempts%botTokenRevokeRenewEvery == 0 {
-			p.renewTransferFulfilling(requestID)
+		if attempts%botTokenRevokeRenewEvery != 0 {
+			return nil
 		}
+		return p.renewTransferLease(lease)
+	}
+	report := func() error {
+		if msgs := fails.messages(); len(msgs) > 0 {
+			return errors.Errorf("revoked %d token(s); failures: %s", revoked, strings.Join(msgs, "; "))
+		}
+		return nil
 	}
 
 	for _, id := range targets.listed {
-		renew()
+		if renewErr := renew(); renewErr != nil {
+			fails.general = append(fails.general, "stopped part-way through: "+renewErr.Error())
+			return revoked, report()
+		}
 		if appErr := p.API.RevokeUserAccessToken(id); appErr != nil {
 			if isNotFound(appErr) {
 				seen[id] = struct{}{}
+				fails.cleared(id)
 				revoked++
 				continue
 			}
 			p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", id, "error", appErr.Error())
-			failMsgs = append(failMsgs, "revoke "+id+": "+appErr.Error())
+			fails.failed(id, "revoke "+id+": "+appErr.Error())
 			continue
 		}
 		seen[id] = struct{}{}
+		fails.cleared(id)
 		revoked++
 	}
 
@@ -506,26 +559,27 @@ func (p *Plugin) revokeBotTokenTargets(botUserID, requestID string, targets botT
 			p.deleteBotTokenExpiry(key)
 			continue
 		}
-		renew()
+		if renewErr := renew(); renewErr != nil {
+			fails.general = append(fails.general, "stopped part-way through: "+renewErr.Error())
+			return revoked, report()
+		}
 		if appErr := p.API.RevokeUserAccessToken(id); appErr != nil && !isNotFound(appErr) {
 			p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", id, "error", appErr.Error())
-			failMsgs = append(failMsgs, "revoke "+id+": "+appErr.Error())
+			fails.failed(id, "revoke "+id+": "+appErr.Error())
 			continue
 		}
 		seen[id] = struct{}{}
+		fails.cleared(id)
 		revoked++
 		p.deleteBotTokenExpiry(key)
 	}
-	if len(failMsgs) > 0 {
-		return revoked, errors.Errorf("revoked %d token(s); failures: %s", revoked, strings.Join(failMsgs, "; "))
-	}
-	return revoked, nil
+	return revoked, report()
 }
 
 // revokeBotTokens revokes every access token on the bot (including ones the
 // owner created by hand) via an admin session.
-func (p *Plugin) revokeBotTokens(botUserID, adminUserID, requestID string) (int, error) {
-	return p.revokeBotTokenTargets(botUserID, requestID, p.collectBotTokens(botUserID, adminUserID))
+func (p *Plugin) revokeBotTokens(botUserID, adminUserID string, lease transferLease) (int, error) {
+	return p.revokeBotTokenTargets(botUserID, lease, p.collectBotTokens(botUserID, adminUserID))
 }
 
 // loadBotTokenExpiry reads one tracked-token record by its KV key.
@@ -558,13 +612,21 @@ func (p *Plugin) revokeNewlyIssuedBotToken(tokenID string) error {
 	return nil
 }
 
-// rotateBotToken issues a fresh token for the new owner, tracked so expiry
-// reminders reach them, and only then revokes the tokens the bot had before
-// it. Listing first and creating before revoking means a failed create
-// leaves the bot's working tokens alone, and the replacement can never land
-// in the revoke set. Returns the new token (ID, value and expiry) for the
-// DM; a revoke failure is returned alongside it.
-func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenID, tokenValue string, expiresAt int64, err error) {
+// issuedBotToken is a freshly created replacement token together with the
+// tokens the bot had before it existed.
+type issuedBotToken struct {
+	targets   botTokenTargets
+	tokenID   string
+	token     string
+	expiresAt int64
+}
+
+// issueReplacementBotToken captures the bot's current tokens and creates
+// the successor's replacement, tracked so expiry reminders reach them.
+// Nothing is revoked: listing first and creating before revoking means a
+// failed create leaves the bot's working tokens alone, and the replacement
+// can never land in the revoke set.
+func (p *Plugin) issueReplacementBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (issuedBotToken, error) {
 	targets := p.collectBotTokens(botUserID, adminUserID)
 	tok, tokErr := p.createBotToken(botUserID, "Rotated API token for @"+botUsername)
 	if tokErr != nil {
@@ -572,11 +634,25 @@ func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID,
 		if len(targets.listFailure) > 0 {
 			tokErr = errors.Errorf("%s; %s", strings.Join(targets.listFailure, "; "), tokErr.Error())
 		}
-		return 0, "", "", 0, tokErr
+		return issuedBotToken{}, tokErr
 	}
 	p.trackBotTokenExpiry(tok, botUsername, newOwnerID, requestID)
-	revoked, revokeErr := p.revokeBotTokenTargets(botUserID, requestID, targets)
-	return revoked, tok.Id, tok.Token, tok.ExpiresAt, revokeErr
+	return issuedBotToken{targets: targets, tokenID: tok.Id, token: tok.Token, expiresAt: tok.ExpiresAt}, nil
+}
+
+// rotateBotToken issues a fresh token for the new owner and then revokes
+// the tokens the bot had before it. Callers that must hand the secret over
+// before anything is revoked (a voluntary handover) use
+// issueReplacementBotToken and revokeBotTokenTargets directly. Returns the
+// new token (ID, value and expiry) for the DM; a revoke failure is returned
+// alongside it.
+func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID string, lease transferLease) (revoked int, tokenID, tokenValue string, expiresAt int64, err error) {
+	issued, issueErr := p.issueReplacementBotToken(botUserID, botUsername, newOwnerID, adminUserID, lease.requestID)
+	if issueErr != nil {
+		return 0, "", "", 0, issueErr
+	}
+	revoked, revokeErr := p.revokeBotTokenTargets(botUserID, lease, issued.targets)
+	return revoked, issued.tokenID, issued.token, issued.expiresAt, revokeErr
 }
 
 // sendTransferSecretsDM DMs the new owner the rotated secrets (token or

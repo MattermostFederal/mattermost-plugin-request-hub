@@ -102,8 +102,6 @@ func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
 	api.On("KVDelete", kvWebhookIndexKeys).Return(nil).Maybe()
-	// Webhook index history backfill — treat as already done in unit tests.
-	api.On("KVGet", kvWebhookIndexBackfillDone).Return([]byte("1"), nil).Maybe()
 	api.On("KVSet", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvWebhookTransferHandlePrefix)
 	}), mock.Anything).Return(nil).Maybe()
@@ -238,7 +236,6 @@ func stubLogLevels(api *plugintest.API) {
 	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
-	api.On("KVGet", kvWebhookIndexBackfillDone).Return([]byte("1"), nil).Maybe()
 	api.On("KVSet", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvWebhookTransferHandlePrefix)
 	}), mock.Anything).Return(nil).Maybe()

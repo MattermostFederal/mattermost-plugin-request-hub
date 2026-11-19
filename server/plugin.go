@@ -90,6 +90,10 @@ type Plugin struct {
 	// listBotAccessTokensFn lists every access token on a bot for revoke-all
 	// (nil in production → paged REST GetUserAccessTokensForUser).
 	listBotAccessTokensFn func(botUserID, adminUserID string) ([]*model.UserAccessToken, error)
+	// listBotAccessTokensPageFn fetches one page of a bot's access tokens,
+	// so tests can reproduce the unordered paging the walk guards against
+	// (nil in production → REST GetUserAccessTokensForUser).
+	listBotAccessTokensPageFn func(botUserID, adminUserID string, page int) ([]*model.UserAccessToken, error)
 }
 
 func (p *Plugin) OnActivate() error {
