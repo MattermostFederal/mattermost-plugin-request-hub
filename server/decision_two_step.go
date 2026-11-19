@@ -598,10 +598,6 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	if req.Exercise && !p.recordExerciseWebhook(req.TeamID, exerciseWebhook{ID: hookID, Type: req.WebhookType}, actingUser.Id) {
 		return p.closeAfterTeardown(cards, req.RequesterID, req.DMRootPostID, req.DMChannelID)
 	}
-	// Index the new standalone hook so transfer/retire can find it by hook
-	// ID (no-op for exercise hooks).
-	_ = p.writeWebhookIndex(req, hookID, actingUser.Id)
-
 	// Best-effort: reopen the requester DM if submit-time open failed.
 	if req.DMChannelID == "" {
 		if dm, dmErr := p.API.GetDirectChannel(req.RequesterID, p.botUserID); dmErr != nil {
@@ -627,6 +623,11 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	}
 
 	outcome := fmt.Sprintf("✅ Fully approved (security + system) for %s. %s webhook **%s** created.", requesterUsername(requester, req.RequesterID), req.WebhookType, escapeMarkdown(req.DisplayName))
+	// Index the delivered hook so Transfer/Retire can find it later. A
+	// failure doesn't undo the approval, but approvers are told.
+	if idxErr := p.writeWebhookIndex(req, hookID, actingUser.Id); idxErr != nil {
+		outcome += " ⚠️ It could not be added to the Transfer/Retire list; a System Admin can manage it in the System Console."
+	}
 	p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s gave final approval; %s webhook \"%s\" created for %s",
 		actingUser.Username, req.WebhookType, escapeMarkdown(req.DisplayName), requesterUsername(requester, req.RequesterID)), map[string]any{"hook_id": hookID})
 	return p.finish(cards, "", outcome, ticketClose{

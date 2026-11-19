@@ -24,10 +24,13 @@ type webhookTransferRequest struct {
 	ID          string `json:"id"`
 	RequesterID string `json:"requester_id"`
 	HookID      string `json:"hook_id"`
-	WebhookType string `json:"webhook_type"` // incoming / outgoing
-	DisplayName string `json:"display_name,omitempty"`
-	ChannelID   string `json:"channel_id,omitempty"`
-	TeamID      string `json:"team_id,omitempty"`
+	// TransferHandle is the opaque id that stands in for an incoming hook's
+	// ID (its secret URL) in audit data. Empty for outgoing hooks.
+	TransferHandle string `json:"transfer_handle,omitempty"`
+	WebhookType    string `json:"webhook_type"` // incoming / outgoing
+	DisplayName    string `json:"display_name,omitempty"`
+	ChannelID      string `json:"channel_id,omitempty"`
+	TeamID         string `json:"team_id,omitempty"`
 	// CallbackURL is copied from the webhook index (outgoing only) so
 	// retire+recreate can rebuild without a live GetOutgoingWebhook.
 	CallbackURL string `json:"callback_url,omitempty"`
@@ -67,6 +70,16 @@ func webhookTransferActionLabel(action string) string {
 	default:
 		return action
 	}
+}
+
+// auditSnapshot is the copy of the request kept in its history and the
+// server audit log. An incoming hook's ID is its secret URL, so it is left
+// out and the transfer handle identifies the hook instead.
+func (req webhookTransferRequest) auditSnapshot() any {
+	if req.WebhookType == webhookTypeIncoming {
+		req.HookID = ""
+	}
+	return req
 }
 
 func webhookTransferNeedsNewOwner(action string) bool {
@@ -150,6 +163,7 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		ID:             model.NewId(),
 		RequesterID:    requesterID,
 		HookID:         hookID,
+		TransferHandle: index.TransferHandle,
 		WebhookType:    index.WebhookType,
 		DisplayName:    index.DisplayName,
 		ChannelID:      index.ChannelID,
@@ -440,6 +454,16 @@ func (p *Plugin) webhookTransferApprovalBlockerFor(req *webhookTransferRequest, 
 	if err := p.canNominateTransfer(req.RequesterID, asset); err != nil {
 		return "The requester can no longer transfer or retire this webhook (" + err.Error() + "). Deny this request instead."
 	}
+	// Submit refuses this too; the owner may have been deactivated since.
+	if index.WebhookType == webhookTypeIncoming && req.Action == transferActionReassign {
+		ownerActive, ownerKnown := p.userActiveStatus(index.OwnerUserID)
+		if !ownerKnown {
+			return "Could not re-check the current owner's account; try Approve again."
+		}
+		if !ownerActive {
+			return "The current owner has been deactivated, and reassigning an incoming webhook keeps the same secret URL. Deny this request, and ask for Retire & recreate instead."
+		}
+	}
 	if webhookTransferNeedsNewOwner(req.Action) {
 		actingID := ""
 		if actingUser != nil {
@@ -470,7 +494,6 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		if idxErr := p.updateWebhookIndexOwner(req.HookID, req.NewOwnerUserID); idxErr != nil {
 			partialErrors = append(partialErrors, "webhook index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
 		}
-		p.clearOrphanNotice("webhook", req.HookID)
 		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** reassigned to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 		cardText := fmt.Sprintf("Fully approved. The %s webhook **%s** now belongs to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
@@ -493,7 +516,6 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		if idxErr := p.retireWebhookIndex(req.HookID); idxErr != nil {
 			partialErrors = append(partialErrors, "webhook index could not be marked retired: "+idxErr.Error())
 		}
-		p.clearOrphanNotice("webhook", req.HookID)
 		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** retired.", req.WebhookType, escapeMarkdown(req.DisplayName))
 		cardText := fmt.Sprintf("Fully approved. The %s webhook **%s** has been deleted.", req.WebhookType, escapeMarkdown(req.DisplayName))
@@ -577,12 +599,14 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	if req.WebhookType == webhookTypeIncoming && dmMsg != "" {
 		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, []string{dmMsg, "⚠️ **Save this now.** This message auto-deletes in ~72 hours."}, true) {
 			p.API.LogError("failed to deliver recreated webhook URL to new owner", "new_owner_id", req.NewOwnerUserID)
+			// Nobody has the new URL, so the old hook must stay live whether
+			// or not the replacement can be cleaned up.
+			cause := "the new incoming webhook URL could not be DM'd to the new owner; the old hook was left in place"
 			if delErr := p.deleteWebhook(req.WebhookType, newHookID, actingUser.Id); delErr != nil && !webhookDeleteAlreadyGone(delErr) {
-				partialErrors = append(partialErrors, "the new incoming webhook URL could not be DM'd and the replacement hook could not be cleaned up — delete it manually")
-			} else {
-				return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key,
-					errors.New("the new incoming webhook URL could not be DM'd to the new owner; the old hook was left in place"))
+				p.API.LogError("failed to delete undelivered replacement webhook", "error", delErr.Error())
+				cause += ", and the unused replacement hook could not be deleted (a System Admin should remove the extra incoming webhook in this channel before retrying)"
 			}
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, errors.New(cause))
 		}
 	}
 
@@ -598,7 +622,6 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 			partialErrors = append(partialErrors, "old webhook index could not be marked retired: "+idxErr.Error())
 		}
 	}
-	p.clearOrphanNotice("webhook", req.HookID)
 	if idxErr := p.writeWebhookIndex(synthetic, newHookID, actingUser.Id); idxErr != nil {
 		partialErrors = append(partialErrors, "new webhook index could not be written: "+idxErr.Error()+" — the hook exists but may not appear in Transfer/Retire")
 	}
@@ -768,14 +791,15 @@ func (p *Plugin) restoreWebhookTransferAfterFailure(req *webhookTransferRequest,
 		approverName = actingUser.Username
 	}
 	p.API.LogError("failed to carry out webhook transfer/retire on approval", "action", req.Action, "error", cause.Error())
-	if !p.transferClaimStillHeld(pendingKindWebhookTransfer, req.pendingKey(), req.ID) {
-		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,
-			fmt.Sprintf("Could not %s the webhook (%s), and another transfer ticket took over this hook — ask the requester to resubmit if needed.", label, cause.Error()))
-	}
-	if restoreErr := p.putPendingRequestKV(key, rawReq); restoreErr != nil {
+	restored, restoreErr := p.restoreTransferRecord(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq)
+	if restoreErr != nil {
 		p.API.LogError("failed to restore webhook transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the webhook (%s), and the request could not be saved — ask the requester to resubmit.", label, cause.Error()))
+	}
+	if !restored {
+		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,
+			fmt.Sprintf("Could not %s the webhook (%s), and another transfer ticket took over this hook — ask the requester to resubmit if needed.", label, cause.Error()))
 	}
 	notice := func(clicked bool) string {
 		return fmt.Sprintf("Couldn't %s the webhook: %s. The request is still pending — %s.", label, cause.Error(), retryText(clicked))
@@ -794,7 +818,12 @@ func (p *Plugin) auditWebhookTransferApproved(cards decisionCards, req *webhookT
 	if len(partialErrors) > 0 {
 		event, problems = eventApprovedPartial, "; "+escapeMarkdown(strings.Join(partialErrors, "; "))
 	}
-	detail := map[string]any{"hook_id": req.HookID, "action": req.Action, "webhook_type": req.WebhookType}
+	detail := map[string]any{"action": req.Action, "webhook_type": req.WebhookType}
+	if req.WebhookType == webhookTypeIncoming {
+		detail["transfer_handle"] = req.TransferHandle
+	} else {
+		detail["hook_id"] = req.HookID
+	}
 	if webhookTransferNeedsNewOwner(req.Action) {
 		detail["new_owner_id"] = req.NewOwnerUserID
 	}

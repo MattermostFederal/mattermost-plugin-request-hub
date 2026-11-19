@@ -492,7 +492,6 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if idxErr := p.retireBotIndex(req.BotUserID); idxErr != nil {
 			partialErrors = append(partialErrors, "bot index could not be marked retired: "+idxErr.Error())
 		}
-		p.clearOrphanNotice("bot", req.BotUserID)
 		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
 		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tokens revoked.", req.BotUsername)
@@ -517,7 +516,6 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 	if idxErr := p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID); idxErr != nil {
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
 	}
-	p.clearOrphanNotice("bot", req.BotUserID)
 
 	var tokenValue string
 	var tokenExpiresAt int64
@@ -530,10 +528,13 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 			// Owner already moved; keep the ticket closed but surface the gap
 			// so an admin can rotate manually. Restoring would re-open a
 			// transfer against an already-reassigned bot.
-			partialErrors = append(partialErrors, "token rotation failed: "+rotErr.Error()+" — rotate manually for the new owner")
-		} else {
-			rotated = tokenValue != ""
+			if tokenValue != "" {
+				partialErrors = append(partialErrors, "a new token was issued, but not every old token could be revoked: "+rotErr.Error()+" — revoke the remaining tokens manually")
+			} else {
+				partialErrors = append(partialErrors, "token rotation failed: "+rotErr.Error()+" — rotate manually for the new owner")
+			}
 		}
+		rotated = tokenValue != ""
 	}
 
 	if tokenValue != "" {
@@ -580,14 +581,15 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 		approverName = actingUser.Username
 	}
 	p.API.LogError("failed to carry out bot transfer/retire on approval", "action", req.Action, "error", cause.Error())
-	if !p.transferClaimStillHeld(pendingKindBotTransfer, req.pendingKey(), req.ID) {
-		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
-			fmt.Sprintf("Could not %s the bot (%s), and another transfer ticket took over this bot — ask the requester to resubmit if needed.", verb, cause.Error()))
-	}
-	if restoreErr := p.putPendingRequestKV(key, rawReq); restoreErr != nil {
+	restored, restoreErr := p.restoreTransferRecord(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq)
+	if restoreErr != nil {
 		p.API.LogError("failed to restore bot transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the bot (%s), and the request could not be saved — ask the requester to resubmit.", verb, cause.Error()))
+	}
+	if !restored {
+		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
+			fmt.Sprintf("Could not %s the bot (%s), and another transfer ticket took over this bot — ask the requester to resubmit if needed.", verb, cause.Error()))
 	}
 	notice := func(clicked bool) string {
 		return fmt.Sprintf("Couldn't %s the bot: %s. The request is still pending — %s.", verb, cause.Error(), retryText(clicked))

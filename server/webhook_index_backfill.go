@@ -24,6 +24,9 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 		return
 	}
 
+	// A transient error leaves the marker unset so the next activation
+	// retries; every write is create-if-absent, so a rerun is safe.
+	hadErr := false
 	for page := 0; ; page++ {
 		keys, listErr := p.API.KVList(page, webhookIndexPageSize)
 		if listErr != nil {
@@ -35,7 +38,12 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 				continue
 			}
 			h, err := p.loadHistory(strings.TrimPrefix(key, kvHistoryPrefix))
-			if err != nil || h == nil || h.Kind != pendingKindWebhook || h.Status != historyApproved {
+			if err != nil {
+				p.API.LogWarn("webhook index backfill: history load failed", "key", key, "error", err.Error())
+				hadErr = true
+				continue
+			}
+			if h == nil || h.Kind != pendingKindWebhook || h.Status != historyApproved {
 				continue
 			}
 			hookID := webhookHookIDFromHistory(h)
@@ -43,7 +51,12 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 				continue
 			}
 			existing, loadErr := p.loadWebhookIndex(hookID)
-			if loadErr != nil || existing != nil {
+			if loadErr != nil {
+				p.API.LogWarn("webhook index backfill: index load failed", "hook_id", hookID, "error", loadErr.Error())
+				hadErr = true
+				continue
+			}
+			if existing != nil {
 				continue
 			}
 			var snap webhookRequest
@@ -84,11 +97,15 @@ func (p *Plugin) backfillWebhookIndexFromHistory() {
 			}
 			if _, storeErr := p.storeWebhookIndexIfAbsent(entry); storeErr != nil {
 				p.API.LogWarn("webhook index backfill: store failed", "hook_id", hookID, "error", storeErr.Error())
+				hadErr = true
 			}
 		}
 		if len(keys) < webhookIndexPageSize {
 			break
 		}
+	}
+	if hadErr {
+		return
 	}
 	if setErr := p.API.KVSet(kvWebhookIndexBackfillDone, []byte("1")); setErr != nil {
 		p.API.LogWarn("webhook index backfill: failed to set done marker", "error", setErr.Error())

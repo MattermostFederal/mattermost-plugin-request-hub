@@ -177,6 +177,12 @@ type requestHistory struct {
 	Events      []auditEvent    `json:"events"`
 }
 
+// auditRedactor is a request that keeps secrets out of the copy recorded
+// with its audit events.
+type auditRedactor interface {
+	auditSnapshot() any
+}
+
 // recordEvent records e in the request history and the server audit log,
 // and posts it to the audit channel when AuditChannelDetail asks for it.
 // It never fails the action being audited: a history that can't be saved
@@ -188,6 +194,9 @@ func (p *Plugin) recordEvent(e auditEntry) {
 	}
 	if e.At == 0 {
 		e.At = model.GetMillis()
+	}
+	if r, ok := e.Snapshot.(auditRedactor); ok {
+		e.Snapshot = r.auditSnapshot()
 	}
 	ev := auditEvent{
 		At:        e.At,

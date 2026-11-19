@@ -38,6 +38,9 @@ type Props = {
     // single limits the picker to one username (transfer new-owner).
     single?: boolean;
 
+    // inputId lets a <label htmlFor> name the text input.
+    inputId?: string;
+
     // teamId, when set, scopes autocomplete to members of that team
     // (channel create / Channel Admin). Mutually exclusive with notInTeamId.
     teamId?: string;
@@ -133,7 +136,7 @@ const UserAvatar: React.FC<{user: User; size?: number}> = ({user, size = 26}) =>
     );
 };
 
-export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeholder, single, teamId, notInTeamId, usernameBadges}) => {
+export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeholder, single, inputId, teamId, notInTeamId, usernameBadges}) => {
     const [selected, setSelected] = useState<string[]>(() => parseUsernames(value));
     const [query, setQuery] = useState('');
     const [candidates, setCandidates] = useState<User[]>([]);
@@ -385,6 +388,7 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
                     </span>
                 ))}
                 <input
+                    id={inputId}
                     style={{
                         flex: 1,
                         minWidth: 120,

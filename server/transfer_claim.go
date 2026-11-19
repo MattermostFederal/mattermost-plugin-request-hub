@@ -147,3 +147,27 @@ func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) bool {
 	}
 	return strings.TrimSpace(string(raw)) == requestID
 }
+
+// restoreTransferRecord puts a claimed transfer ticket back after its
+// approval could not be carried out. The record goes back before the asset
+// claim is re-checked: a submit that saw the record missing and took the
+// claim in between is caught by the re-check, and one that comes after
+// sees the record and is refused, so one asset never has two open tickets.
+// restored is false when another ticket holds the claim; the record is
+// then removed again.
+func (p *Plugin) restoreTransferRecord(kind, assetKey, requestID, key string, raw []byte) (restored bool, err error) {
+	if err := p.putPendingRequestKV(key, raw); err != nil {
+		return false, err
+	}
+	if p.transferClaimStillHeld(kind, assetKey, requestID) {
+		return true, nil
+	}
+	deleted, appErr := p.API.KVCompareAndDelete(key, raw)
+	switch {
+	case appErr != nil:
+		p.API.LogError("failed to remove transfer request that lost its asset claim", "request_id", requestID, "error", appErr.Error())
+	case deleted:
+		p.untrackOpenRequestKey(key)
+	}
+	return false, nil
+}

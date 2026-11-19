@@ -85,6 +85,10 @@ export const RequestBugReportModal = () => {
     };
 
     const close = () => {
+        // A submit still in flight would land on the next open's state.
+        if (submitting) {
+            return;
+        }
         reset();
         dispatch(closeBugReportModal());
     };
@@ -241,6 +245,7 @@ export const RequestBugReportModal = () => {
                                 value={relatedRequestID}
                                 onChange={(e) => setRelatedRequestID(e.target.value)}
                                 placeholder='Optional request ID (your own only)'
+                                aria-label='Related request ID'
                                 maxLength={26}
                             />
                         </div>

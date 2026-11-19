@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -446,4 +447,153 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 		require.True(t, res.audited)
 		require.True(t, strings.Contains(res.Reply, "Couldn't") || strings.Contains(res.Reply, "hook gone") || res.Banner != nil)
 	})
+}
+
+func TestFulfillWebhookRetireRecreate_IncomingUndeliveredKeepsOldHook(t *testing.T) {
+	for _, cleanupFails := range []bool{false, true} {
+		name := "replacement cleaned up"
+		if cleanupFails {
+			name = "replacement cleanup fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogs(api)
+			store := memKV(api)
+			stubSiteURL(api, "http://localhost:8065")
+			p := newTestPlugin(api)
+			p.botUserID = "bot"
+			p.auditSink = func(auditEntry, auditEventSpec) {}
+
+			var deleted []string
+			p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+				return "Incoming webhook URL: http://localhost:8065/hooks/new-hook", "new-hook", nil
+			}
+			p.deleteWebhookFn = func(_, hookID string) error {
+				deleted = append(deleted, hookID)
+				if cleanupFails {
+					return errors.New("server unavailable")
+				}
+				return nil
+			}
+			// The new owner's DM can't be opened, so the new URL never arrives.
+			api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(nil, testAppErr("no dm")).Maybe()
+			api.On("GetUser", mock.Anything).Return(&model.User{Id: "u_new", Username: "newowner"}, nil).Maybe()
+			api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
+			api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
+			api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+
+			req := &webhookTransferRequest{
+				ID: "t-in", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeIncoming,
+				DisplayName: "Alerts", ChannelID: "ch1", TeamID: "t1",
+				Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+			}
+			store[transferAssetClaimKey(pendingKindWebhookTransfer, req.pendingKey())] = []byte(req.ID)
+			raw := []byte(`{"id":"t-in"}`)
+			key := kvWebhookTransferRequestPrefix + req.ID
+
+			res := p.fulfillWebhookRetireRecreate(req,
+				&model.User{Id: "admin1", Username: "admin"},
+				&model.User{Id: "u_req", Username: "req"},
+				newDecisionCards(req.ID, "", ""), raw, key)
+
+			require.Equal(t, []string{"new-hook"}, deleted, "only the undelivered replacement may be deleted, never the old hook")
+			require.Equal(t, raw, store[key], "the ticket is put back for a retry")
+			require.True(t, res.audited)
+		})
+	}
+}
+
+func TestWebhookTransferAuditSnapshot_HidesIncomingHookID(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	p := newTestPlugin(api)
+	var got []auditEntry
+	p.auditSink = func(e auditEntry, _ auditEventSpec) { got = append(got, e) }
+
+	incoming := &webhookTransferRequest{ID: "r1", HookID: "secret-hook-id", TransferHandle: "handle1", WebhookType: webhookTypeIncoming}
+	outgoing := &webhookTransferRequest{ID: "r2", HookID: "out-hook-id", WebhookType: webhookTypeOutgoing}
+	p.recordEvent(auditEntry{RequestID: "r1", Kind: pendingKindWebhookTransfer, Event: eventApproved, Snapshot: incoming})
+	p.recordEvent(auditEntry{RequestID: "r2", Kind: pendingKindWebhookTransfer, Event: eventApproved, Snapshot: outgoing})
+	require.Len(t, got, 2)
+
+	in, err := json.Marshal(got[0].Snapshot)
+	require.NoError(t, err)
+	require.NotContains(t, string(in), "secret-hook-id")
+	require.Contains(t, string(in), `"transfer_handle":"handle1"`)
+	require.Equal(t, "secret-hook-id", incoming.HookID, "the live request keeps its hook ID")
+
+	out, err := json.Marshal(got[1].Snapshot)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "out-hook-id", "outgoing hook IDs aren't secret")
+}
+
+func TestWebhookTransferApprovalBlocker_RefusesOrphanedIncomingReassign(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	memKV(api)
+	p := newTestPlugin(api)
+
+	src := &webhookRequest{ID: "orig", RequesterID: "u_req", WebhookType: webhookTypeIncoming, ChannelID: "ch1", TeamID: "t1", DisplayName: "Alerts"}
+	require.NoError(t, p.writeWebhookIndex(src, "hook1", "admin1"))
+
+	// The owner was deactivated after the ticket was filed.
+	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", DeleteAt: 1}, nil)
+	api.On("GetUser", "u_new").Return(&model.User{Id: "u_new", Username: "newowner"}, nil).Maybe()
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(&model.ChannelMember{}, nil).Maybe()
+
+	req := &webhookTransferRequest{
+		ID: "t1", RequesterID: "u_req", HookID: "hook1", WebhookType: webhookTypeIncoming,
+		Action: transferActionReassign, NewOwnerUserID: "u_new",
+	}
+	msg := p.webhookTransferApprovalBlockerFor(req, nil)
+	require.Contains(t, msg, "Retire & recreate")
+}
+
+func TestRestoreTransferRecord(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+	key := kvBotTransferRequestPrefix + "req-a"
+	raw := []byte(`{"id":"req-a"}`)
+
+	store[claimKey] = []byte("req-a")
+	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	require.NoError(t, err)
+	require.True(t, restored)
+	require.Equal(t, raw, store[key])
+
+	// Another ticket took the claim while the record was missing: the
+	// record must not come back, or the asset would have two open tickets.
+	delete(store, key)
+	store[claimKey] = []byte("req-b")
+	restored, err = p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	require.NoError(t, err)
+	require.False(t, restored)
+	_, present := store[key]
+	require.False(t, present)
+}
+
+func TestResolveWebhookTransferHookID_FallsBackToIndex(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+
+	src := &webhookRequest{ID: "orig", RequesterID: "u_req", WebhookType: webhookTypeIncoming, ChannelID: "ch1", TeamID: "t1", DisplayName: "Alerts"}
+	require.NoError(t, p.writeWebhookIndex(src, "hook1", "admin1"))
+	entry, err := p.loadWebhookIndex("hook1")
+	require.NoError(t, err)
+	require.NotEmpty(t, entry.TransferHandle)
+
+	// The best-effort handle map write was lost.
+	delete(store, kvWebhookTransferHandlePrefix+entry.TransferHandle)
+
+	got, err := p.resolveWebhookTransferHookID(entry.TransferHandle)
+	require.NoError(t, err)
+	require.Equal(t, "hook1", got)
+
+	_, err = p.resolveWebhookTransferHookID(model.NewId())
+	require.Error(t, err)
 }

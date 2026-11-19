@@ -298,6 +298,15 @@ type botIndexEntry struct {
 	RetiredAt int64 `json:"retired_at,omitempty"`
 }
 
+// botIndexOwner is the bot's effective owner. Older index rows left owner
+// empty when the owner was the requester, so fall back to the requester.
+func botIndexOwner(e botIndexEntry) string {
+	if e.OwnerUserID != "" {
+		return e.OwnerUserID
+	}
+	return e.RequesterID
+}
+
 // updateBotIndexOwner records a new owner on a bot's index entry.
 func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) error {
 	entry, err := p.loadBotIndex(botUserID)

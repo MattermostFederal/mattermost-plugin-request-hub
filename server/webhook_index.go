@@ -89,8 +89,8 @@ func (p *Plugin) storeWebhookIndex(entry webhookIndexEntry) error {
 	}
 	p.trackWebhookIndexKey(entry.HookID)
 	if entry.WebhookType == webhookTypeIncoming && entry.TransferHandle != "" {
-		// Best-effort: list path can recreate the handle map via
-		// ensureIncomingTransferHandle if this write is skipped.
+		// Best-effort: resolveWebhookTransferHookID falls back to scanning
+		// the index when this map entry is missing.
 		if appErr := p.API.KVSet(kvWebhookTransferHandlePrefix+entry.TransferHandle, []byte(entry.HookID)); appErr != nil {
 			p.API.LogWarn("failed to store webhook transfer handle", "hook_id", entry.HookID, "error", appErr.Error())
 		}
@@ -235,6 +235,17 @@ func (p *Plugin) resolveWebhookTransferHookID(assetID string) (string, error) {
 		hookID := strings.TrimSpace(string(raw))
 		if hookID != "" {
 			return hookID, nil
+		}
+	}
+	// The handle map is written best-effort; the index row is the source
+	// of truth for the handle.
+	entries, listErr := p.listWebhookIndex()
+	if listErr != nil {
+		return "", errors.New("could not look up that webhook; try again")
+	}
+	for _, e := range entries {
+		if e.TransferHandle != "" && e.TransferHandle == assetID {
+			return e.HookID, nil
 		}
 	}
 	return "", errors.New("that webhook isn't managed by Request Hub, so it can't be transferred or retired here")

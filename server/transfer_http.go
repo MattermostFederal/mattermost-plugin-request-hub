@@ -123,7 +123,9 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 
 	bots, err := p.listBotIndex()
 	if err != nil {
-		p.API.LogWarn("failed to list bot index for transfer picker", "error", err.Error())
+		p.API.LogError("failed to list bot index for transfer picker", "error", err.Error())
+		http.Error(w, "failed to list transferable assets", http.StatusInternalServerError)
+		return
 	}
 	for _, e := range bots {
 		if e.RetiredAt != 0 {
@@ -143,7 +145,9 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 
 	hooks, err := p.listWebhookIndex()
 	if err != nil {
-		p.API.LogWarn("failed to list webhook index for transfer picker", "error", err.Error())
+		p.API.LogError("failed to list webhook index for transfer picker", "error", err.Error())
+		http.Error(w, "failed to list transferable assets", http.StatusInternalServerError)
+		return
 	}
 	for _, e := range hooks {
 		if e.RetiredAt != 0 {

@@ -387,17 +387,21 @@ func (p *Plugin) loadBotTokenExpiry(key string) (*botTokenExpiry, []byte, error)
 // rotateBotToken revokes every token on the bot and issues a fresh one,
 // tracked for the new owner so expiry reminders reach them. Returns the new
 // token (value + expiry) for the DM; an empty value means none was created.
+// A partial revoke still issues the replacement, so the bot is never left
+// with its working tokens gone and nothing new; the revoke error is
+// returned alongside the token.
 func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenValue string, expiresAt int64, err error) {
-	revoked, err = p.revokeBotTokens(botUserID, adminUserID)
-	if err != nil {
-		return revoked, "", 0, err
-	}
+	revoked, revokeErr := p.revokeBotTokens(botUserID, adminUserID)
 	tok, tokErr := p.createBotToken(botUserID, "Rotated API token for @"+botUsername)
 	if tokErr != nil {
-		return revoked, "", 0, errors.Wrap(tokErr, "failed to create replacement token")
+		tokErr = errors.Wrap(tokErr, "failed to create replacement token")
+		if revokeErr != nil {
+			tokErr = errors.Errorf("%s; %s", revokeErr.Error(), tokErr.Error())
+		}
+		return revoked, "", 0, tokErr
 	}
 	p.trackBotTokenExpiry(tok, botUsername, newOwnerID, requestID)
-	return revoked, tok.Token, tok.ExpiresAt, nil
+	return revoked, tok.Token, tok.ExpiresAt, revokeErr
 }
 
 // sendTransferSecretsDM DMs the new owner the rotated secrets (token or

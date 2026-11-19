@@ -165,6 +165,10 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     };
 
     const close = () => {
+        // A submit still in flight would land on the next open's state.
+        if (submitting) {
+            return;
+        }
         reset();
         dispatch(isBot ? closeBotTransferModal() : closeWebhookTransferModal());
     };
@@ -332,8 +336,12 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
 
                         {actionNeedsOwner(action) ? (
                             <div style={fieldStyle}>
-                                <label style={labelStyle}>{'New owner'}</label>
+                                <label
+                                    style={labelStyle}
+                                    htmlFor='transfer-new-owner'
+                                >{'New owner'}</label>
                                 <MemberPicker
+                                    inputId='transfer-new-owner'
                                     value={newOwner}
                                     onChange={setNewOwner}
                                     teamId={teamId}
