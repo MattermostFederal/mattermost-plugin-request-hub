@@ -170,10 +170,12 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
         };
     }, [showDropdown, candidates.length]);
 
-    // Re-sync when parent value changes externally.
+    // Re-sync when parent value changes externally. In single mode only the
+    // first username is shown even if the controlled value has commas.
     useEffect(() => {
-        setSelected(parseUsernames(value));
-    }, [value]);
+        const parsed = parseUsernames(value);
+        setSelected(single && parsed.length > 1 ? parsed.slice(0, 1) : parsed);
+    }, [value, single]);
 
     // Debounced autocomplete fetch. Scoped via ?team_id (in-team) or
     // ?not_in_team_id (everyone else). Strips leading @ from the query —
@@ -269,7 +271,15 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
         if (!username || selected.includes(username)) {
             return;
         }
-        commit(single ? [username] : [...selected, username]);
+        if (single) {
+            const parts = parseUsernames(username);
+            if (parts.length !== 1) {
+                return;
+            }
+            commit([parts[0]]);
+        } else {
+            commit([...selected, username]);
+        }
         setQuery('');
         setCandidates([]);
     };

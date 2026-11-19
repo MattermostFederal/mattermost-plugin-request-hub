@@ -91,6 +91,32 @@ test.describe('BotTransferModal', () => {
         await expect(page.getByText(BOT_TITLE)).toBeHidden();
     });
 
+    test('orphaned bot checks rotate visually without sending rotate_token until toggled', async ({mount, page}) => {
+        await routeAssets(page, {
+            bots: [{asset_id: 'b1', display_name: '@svcbot', orphaned: true}],
+            webhooks: [],
+        });
+        await routeUsers(page);
+        let sent: Record<string, unknown> = {};
+        await page.route(`${API}/submit_bot_transfer_request`, async (route) => {
+            sent = route.request().postDataJSON();
+            await route.fulfill({contentType: 'application/json', body: JSON.stringify({message: 'Queued.'})});
+        });
+        await mount(<StoreHarness pluginState={botOpen}><BotTransferModal/></StoreHarness>);
+        const rotate = page.getByRole('checkbox', {name: /Rotate the access token/i});
+        await expect(rotate).toBeChecked();
+        await pickAlice(page);
+        await page.getByRole('button', {name: 'Submit request'}).click();
+        await expect(page.getByText('Queued.')).toBeVisible();
+        expect(sent).toEqual({
+            bot_user_id: 'b1',
+            action: 'transfer',
+            new_owner_username: 'alice',
+            note: '',
+        });
+        expect(sent).not.toHaveProperty('rotate_token');
+    });
+
     test('shows the server error and allows a retry', async ({mount, page}) => {
         await routeAssets(page, botsPayload);
         await routeUsers(page);

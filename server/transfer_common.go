@@ -3,10 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
+)
+
+const (
+	transferRESTTimeout       = 30 * time.Second
+	botAccessTokenListPerPage = 200
 )
 
 // Shared pieces for the bot and webhook transfer/retire flows: the REST side
@@ -39,6 +46,21 @@ type transferAsset struct {
 	ownerUserID string
 	requesterID string
 	channelID   string // bot home channel, or the webhook's target channel
+}
+
+// liveBotOwnerID prefers Mattermost's bot OwnerId when set, falling back to
+// the Request Hub index owner. Lookup failures fail closed.
+func (p *Plugin) liveBotOwnerID(botUserID, indexOwner string) (string, error) {
+	bot, appErr := p.API.GetBot(botUserID, true)
+	if appErr != nil {
+		return "", errors.Wrap(appErr, "failed to load bot")
+	}
+	if bot != nil {
+		if owner := strings.TrimSpace(bot.OwnerId); owner != "" {
+			return owner, nil
+		}
+	}
+	return indexOwner, nil
 }
 
 // rotateDefaultOn reports whether token rotation defaults on for a reason:
@@ -203,12 +225,39 @@ func (p *Plugin) transferClient(adminUserID string) (*model.Client4, func(), err
 	}
 	client := model.NewAPIv4Client(internalURL)
 	client.SetToken(session.Token)
+	client.HTTPClient = &http.Client{Timeout: transferRESTTimeout}
 	cleanup := func() {
 		if revErr := p.API.RevokeSession(session.Id); revErr != nil {
 			p.API.LogWarn("failed to revoke admin session after transfer op", "error", revErr.Error())
 		}
 	}
 	return client, cleanup, nil
+}
+
+// listBotAccessTokens returns every access token on the bot, paging the
+// Mattermost API until a short page. Failures mid-pagination abort so
+// revoke-all never pretends to have finished.
+func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.UserAccessToken, error) {
+	if p.listBotAccessTokensFn != nil {
+		return p.listBotAccessTokensFn(botUserID, adminUserID)
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	ctx := context.Background()
+	var out []*model.UserAccessToken
+	for page := 0; ; page++ {
+		tokens, _, listErr := client.GetUserAccessTokensForUser(ctx, botUserID, page, botAccessTokenListPerPage)
+		if listErr != nil {
+			return nil, errors.Wrap(listErr, "failed to list bot access tokens")
+		}
+		out = append(out, tokens...)
+		if len(tokens) < botAccessTokenListPerPage {
+			return out, nil
+		}
+	}
 }
 
 // assignBot reassigns a bot's Mattermost owner. model.BotPatch has no
@@ -301,38 +350,35 @@ func (p *Plugin) updateWebhookOwner(webhookType, hookID, newOwnerID, adminUserID
 
 // revokeBotTokens revokes every access token on the bot (including ones the
 // owner created by hand) via an admin session, then cleans tracked reminder
-// rows. Already-revoked / not-found tokens count as success.
+// rows. Already-revoked / not-found tokens count as success. Expiry rows are
+// dropped only after a confirmed revoke so reminders keep retrying on
+// transient failures.
 func (p *Plugin) revokeBotTokens(botUserID, adminUserID string) (int, error) {
 	revoked := 0
 	var failMsgs []string
 	seen := map[string]struct{}{}
 
 	if adminUserID != "" {
-		client, cleanup, clientErr := p.transferClient(adminUserID)
-		if clientErr != nil {
-			failMsgs = append(failMsgs, "list tokens: "+clientErr.Error())
+		tokens, listErr := p.listBotAccessTokens(botUserID, adminUserID)
+		if listErr != nil {
+			failMsgs = append(failMsgs, "list tokens: "+listErr.Error())
 		} else {
-			defer cleanup()
-			tokens, _, listErr := client.GetUserAccessTokensForUser(context.Background(), botUserID, 0, 200)
-			if listErr != nil {
-				failMsgs = append(failMsgs, "list tokens: "+listErr.Error())
-			} else {
-				for _, tok := range tokens {
-					if tok == nil || tok.Id == "" {
-						continue
-					}
-					seen[tok.Id] = struct{}{}
-					if appErr := p.API.RevokeUserAccessToken(tok.Id); appErr != nil {
-						if isNotFound(appErr) {
-							revoked++
-							continue
-						}
-						p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", tok.Id, "error", appErr.Error())
-						failMsgs = append(failMsgs, "revoke "+tok.Id+": "+appErr.Error())
-						continue
-					}
-					revoked++
+			for _, tok := range tokens {
+				if tok == nil || tok.Id == "" {
+					continue
 				}
+				if appErr := p.API.RevokeUserAccessToken(tok.Id); appErr != nil {
+					if isNotFound(appErr) {
+						seen[tok.Id] = struct{}{}
+						revoked++
+						continue
+					}
+					p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", tok.Id, "error", appErr.Error())
+					failMsgs = append(failMsgs, "revoke "+tok.Id+": "+appErr.Error())
+					continue
+				}
+				seen[tok.Id] = struct{}{}
+				revoked++
 			}
 		}
 	}
@@ -351,14 +397,17 @@ func (p *Plugin) revokeBotTokens(botUserID, adminUserID string) (int, error) {
 			if rec == nil || rec.BotUserID != botUserID {
 				continue
 			}
-			if _, already := seen[rec.TokenID]; !already {
-				if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
-					p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
-					failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
-					continue
-				}
-				revoked++
+			if _, already := seen[rec.TokenID]; already {
+				p.deleteBotTokenExpiry(key)
+				continue
 			}
+			if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
+				p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
+				failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
+				continue
+			}
+			seen[rec.TokenID] = struct{}{}
+			revoked++
 			p.deleteBotTokenExpiry(key)
 		}
 	}
@@ -382,6 +431,36 @@ func (p *Plugin) loadBotTokenExpiry(key string) (*botTokenExpiry, []byte, error)
 		return nil, nil, errors.Wrap(err, "failed to read bot token expiry")
 	}
 	return &rec, raw, nil
+}
+
+// revokeNewlyIssuedBotToken revokes a just-created token whose secret could
+// not be delivered, and drops its expiry reminder row when found.
+func (p *Plugin) revokeNewlyIssuedBotToken(botUserID, tokenValue string) error {
+	tokenValue = strings.TrimSpace(tokenValue)
+	if tokenValue == "" {
+		return nil
+	}
+	keys, err := p.listTokenExpiryKeys()
+	if err != nil {
+		return err
+	}
+	var revokeErr error
+	for _, key := range keys {
+		rec, _, loadErr := p.loadBotTokenExpiry(key)
+		if loadErr != nil || rec == nil || rec.BotUserID != botUserID {
+			continue
+		}
+		if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
+			revokeErr = errors.Wrap(appErr, "failed to revoke undelivered bot token")
+			continue
+		}
+		p.deleteBotTokenExpiry(key)
+		return nil
+	}
+	if revokeErr != nil {
+		return revokeErr
+	}
+	return errors.New("could not find the undelivered token to revoke")
 }
 
 // rotateBotToken revokes every token on the bot and issues a fresh one,

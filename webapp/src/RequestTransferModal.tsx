@@ -126,17 +126,20 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         };
     }, [isOpen, isBot]);
 
+    const selectedOrphaned = Boolean(
+        isBot && assetId && assets.find((a) => a.asset_id === assetId)?.orphaned,
+    );
+
     useEffect(() => {
         if (!isBot || !assetId) {
             return;
         }
-        const selected = assets.find((a) => a.asset_id === assetId);
 
-        // Reset rotate when switching bots so an orphaned default does not
-        // carry over to a live bot.
-        setRotate(Boolean(selected?.orphaned));
-        setRotateTouched(Boolean(selected?.orphaned));
-    }, [assetId, assets, isBot]);
+        // Visual default only — leave rotateTouched false so the server
+        // applies rotateDefaultOn(reason) until the user toggles explicitly.
+        setRotate(selectedOrphaned);
+        setRotateTouched(false);
+    }, [assetId, isBot, selectedOrphaned]);
 
     useEffect(() => {
         if (isBot || !assetId) {
@@ -319,7 +322,12 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                 onChange={(e) => {
                                     const next = e.target.value;
                                     setAction(next);
-                                    if (next !== 'transfer') {
+                                    if (next === 'transfer') {
+                                        // Re-apply the orphaned visual default
+                                        // without marking an explicit choice.
+                                        setRotate(selectedOrphaned);
+                                        setRotateTouched(false);
+                                    } else {
                                         setRotate(false);
                                         setRotateTouched(false);
                                     }

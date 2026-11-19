@@ -192,6 +192,7 @@ func stubBotExtras(api *plugintest.API) {
 				return &model.UserAccessToken{Id: "tok-id", Token: "secret-token", UserId: tok.UserId, ExpiresAt: tok.ExpiresAt}, nil
 			}).Maybe(),
 	)
+	stubBotIndexWrite(api)
 }
 
 // stubNamesFree answers the submit-time checks that a requested channel,

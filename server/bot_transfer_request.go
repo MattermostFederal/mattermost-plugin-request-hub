@@ -102,7 +102,12 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		return "", errors.New("pick Transfer or Retire")
 	}
 
-	ownerID := botIndexOwner(*index)
+	indexOwner := botIndexOwner(*index)
+	ownerID, liveErr := p.liveBotOwnerID(botUserID, indexOwner)
+	if liveErr != nil {
+		p.API.LogWarn("failed to load live bot owner for transfer", "bot_user_id", botUserID, "error", liveErr.Error())
+		return "", errors.New("could not verify the bot's current owner; try again")
+	}
 	asset := transferAsset{
 		assetType: "bot", assetID: botUserID,
 		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
@@ -438,7 +443,11 @@ func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) string {
 	if index == nil || index.RetiredAt != 0 {
 		return fmt.Sprintf("Bot @%s is no longer managed (or was retired). Deny this request instead.", req.BotUsername)
 	}
-	ownerID := botIndexOwner(*index)
+	indexOwner := botIndexOwner(*index)
+	ownerID, liveErr := p.liveBotOwnerID(req.BotUserID, indexOwner)
+	if liveErr != nil {
+		return "Could not re-check the bot's current owner; try Approve again."
+	}
 	asset := transferAsset{
 		assetType: "bot", assetID: req.BotUserID,
 		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
@@ -486,7 +495,9 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if revErr != nil {
 			partialErrors = append(partialErrors, "revoking bot tokens failed: "+revErr.Error())
 		}
-		if index, _ := p.loadBotIndex(req.BotUserID); index != nil && (index.HasIncomingWebhook || index.HasOutgoingWebhook) {
+		if index, loadErr := p.loadBotIndex(req.BotUserID); loadErr != nil {
+			partialErrors = append(partialErrors, "bot index could not be loaded after retire: "+loadErr.Error()+" — bot-owned webhooks may need manual cleanup")
+		} else if index != nil && (index.HasIncomingWebhook || index.HasOutgoingWebhook) {
 			partialErrors = append(partialErrors, "any bot-owned webhooks may need manual cleanup (their hook IDs aren't recorded in the bot index)")
 		}
 		if idxErr := p.retireBotIndex(req.BotUserID); idxErr != nil {
@@ -548,7 +559,14 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		}
 		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, true) {
 			p.API.LogError("failed to deliver rotated bot token to new owner", "bot_user_id", req.BotUserID, "new_owner_id", req.NewOwnerUserID)
-			partialErrors = append(partialErrors, "the new bot token could not be DM'd to the new owner — rotate again or deliver manually")
+			// Do not leave an undelivered secret live under the new owner.
+			if revErr := p.revokeNewlyIssuedBotToken(req.BotUserID, tokenValue); revErr != nil {
+				partialErrors = append(partialErrors, "the new bot token could not be DM'd and could not be revoked automatically: "+revErr.Error())
+			} else {
+				partialErrors = append(partialErrors, "the new bot token could not be DM'd to the new owner, so it was revoked — rotate again")
+				tokenExpiresAt = 0
+				rotated = false
+			}
 		}
 	}
 
@@ -582,7 +600,7 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 	}
 	p.API.LogError("failed to carry out bot transfer/retire on approval", "action", req.Action, "error", cause.Error())
 	restored, restoreErr := p.restoreTransferRecord(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq)
-	if restoreErr != nil {
+	if restoreErr != nil && !restored {
 		p.API.LogError("failed to restore bot transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the bot (%s), and the request could not be saved — ask the requester to resubmit.", verb, cause.Error()))
@@ -591,8 +609,13 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the bot (%s), and another transfer ticket took over this bot — ask the requester to resubmit if needed.", verb, cause.Error()))
 	}
+	causeMsg := cause.Error()
+	if restoreErr != nil {
+		p.API.LogWarn("bot transfer restored but asset claim could not be re-checked", "error", restoreErr.Error())
+		causeMsg = cause.Error() + "; asset claim could not be re-checked — retry Approve"
+	}
 	notice := func(clicked bool) string {
-		return fmt.Sprintf("Couldn't %s the bot: %s. The request is still pending — %s.", verb, cause.Error(), retryText(clicked))
+		return fmt.Sprintf("Couldn't %s the bot: %s. The request is still pending — %s.", verb, causeMsg, retryText(clicked))
 	}
 	p.approveFailed(cards, fmt.Sprintf("final approval to %s bot @%s could not be carried out", verb, req.BotUsername), cause)
 	result := p.repaintCards(cards, key, notice(cards.clickedPostID != ""),

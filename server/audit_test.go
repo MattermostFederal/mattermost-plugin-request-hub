@@ -397,7 +397,8 @@ func TestBotFinalApproval_AuditNeverHoldsTheToken(t *testing.T) {
 	api.On("RevokeSession", "sess1").Return(nil)
 	api.On("KVGet", tokenPostRegistryKey).Return(nil, nil)
 	api.On("KVSet", botTokenExpiryKey("tok-id"), mock.Anything).Return(nil)
-	api.On("KVSet", kvBotIndexPrefix+"new-bot-id", mock.Anything).Return(nil)
+	api.On("KVGet", kvBotIndexPrefix+"new-bot-id").Return(nil, nil)
+	api.On("KVCompareAndSet", kvBotIndexPrefix+"new-bot-id", mock.Anything, mock.Anything).Return(true, nil)
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "created"}, nil)
 
 	runAsAdmin(t, p, botActionHandler, true)

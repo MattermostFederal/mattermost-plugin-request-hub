@@ -123,15 +123,16 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		return "", errors.New("pick Reassign, Retire & recreate, or Retire")
 	}
 
+	ownerID := webhookIndexOwner(*index)
 	asset := transferAsset{
 		assetType: "webhook", assetID: hookID,
-		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.ChannelID,
+		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.ChannelID,
 	}
 	if err = p.canNominateTransfer(requesterID, asset); err != nil {
 		return "", err
 	}
 
-	ownerActive, ownerKnown := p.userActiveStatus(index.OwnerUserID)
+	ownerActive, ownerKnown := p.userActiveStatus(ownerID)
 	if !ownerKnown {
 		return "", errors.New("could not verify the current owner's account; try again")
 	}
@@ -142,7 +143,7 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	newOwnerID := strings.TrimSpace(in.NewOwnerUserID)
 	if webhookTransferNeedsNewOwner(action) {
 		if err = p.checkTransferNewOwner(newOwnerID, transferNewOwnerOpts{
-			currentOwnerID: index.OwnerUserID, channelID: index.ChannelID,
+			currentOwnerID: ownerID, channelID: index.ChannelID,
 			webhookType: index.WebhookType, noun: "webhook",
 		}); err != nil {
 			return "", err
@@ -447,16 +448,17 @@ func (p *Plugin) webhookTransferApprovalBlockerFor(req *webhookTransferRequest, 
 			return "That webhook no longer exists in Mattermost. Deny this request instead."
 		}
 	}
+	ownerID := webhookIndexOwner(*index)
 	asset := transferAsset{
 		assetType: "webhook", assetID: req.HookID,
-		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.ChannelID,
+		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.ChannelID,
 	}
 	if err := p.canNominateTransfer(req.RequesterID, asset); err != nil {
 		return "The requester can no longer transfer or retire this webhook (" + err.Error() + "). Deny this request instead."
 	}
 	// Submit refuses this too; the owner may have been deactivated since.
 	if index.WebhookType == webhookTypeIncoming && req.Action == transferActionReassign {
-		ownerActive, ownerKnown := p.userActiveStatus(index.OwnerUserID)
+		ownerActive, ownerKnown := p.userActiveStatus(ownerID)
 		if !ownerKnown {
 			return "Could not re-check the current owner's account; try Approve again."
 		}
@@ -470,7 +472,7 @@ func (p *Plugin) webhookTransferApprovalBlockerFor(req *webhookTransferRequest, 
 			actingID = actingUser.Id
 		}
 		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
-			currentOwnerID: index.OwnerUserID, actingUserID: actingID,
+			currentOwnerID: ownerID, actingUserID: actingID,
 			channelID: index.ChannelID, webhookType: index.WebhookType, noun: "webhook",
 		}); err != nil {
 			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
@@ -621,6 +623,11 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		if idxErr := p.retireWebhookIndex(req.HookID); idxErr != nil {
 			partialErrors = append(partialErrors, "old webhook index could not be marked retired: "+idxErr.Error())
 		}
+		if req.WebhookType == webhookTypeOutgoing && outgoingSnap != nil {
+			if trigErr := p.restoreOutgoingWebhookTriggers(newHookID, actingUser.Id, outgoingSnap); trigErr != nil {
+				partialErrors = append(partialErrors, "recreated webhook triggers could not be restored: "+trigErr.Error()+" — update the new outgoing webhook's trigger words manually")
+			}
+		}
 	}
 	if idxErr := p.writeWebhookIndex(synthetic, newHookID, actingUser.Id); idxErr != nil {
 		partialErrors = append(partialErrors, "new webhook index could not be written: "+idxErr.Error()+" — the hook exists but may not appear in Transfer/Retire")
@@ -730,10 +737,15 @@ func (p *Plugin) createOutgoingWebhookFromRecreate(req *webhookRequest, snap *ou
 	if p.createOutgoingWebhookFromRecreateFn != nil {
 		return p.createOutgoingWebhookFromRecreateFn(req, snap, adminUserID)
 	}
-	// Fall back through the standard create path when the snapshot is a
-	// single callback with no triggers (same as a fresh request).
+	contentType := strings.TrimSpace(snap.ContentType)
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	// Fall back through the standard create path only when the snapshot is a
+	// JSON single-callback with no triggers (same as a fresh request).
 	if len(snap.CallbackURLs) == 1 && len(snap.TriggerWords) == 0 && snap.TriggerWhen == 0 &&
-		(snap.Username == "" && snap.IconURL == "") {
+		(snap.Username == "" && snap.IconURL == "") &&
+		strings.EqualFold(contentType, "application/json") {
 		req.CallbackURL = snap.CallbackURLs[0]
 		return p.createWebhookForRequest(req, adminUserID)
 	}
@@ -748,10 +760,17 @@ func (p *Plugin) createOutgoingWebhookFromRecreate(req *webhookRequest, snap *ou
 	}
 	defer cleanup()
 
-	contentType := snap.ContentType
-	if contentType == "" {
-		contentType = "application/json"
+	// Mattermost rejects a new outgoing hook that overlaps an existing one in
+	// the same channel on callback + trigger words. Create with a temporary
+	// unique trigger when the live hook has triggers; fulfill restores the
+	// real triggers after the old hook is deleted.
+	createTriggers := append([]string(nil), snap.TriggerWords...)
+	createTriggerWhen := snap.TriggerWhen
+	if len(snap.TriggerWords) > 0 {
+		createTriggers = []string{"rh-recreate-" + model.NewId()}
+		createTriggerWhen = 0
 	}
+
 	hook, _, apiErr := client.CreateOutgoingWebhook(context.Background(), &model.OutgoingWebhook{
 		TeamId:       req.TeamID,
 		ChannelId:    req.ChannelID,
@@ -759,8 +778,8 @@ func (p *Plugin) createOutgoingWebhookFromRecreate(req *webhookRequest, snap *ou
 		DisplayName:  req.DisplayName,
 		Description:  req.Description,
 		CallbackURLs: append([]string(nil), snap.CallbackURLs...),
-		TriggerWords: append([]string(nil), snap.TriggerWords...),
-		TriggerWhen:  snap.TriggerWhen,
+		TriggerWords: createTriggers,
+		TriggerWhen:  createTriggerWhen,
 		ContentType:  contentType,
 		Username:     snap.Username,
 		IconURL:      snap.IconURL,
@@ -769,6 +788,36 @@ func (p *Plugin) createOutgoingWebhookFromRecreate(req *webhookRequest, snap *ou
 		return "", "", errors.Wrap(apiErr, "failed to recreate outgoing webhook")
 	}
 	return fmt.Sprintf("Your outgoing webhook **%s** was approved and is now active.", escapeMarkdown(hook.DisplayName)), hook.Id, nil
+}
+
+// restoreOutgoingWebhookTriggers sets the recreated hook's trigger words to
+// the live snapshot after the old overlapping hook has been deleted.
+func (p *Plugin) restoreOutgoingWebhookTriggers(hookID, adminUserID string, snap *outgoingWebhookRecreate) error {
+	if snap == nil || len(snap.TriggerWords) == 0 || strings.TrimSpace(hookID) == "" {
+		return nil
+	}
+	if p.createOutgoingWebhookFromRecreateFn != nil {
+		// Tests that stub create also stub trigger restore as a no-op.
+		return nil
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	hook, _, getErr := client.GetOutgoingWebhook(context.Background(), hookID)
+	if getErr != nil {
+		return errors.Wrap(getErr, "failed to load recreated outgoing webhook")
+	}
+	if hook == nil {
+		return errors.New("recreated outgoing webhook not found")
+	}
+	hook.TriggerWords = append([]string(nil), snap.TriggerWords...)
+	hook.TriggerWhen = snap.TriggerWhen
+	if _, _, upErr := client.UpdateOutgoingWebhook(context.Background(), hook); upErr != nil {
+		return errors.Wrap(upErr, "failed to restore outgoing webhook triggers")
+	}
+	return nil
 }
 
 // resolveOutgoingWebhookCallback returns the first callback URL for an
@@ -792,7 +841,7 @@ func (p *Plugin) restoreWebhookTransferAfterFailure(req *webhookTransferRequest,
 	}
 	p.API.LogError("failed to carry out webhook transfer/retire on approval", "action", req.Action, "error", cause.Error())
 	restored, restoreErr := p.restoreTransferRecord(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq)
-	if restoreErr != nil {
+	if restoreErr != nil && !restored {
 		p.API.LogError("failed to restore webhook transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the webhook (%s), and the request could not be saved — ask the requester to resubmit.", label, cause.Error()))
@@ -801,8 +850,13 @@ func (p *Plugin) restoreWebhookTransferAfterFailure(req *webhookTransferRequest,
 		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,
 			fmt.Sprintf("Could not %s the webhook (%s), and another transfer ticket took over this hook — ask the requester to resubmit if needed.", label, cause.Error()))
 	}
+	causeMsg := cause.Error()
+	if restoreErr != nil {
+		p.API.LogWarn("webhook transfer restored but asset claim could not be re-checked", "error", restoreErr.Error())
+		causeMsg = cause.Error() + "; asset claim could not be re-checked — retry Approve"
+	}
 	notice := func(clicked bool) string {
-		return fmt.Sprintf("Couldn't %s the webhook: %s. The request is still pending — %s.", label, cause.Error(), retryText(clicked))
+		return fmt.Sprintf("Couldn't %s the webhook: %s. The request is still pending — %s.", label, causeMsg, retryText(clicked))
 	}
 	p.approveFailed(cards, fmt.Sprintf("final approval for the %s webhook \"%s\" could not be carried out", req.WebhookType, escapeMarkdown(req.DisplayName)), cause)
 	result := p.repaintCards(cards, key, notice(cards.clickedPostID != ""),

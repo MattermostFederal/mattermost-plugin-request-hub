@@ -16,8 +16,21 @@ import (
 // isPendingListKey matches the KV key of any user's pending list.
 var isPendingListKey = mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvPendingPrefix) })
 
-// isNotPendingListKey matches every other KV key.
-var isNotPendingListKey = mock.MatchedBy(func(key string) bool { return !strings.HasPrefix(key, kvPendingPrefix) })
+// isNotPendingListKey matches KV keys that are neither pending lists nor
+// bot/webhook index rows. Index rows need a real CAS store (memKV/fakeKV);
+// this stub would otherwise claim success without writing them.
+var isNotPendingListKey = mock.MatchedBy(func(key string) bool {
+	switch {
+	case strings.HasPrefix(key, kvPendingPrefix):
+		return false
+	case strings.HasPrefix(key, kvBotIndexPrefix):
+		return false
+	case strings.HasPrefix(key, kvWebhookIndexPrefix):
+		return false
+	default:
+		return true
+	}
+})
 
 // isApprovalCardsKey matches the KV key of any request's recorded
 // approval cards.

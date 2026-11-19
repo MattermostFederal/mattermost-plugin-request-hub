@@ -49,6 +49,17 @@ type webhookIndexEntry struct {
 
 func webhookIndexKey(hookID string) string { return kvWebhookIndexPrefix + hookID }
 
+const webhookIndexCASRetries = 5
+
+// webhookIndexOwner is the webhook's effective owner. Older rows may leave
+// owner empty when the owner was the requester.
+func webhookIndexOwner(e webhookIndexEntry) string {
+	if e.OwnerUserID != "" {
+		return e.OwnerUserID
+	}
+	return e.RequesterID
+}
+
 // writeWebhookIndex records a standalone webhook created for req. Exercise
 // hooks are tracked in the exercise manifest instead. Returns an error when
 // the index could not be written (caller may surface as a partial approval).
@@ -73,7 +84,7 @@ func (p *Plugin) writeWebhookIndex(req *webhookRequest, hookID, approverID strin
 		entry.TransferHandle = model.NewId()
 	}
 	if err := p.storeWebhookIndex(entry); err != nil {
-		p.API.LogError("failed to write webhook index entry", "hook_id", hookID, "request_id", req.ID, "approver_id", approverID, "error", err.Error())
+		p.API.LogError("failed to write webhook index entry", "request_id", req.ID, "approver_id", approverID, "webhook_type", req.WebhookType, "error", err.Error())
 		return err
 	}
 	return nil
@@ -84,16 +95,43 @@ func (p *Plugin) storeWebhookIndex(entry webhookIndexEntry) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal webhook index entry")
 	}
-	if appErr := p.API.KVSet(webhookIndexKey(entry.HookID), data); appErr != nil {
-		return errors.Wrap(appErr, "failed to store webhook index entry")
-	}
-	p.trackWebhookIndexKey(entry.HookID)
-	if entry.WebhookType == webhookTypeIncoming && entry.TransferHandle != "" {
-		// Best-effort: resolveWebhookTransferHookID falls back to scanning
-		// the index when this map entry is missing.
-		if appErr := p.API.KVSet(kvWebhookTransferHandlePrefix+entry.TransferHandle, []byte(entry.HookID)); appErr != nil {
-			p.API.LogWarn("failed to store webhook transfer handle", "hook_id", entry.HookID, "error", appErr.Error())
+	key := webhookIndexKey(entry.HookID)
+	for range webhookIndexCASRetries {
+		old, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return errors.Wrap(appErr, "failed to load webhook index entry for update")
 		}
+		ok, casErr := p.API.KVCompareAndSet(key, old, data)
+		if casErr != nil {
+			return errors.Wrap(casErr, "failed to store webhook index entry")
+		}
+		if ok {
+			p.trackWebhookIndexKey(entry.HookID)
+			if err := p.ensureTransferHandleMap(entry); err != nil {
+				p.API.LogWarn("failed to store webhook transfer handle", "transfer_handle", entry.TransferHandle, "request_id", entry.RequestID, "error", err.Error())
+			}
+			return nil
+		}
+	}
+	return errors.New("failed to store webhook index entry after concurrent updates")
+}
+
+// ensureTransferHandleMap writes the opaque handle → hook ID map for an
+// incoming webhook. Outgoing hooks have no handle.
+func (p *Plugin) ensureTransferHandleMap(entry webhookIndexEntry) error {
+	if entry.WebhookType != webhookTypeIncoming || entry.TransferHandle == "" || entry.HookID == "" {
+		return nil
+	}
+	key := kvWebhookTransferHandlePrefix + entry.TransferHandle
+	raw, appErr := p.API.KVGet(key)
+	if appErr != nil {
+		return errors.Wrap(appErr, "failed to read webhook transfer handle")
+	}
+	if raw != nil && strings.TrimSpace(string(raw)) == entry.HookID {
+		return nil
+	}
+	if appErr := p.API.KVSet(key, []byte(entry.HookID)); appErr != nil {
+		return errors.Wrap(appErr, "failed to store webhook transfer handle")
 	}
 	return nil
 }
@@ -172,7 +210,7 @@ func (p *Plugin) retireWebhookIndex(hookID string) error {
 	}
 	entry.RetiredAt = model.GetMillis()
 	if err := p.storeWebhookIndex(*entry); err != nil {
-		p.API.LogWarn("failed to mark webhook index retired", "hook_id", hookID, "error", err.Error())
+		p.API.LogWarn("failed to mark webhook index retired", "request_id", entry.RequestID, "transfer_handle", entry.TransferHandle, "webhook_type", entry.WebhookType, "error", err.Error())
 		return err
 	}
 	return nil
@@ -189,7 +227,7 @@ func (p *Plugin) updateWebhookIndexOwner(hookID, newOwnerID string) error {
 	}
 	entry.OwnerUserID = newOwnerID
 	if storeErr := p.storeWebhookIndex(*entry); storeErr != nil {
-		p.API.LogWarn("failed to update webhook index owner", "hook_id", hookID, "error", storeErr.Error())
+		p.API.LogWarn("failed to update webhook index owner", "request_id", entry.RequestID, "transfer_handle", entry.TransferHandle, "webhook_type", entry.WebhookType, "error", storeErr.Error())
 		return storeErr
 	}
 	return nil
@@ -197,7 +235,9 @@ func (p *Plugin) updateWebhookIndexOwner(hookID, newOwnerID string) error {
 
 // ensureIncomingTransferHandle returns the opaque public asset id for an
 // incoming hook, creating and persisting a handle when older index rows lack
-// one. Outgoing hooks keep returning the real HookID.
+// one. Outgoing hooks keep returning the real HookID. Returns empty when the
+// reverse map cannot be written, so callers never fall back to the secret
+// HookID for incoming hooks.
 func (p *Plugin) ensureIncomingTransferHandle(entry *webhookIndexEntry) string {
 	if entry == nil {
 		return ""
@@ -206,11 +246,21 @@ func (p *Plugin) ensureIncomingTransferHandle(entry *webhookIndexEntry) string {
 		return entry.HookID
 	}
 	if entry.TransferHandle != "" {
+		if err := p.ensureTransferHandleMap(*entry); err != nil {
+			p.API.LogWarn("failed to repair incoming webhook transfer handle map", "transfer_handle", entry.TransferHandle, "error", err.Error())
+			return ""
+		}
 		return entry.TransferHandle
 	}
 	entry.TransferHandle = model.NewId()
 	if err := p.storeWebhookIndex(*entry); err != nil {
-		p.API.LogWarn("failed to persist incoming webhook transfer handle", "hook_id", entry.HookID, "error", err.Error())
+		p.API.LogWarn("failed to persist incoming webhook transfer handle", "request_id", entry.RequestID, "error", err.Error())
+		entry.TransferHandle = ""
+		return ""
+	}
+	if err := p.ensureTransferHandleMap(*entry); err != nil {
+		p.API.LogWarn("failed to store incoming webhook transfer handle map", "transfer_handle", entry.TransferHandle, "error", err.Error())
+		return ""
 	}
 	return entry.TransferHandle
 }

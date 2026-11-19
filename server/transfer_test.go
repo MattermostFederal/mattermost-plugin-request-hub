@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -20,33 +21,27 @@ func memKV(api *plugintest.API) map[string][]byte {
 	api.On("KVSet", mock.Anything, mock.Anything).Return(func(key string, value []byte) *model.AppError {
 		store[key] = value
 		return nil
-	})
-	api.On("KVGet", mock.Anything).Return(func(key string) []byte { return store[key] }, func(string) *model.AppError { return nil })
+	}).Maybe()
+	api.On("KVGet", mock.Anything).Return(func(key string) ([]byte, *model.AppError) {
+		return store[key], nil
+	}).Maybe()
 	api.On("KVDelete", mock.Anything).Return(func(key string) *model.AppError {
 		delete(store, key)
 		return nil
-	})
-	api.On("KVList", mock.Anything, mock.Anything).Return(func(page, perPage int) []string {
+	}).Maybe()
+	api.On("KVList", mock.Anything, mock.Anything).Return(func(page, perPage int) ([]string, *model.AppError) {
 		if page > 0 {
-			return nil
+			return nil, nil
 		}
 		keys := make([]string, 0, len(store))
 		for k := range store {
 			keys = append(keys, k)
 		}
-		return keys
-	}, func(int, int) *model.AppError { return nil })
+		return keys, nil
+	}).Maybe()
 	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(
 		func(key string, old, value []byte) (bool, *model.AppError) {
-			cur, ok := store[key]
-			if old == nil {
-				if ok && len(cur) > 0 {
-					return false, nil
-				}
-				store[key] = value
-				return true, nil
-			}
-			if !ok || string(cur) != string(old) {
+			if !bytes.Equal(store[key], old) {
 				return false, nil
 			}
 			store[key] = value
@@ -55,8 +50,7 @@ func memKV(api *plugintest.API) map[string][]byte {
 	).Maybe()
 	api.On("KVCompareAndDelete", mock.Anything, mock.Anything).Return(
 		func(key string, old []byte) (bool, *model.AppError) {
-			cur, ok := store[key]
-			if !ok || string(cur) != string(old) {
+			if !bytes.Equal(store[key], old) {
 				return false, nil
 			}
 			delete(store, key)
@@ -89,8 +83,21 @@ func TestClaimTransferAsset_CAS(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already")
 
-	// Stale holder (request gone) is overwritten.
+	// Holder record gone but history still pending (mid-fulfill): refuse.
 	delete(store, kvBotTransferRequestPrefix+"req-a")
+	store[kvHistoryPrefix+"req-a"] = recordJSON(t, requestHistory{RequestID: "req-a", Status: historyPending})
+	err = p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already")
+
+	// No history yet (in-flight before first audit write): refuse.
+	delete(store, kvHistoryPrefix+"req-a")
+	err = p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already")
+
+	// Terminal history: stale claim may be overwritten.
+	store[kvHistoryPrefix+"req-a"] = recordJSON(t, requestHistory{RequestID: "req-a", Status: historyApproved})
 	require.NoError(t, p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-b"))
 	require.Equal(t, "req-b", string(store[transferAssetClaimKey(pendingKindBotTransfer, "bot1")]))
 
@@ -101,7 +108,7 @@ func TestClaimTransferAsset_CAS(t *testing.T) {
 
 func TestWebhookIndexRoundTrip(t *testing.T) {
 	api := &plugintest.API{}
-	stubLogs(api)
+	stubLogLines(api)
 	memKV(api)
 	p := newTestPlugin(api)
 
@@ -232,6 +239,7 @@ func TestSubmitBotTransferRejects(t *testing.T) {
 		store := memKV(api)
 		store[kvBotIndexPrefix+"b1"] = mustMarshal(t, botIndexEntry{BotUserID: "b1", Username: "svcbot", RequesterID: "u_req", OwnerUserID: "u_req"})
 		api.On("GetUser", "u_req").Return(regularUser(), nil)
+		api.On("GetBot", "b1", true).Return(&model.Bot{UserId: "b1", OwnerId: "u_req"}, nil)
 		p := newTestPlugin(api)
 		_, err := p.submitBotTransferRequest("u_req", botTransferInput{BotUserID: "b1", Action: transferActionTransfer})
 		require.ErrorContains(t, err, "pick the new owner")
@@ -264,6 +272,11 @@ func TestBotIndexOwnerFallsBackToRequester(t *testing.T) {
 	require.Equal(t, "req", botIndexOwner(botIndexEntry{RequesterID: "req"}))
 }
 
+func TestWebhookIndexOwnerFallsBackToRequester(t *testing.T) {
+	require.Equal(t, "owner", webhookIndexOwner(webhookIndexEntry{OwnerUserID: "owner", RequesterID: "req"}))
+	require.Equal(t, "req", webhookIndexOwner(webhookIndexEntry{RequesterID: "req"}))
+}
+
 func TestResolveOutgoingWebhookCallback_Seam(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
@@ -276,6 +289,49 @@ func TestResolveOutgoingWebhookCallback_Seam(t *testing.T) {
 	got, err := p.resolveOutgoingWebhookCallback("h1", "admin1")
 	require.NoError(t, err)
 	require.Equal(t, "https://cb.example/out", got)
+}
+
+func TestCreateOutgoingWebhookFromRecreate_ContentTypeShortcut(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogs(api)
+	stubSiteURL(api, "http://localhost:8065")
+	p := newTestPlugin(api)
+
+	req := &webhookRequest{
+		ID: "r1", RequesterID: "u_new", WebhookType: webhookTypeOutgoing,
+		ChannelID: "ch1", TeamID: "t1", DisplayName: "Relay",
+	}
+
+	t.Run("json single-callback uses createWebhookForRequest", func(t *testing.T) {
+		var gotURL string
+		p.createWebhookFn = func(r *webhookRequest, _ string) (string, string, error) {
+			gotURL = r.CallbackURL
+			return "ok", "new-hook", nil
+		}
+		msg, hookID, err := p.createOutgoingWebhookFromRecreate(req, &outgoingWebhookRecreate{
+			CallbackURLs: []string{"https://hooks.example.com/json"},
+			ContentType:  "application/json",
+		}, "admin1")
+		require.NoError(t, err)
+		require.Equal(t, "new-hook", hookID)
+		require.Equal(t, "https://hooks.example.com/json", gotURL)
+		require.Equal(t, "ok", msg)
+	})
+
+	t.Run("form-urlencoded skips createWebhookForRequest", func(t *testing.T) {
+		simpleCreate := false
+		p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+			simpleCreate = true
+			return "ok", "new-hook", nil
+		}
+		api.On("GetUser", "admin1").Return(nil, testAppErr("no admin")).Maybe()
+		_, _, err := p.createOutgoingWebhookFromRecreate(req, &outgoingWebhookRecreate{
+			CallbackURLs: []string{"https://hooks.example.com/form"},
+			ContentType:  "application/x-www-form-urlencoded",
+		}, "admin1")
+		require.False(t, simpleCreate)
+		require.Error(t, err) // transfer REST client needs a usable admin session
+	})
 }
 
 func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
@@ -423,6 +479,76 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 			newDecisionCards("t2b", "", ""), nil, kvWebhookTransferRequestPrefix+"t2b")
 		require.Equal(t, "https://hooks.example.com/live-only", gotCallback)
 		require.Contains(t, res.Outcome, "recreated")
+	})
+
+	t.Run("preserves form-urlencoded content type via recreate seam", func(t *testing.T) {
+		var gotSnap *outgoingWebhookRecreate
+		simpleCreate := false
+		p.getOutgoingWebhookCallbackFn = nil
+		p.getOutgoingWebhookForRecreateFn = func(hookID, _ string) (*outgoingWebhookRecreate, error) {
+			require.Equal(t, "old-hook", hookID)
+			return &outgoingWebhookRecreate{
+				CallbackURLs: []string{"https://hooks.example.com/form"},
+				ContentType:  "application/x-www-form-urlencoded",
+			}, nil
+		}
+		p.createOutgoingWebhookFromRecreateFn = func(req *webhookRequest, snap *outgoingWebhookRecreate, _ string) (string, string, error) {
+			gotSnap = snap
+			return "Outgoing webhook created.", "new-hook", nil
+		}
+		p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+			simpleCreate = true
+			return "", "", errors.New("must not use simple create for form-urlencoded")
+		}
+		p.deleteWebhookFn = defaultDelete
+		req := &webhookTransferRequest{
+			ID: "t-form", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t-form", "", ""), nil, kvWebhookTransferRequestPrefix+"t-form")
+		require.False(t, simpleCreate)
+		require.NotNil(t, gotSnap)
+		require.Equal(t, "application/x-www-form-urlencoded", gotSnap.ContentType)
+		require.Contains(t, res.Outcome, "recreated")
+		p.getOutgoingWebhookForRecreateFn = nil
+		p.createOutgoingWebhookFromRecreateFn = nil
+	})
+
+	t.Run("passes trigger words through recreate seam", func(t *testing.T) {
+		var gotSnap *outgoingWebhookRecreate
+		p.getOutgoingWebhookCallbackFn = nil
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+			return &outgoingWebhookRecreate{
+				CallbackURLs: []string{"https://hooks.example.com/out"},
+				TriggerWords: []string{"alert", "page"},
+				TriggerWhen:  1,
+				ContentType:  "application/json",
+			}, nil
+		}
+		p.createOutgoingWebhookFromRecreateFn = func(_ *webhookRequest, snap *outgoingWebhookRecreate, _ string) (string, string, error) {
+			gotSnap = snap
+			return "Outgoing webhook created.", "new-hook", nil
+		}
+		p.deleteWebhookFn = defaultDelete
+		req := &webhookTransferRequest{
+			ID: "t-trig", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t-trig", "", ""), nil, kvWebhookTransferRequestPrefix+"t-trig")
+		require.NotNil(t, gotSnap)
+		require.Equal(t, []string{"alert", "page"}, gotSnap.TriggerWords)
+		require.Equal(t, 1, gotSnap.TriggerWhen)
+		require.Contains(t, res.Outcome, "recreated")
+		p.getOutgoingWebhookForRecreateFn = nil
+		p.createOutgoingWebhookFromRecreateFn = nil
 	})
 
 	t.Run("blocks delete when callback cannot be resolved", func(t *testing.T) {
@@ -575,6 +701,40 @@ func TestRestoreTransferRecord(t *testing.T) {
 	require.False(t, present)
 }
 
+func TestRestoreTransferRecord_ClaimCheckErrorKeepsRecord(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := map[string][]byte{}
+	api.On("KVSet", mock.Anything, mock.Anything).Return(func(key string, value []byte) *model.AppError {
+		store[key] = value
+		return nil
+	})
+	api.On("KVGet", mock.Anything).Return(
+		func(key string) []byte {
+			if strings.HasPrefix(key, kvTransferAssetClaimPrefix) {
+				return nil
+			}
+			return store[key]
+		},
+		func(key string) *model.AppError {
+			if strings.HasPrefix(key, kvTransferAssetClaimPrefix) {
+				return testAppErr("kv down")
+			}
+			return nil
+		},
+	)
+	api.On("KVCompareAndSet", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVCompareAndDelete", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	p := newTestPlugin(api)
+	key := kvBotTransferRequestPrefix + "req-a"
+	raw := []byte(`{"id":"req-a"}`)
+
+	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	require.Error(t, err)
+	require.True(t, restored, "record stays so Approve can retry")
+	require.Equal(t, raw, store[key])
+}
+
 func TestResolveWebhookTransferHookID_FallsBackToIndex(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
@@ -596,4 +756,41 @@ func TestResolveWebhookTransferHookID_FallsBackToIndex(t *testing.T) {
 
 	_, err = p.resolveWebhookTransferHookID(model.NewId())
 	require.Error(t, err)
+}
+
+func TestRevokeBotTokens_PagesAndKeepsExpiryOnFail(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+
+	listed := []*model.UserAccessToken{
+		{Id: "tok-a"}, {Id: "tok-b"}, {Id: "tok-c"},
+	}
+	p.listBotAccessTokensFn = func(botUserID, adminUserID string) ([]*model.UserAccessToken, error) {
+		require.Equal(t, "bot1", botUserID)
+		return listed, nil
+	}
+	var revoked []string
+	api.On("RevokeUserAccessToken", mock.Anything).Return(func(id string) *model.AppError {
+		revoked = append(revoked, id)
+		if id == "tok-b" {
+			return testAppErr("transient")
+		}
+		return nil
+	})
+
+	expiryKey := botTokenExpiryKey("tok-b")
+	store[expiryKey] = recordJSON(t, botTokenExpiry{TokenID: "tok-b", BotUserID: "bot1"})
+	store[botTokenExpiryKey("tok-a")] = recordJSON(t, botTokenExpiry{TokenID: "tok-a", BotUserID: "bot1"})
+
+	n, err := p.revokeBotTokens("bot1", "admin1")
+	require.Error(t, err)
+	require.Equal(t, 2, n) // tok-a + tok-c
+	// tok-b is attempted from the API list and again via its expiry row.
+	require.Equal(t, []string{"tok-a", "tok-b", "tok-c", "tok-b"}, revoked)
+	_, kept := store[expiryKey]
+	require.True(t, kept, "failed revoke must keep expiry tracking")
+	_, dropped := store[botTokenExpiryKey("tok-a")]
+	require.False(t, dropped, "confirmed revoke drops expiry")
 }

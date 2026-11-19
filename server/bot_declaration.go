@@ -307,30 +307,68 @@ func botIndexOwner(e botIndexEntry) string {
 	return e.RequesterID
 }
 
+const botIndexCASRetries = 5
+
 // updateBotIndexOwner records a new owner on a bot's index entry.
 func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) error {
-	entry, err := p.loadBotIndex(botUserID)
-	if err != nil {
-		return err
-	}
-	if entry == nil {
-		return errors.New("bot index entry not found")
-	}
-	entry.OwnerUserID = newOwnerID
-	return p.saveBotIndexEntry(*entry)
+	return p.mutateBotIndex(botUserID, func(entry *botIndexEntry) error {
+		if entry == nil {
+			return errors.New("bot index entry not found")
+		}
+		entry.OwnerUserID = newOwnerID
+		return nil
+	})
 }
 
 // retireBotIndex marks a bot's index entry retired.
 func (p *Plugin) retireBotIndex(botUserID string) error {
-	entry, err := p.loadBotIndex(botUserID)
-	if err != nil {
-		return err
-	}
-	if entry == nil {
+	return p.mutateBotIndex(botUserID, func(entry *botIndexEntry) error {
+		if entry == nil {
+			return nil
+		}
+		entry.RetiredAt = model.GetMillis()
 		return nil
+	})
+}
+
+// mutateBotIndex loads a bot index row, applies fn, and CAS-writes it back
+// with a bounded retry so concurrent owner/retire updates cannot clobber
+// each other.
+func (p *Plugin) mutateBotIndex(botUserID string, fn func(*botIndexEntry) error) error {
+	key := kvBotIndexPrefix + botUserID
+	for range botIndexCASRetries {
+		raw, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return errors.Wrap(appErr, "failed to load bot index entry")
+		}
+		var entry *botIndexEntry
+		if raw != nil {
+			var e botIndexEntry
+			if err := json.Unmarshal(raw, &e); err != nil {
+				return errors.Wrap(err, "failed to unmarshal bot index entry")
+			}
+			entry = &e
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+		if entry == nil {
+			return nil
+		}
+		data, err := json.Marshal(*entry)
+		if err != nil {
+			return errors.Wrap(err, "failed to marshal bot index entry")
+		}
+		ok, casErr := p.API.KVCompareAndSet(key, raw, data)
+		if casErr != nil {
+			return errors.Wrap(casErr, "failed to update bot index entry")
+		}
+		if ok {
+			p.trackBotIndexKey(entry.BotUserID)
+			return nil
+		}
 	}
-	entry.RetiredAt = model.GetMillis()
-	return p.saveBotIndexEntry(*entry)
+	return errors.New("failed to update bot index entry after concurrent updates")
 }
 
 func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) error {
@@ -339,20 +377,31 @@ func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) error {
 		p.API.LogWarn("failed to marshal bot index entry", "bot_user_id", entry.BotUserID, "error", err.Error())
 		return errors.Wrap(err, "failed to marshal bot index entry")
 	}
-	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
-		p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
-		return errors.Wrap(appErr, "failed to update bot index entry")
+	key := kvBotIndexPrefix + entry.BotUserID
+	for range botIndexCASRetries {
+		old, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return errors.Wrap(appErr, "failed to load bot index entry for update")
+		}
+		ok, casErr := p.API.KVCompareAndSet(key, old, data)
+		if casErr != nil {
+			p.API.LogWarn("failed to update bot index entry", "bot_user_id", entry.BotUserID, "error", casErr.Error())
+			return errors.Wrap(casErr, "failed to update bot index entry")
+		}
+		if ok {
+			p.trackBotIndexKey(entry.BotUserID)
+			return nil
+		}
 	}
-	p.trackBotIndexKey(entry.BotUserID)
-	return nil
+	return errors.New("failed to update bot index entry after concurrent updates")
 }
 
-// writeBotIndex records a bot created for req. Exercise bots are tracked
-// in the exercise manifest instead. A failure is logged: the bot exists
-// either way, and its history still links it to the request.
-func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID string) {
+// writeBotIndex records a bot created for req. Credential flags reflect what
+// was actually created. Exercise bots are tracked in the exercise manifest
+// instead. Returns an error when the index could not be written.
+func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID string, hasToken, hasIncoming, hasOutgoing bool) error {
 	if req.Exercise {
-		return
+		return nil
 	}
 	ownerID := strings.TrimSpace(req.OwnerUserID)
 	if ownerID == "" {
@@ -366,21 +415,16 @@ func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID strin
 		HostingEnv: req.HostingEnv, HostingOtherDetail: req.HostingOtherDetail,
 		ArchitectureURL: req.ArchitectureURL, IntegrationURL: req.IntegrationURL,
 		HomeTeamID: req.HomeTeamID, HomeChannelID: req.HomeChannelID,
-		HasToken:           req.RequestToken,
-		HasIncomingWebhook: req.IncomingWebhookChannelID != "",
-		HasOutgoingWebhook: req.OutgoingWebhookChannelID != "",
+		HasToken:           hasToken,
+		HasIncomingWebhook: hasIncoming,
+		HasOutgoingWebhook: hasOutgoing,
 		Compliance:         req.Compliance,
 	}
-	data, err := json.Marshal(entry)
-	if err != nil {
-		p.API.LogError("failed to marshal bot index entry", "bot_user_id", bot.UserId, "error", err.Error())
-		return
+	if err := p.saveBotIndexEntry(entry); err != nil {
+		p.API.LogError("failed to write bot index entry", "bot_user_id", bot.UserId, "request_id", req.ID, "error", err.Error())
+		return err
 	}
-	if appErr := p.API.KVSet(kvBotIndexPrefix+bot.UserId, data); appErr != nil {
-		p.API.LogError("failed to write bot index entry", "bot_user_id", bot.UserId, "request_id", req.ID, "error", appErr.Error())
-		return
-	}
-	p.trackBotIndexKey(bot.UserId)
+	return nil
 }
 
 // loadBotIndex returns the index entry for a bot, or nil when Request Hub

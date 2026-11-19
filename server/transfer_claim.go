@@ -13,6 +13,11 @@ import (
 // Submit stores the request record before claiming so pendingRequestExists
 // is true for the holder during the claim window (avoids a second submitter
 // treating an in-flight claim as stale).
+//
+// Final approval deletes the pending record before REST side effects run.
+// During that window pendingRequestExists is false, so stale overwrite is
+// gated on the holder's request history being terminal — otherwise a
+// concurrent submit would steal the claim mid-fulfill.
 
 const kvTransferAssetClaimPrefix = "transfer_asset_claim_"
 
@@ -33,10 +38,23 @@ func transferPendingAssetKey(rec storedRequest) string {
 	}
 }
 
+// transferHistoryTerminal reports whether a request's history shows it has
+// left the open/in-flight set, so its asset claim may be treated as stale.
+func transferHistoryTerminal(status string) bool {
+	switch status {
+	case historyApproved, historyDenied, historyWithdrawn, historyAcknowledged,
+		historyExpired, historyFailed, historyLost, historyClosed:
+		return true
+	default:
+		return false
+	}
+}
+
 // claimTransferAsset CAS-writes requestID as the holder of assetKey. If
 // another live request already holds the claim (or another open ticket
 // covers the asset), returns a duplicate error. Stale claims are overwritten
-// only when the holder request is gone and no other open ticket covers the asset.
+// only when the holder request is gone, its history is terminal, and no
+// other open ticket covers the asset.
 func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if kind != pendingKindBotTransfer && kind != pendingKindWebhookTransfer {
 		return nil
@@ -82,8 +100,15 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if exists {
 		return duplicateRequestError(kind, assetKey)
 	}
-	// Holder record missing: still refuse if another open ticket covers the
-	// asset (claim→store race on an older build, or a concurrent store).
+	// Holder record missing: refuse while history is still open/in-flight
+	// (final approval deletes the record before REST calls finish).
+	h, histErr := p.loadHistory(holder)
+	if histErr != nil {
+		return errors.New("could not check for an existing transfer ticket; try again")
+	}
+	if h == nil || !transferHistoryTerminal(h.Status) {
+		return duplicateRequestError(kind, assetKey)
+	}
 	held, holdErr := p.transferAssetPendingElsewhere(kind, assetKey, requestID)
 	if holdErr != nil {
 		return errors.New("could not check for an existing transfer ticket; try again")
@@ -133,39 +158,61 @@ func (p *Plugin) releaseTransferTicket(kind, userID, requestID, assetKey string)
 }
 
 // transferClaimStillHeld reports whether requestID still owns the per-asset
-// claim. Used by restore-after-failure so a concurrent submit that stole the
-// claim during fulfill cannot leave two live tickets.
-func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) bool {
+// claim. A KV lookup error is returned separately so callers do not treat a
+// transient failure as a stolen claim.
+func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) (held bool, err error) {
 	assetKey = strings.TrimSpace(assetKey)
 	requestID = strings.TrimSpace(requestID)
 	if assetKey == "" || requestID == "" {
-		return false
+		return false, nil
 	}
 	raw, appErr := p.API.KVGet(transferAssetClaimKey(kind, assetKey))
-	if appErr != nil || raw == nil {
-		return false
+	if appErr != nil {
+		return false, errors.Wrap(appErr, "failed to read transfer asset claim")
 	}
-	return strings.TrimSpace(string(raw)) == requestID
+	if raw == nil {
+		return false, nil
+	}
+	return strings.TrimSpace(string(raw)) == requestID, nil
 }
 
 // restoreTransferRecord puts a claimed transfer ticket back after its
 // approval could not be carried out. The record goes back before the asset
 // claim is re-checked: a submit that saw the record missing and took the
 // claim in between is caught by the re-check, and one that comes after
-// sees the record and is refused, so one asset never has two open tickets.
-// restored is false when another ticket holds the claim; the record is
-// then removed again.
+// sees the record and is refused.
+//
+// restored is true when this request still owns the claim (or ownership
+// could not be confirmed). err is set when the record could not be written,
+// or when the claim check failed after a successful write (record left in
+// place for retry). restored is false with a nil err when another ticket
+// holds the claim and this record was removed again.
 func (p *Plugin) restoreTransferRecord(kind, assetKey, requestID, key string, raw []byte) (restored bool, err error) {
 	if err := p.putPendingRequestKV(key, raw); err != nil {
+		// Best-effort: free the asset if we still own the claim so a stuck
+		// fulfill does not block the asset forever.
+		if held, holdErr := p.transferClaimStillHeld(kind, assetKey, requestID); holdErr == nil && held {
+			p.releaseTransferAssetClaim(kind, assetKey, requestID)
+		}
 		return false, err
 	}
-	if p.transferClaimStillHeld(kind, assetKey, requestID) {
+	held, holdErr := p.transferClaimStillHeld(kind, assetKey, requestID)
+	if holdErr != nil {
+		// Record is back; keep it so approvers can retry once KV recovers.
+		return true, holdErr
+	}
+	if held {
 		return true, nil
 	}
 	deleted, appErr := p.API.KVCompareAndDelete(key, raw)
 	switch {
 	case appErr != nil:
 		p.API.LogError("failed to remove transfer request that lost its asset claim", "request_id", requestID, "error", appErr.Error())
+		if delErr := p.API.KVDelete(key); delErr != nil {
+			p.API.LogError("failed to force-delete transfer request that lost its asset claim", "request_id", requestID, "error", delErr.Error())
+		} else {
+			p.untrackOpenRequestKey(key)
+		}
 	case deleted:
 		p.untrackOpenRequestKey(key)
 	}

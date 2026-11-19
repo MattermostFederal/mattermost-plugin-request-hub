@@ -153,15 +153,19 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		if e.RetiredAt != 0 {
 			continue
 		}
-		asset := transferAsset{assetType: "webhook", assetID: e.HookID, ownerUserID: e.OwnerUserID, requesterID: e.RequesterID, channelID: e.ChannelID}
+		owner := webhookIndexOwner(e)
+		asset := transferAsset{assetType: "webhook", assetID: e.HookID, ownerUserID: owner, requesterID: e.RequesterID, channelID: e.ChannelID}
 		if p.canNominateTransfer(userID, asset) != nil {
 			continue
 		}
-		active := p.userActive(e.OwnerUserID)
+		active := p.userActive(owner)
 		entry := e
 		assetID := p.ensureIncomingTransferHandle(&entry)
+		if e.WebhookType == webhookTypeIncoming && assetID == "" {
+			continue
+		}
 		item := transferableAsset{
-			AssetType: "webhook", AssetID: assetID, WebhookType: e.WebhookType, DisplayName: e.DisplayName, OwnerID: e.OwnerUserID,
+			AssetType: "webhook", AssetID: assetID, WebhookType: e.WebhookType, DisplayName: e.DisplayName, OwnerID: owner,
 			OwnerActive: active, Orphaned: !active,
 		}
 		// Incoming hook IDs are the secret URL. Orphaned incoming hooks must

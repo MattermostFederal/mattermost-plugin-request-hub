@@ -323,7 +323,6 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 	var outgoingWebhookCreated bool
 	var partialErrors []string
 
-	p.writeBotIndex(req, bot, actingUser.Id)
 	// The bot joins its home channel even without a webhook, so it is
 	// visible where its requester said it belongs.
 	homeJoined := false
@@ -428,10 +427,15 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		incomingWebhookURL = ""
 	}
 
+	if idxErr := p.writeBotIndex(req, bot, actingUser.Id, tokenValue != "", incomingWebhookURL != "", outgoingWebhookCreated); idxErr != nil {
+		partialErrors = append(partialErrors, "bot index could not be written: "+idxErr.Error()+" — Transfer/Retire may not list this bot")
+	}
+
 	outcome := fmt.Sprintf("✅ Fully approved (security + system) for %s. Bot **@%s** created.", requesterUsername(requester, req.RequesterID), bot.Username)
 	event, problems := eventApproved, ""
 	if len(partialErrors) > 0 {
 		event, problems = eventApprovedPartial, "; "+escapeMarkdown(strings.Join(partialErrors, "; "))
+		outcome = "⚠️ Fully approved with issues for " + requesterUsername(requester, req.RequesterID) + ". Bot **@" + bot.Username + "** created" + problems + "."
 	}
 	p.decisionEvent(cards, event, fmt.Sprintf("@%s gave final approval; bot @%s created for %s%s",
 		actingUser.Username, bot.Username, requesterUsername(requester, req.RequesterID), problems), map[string]any{
@@ -444,11 +448,15 @@ func (p *Plugin) fulfillBotRequest(req *botRequest, bot *model.Bot, actingUser, 
 		"home_channel_joined":      homeJoined,
 		"problems":                 partialErrors,
 	})
+	cardText := fmt.Sprintf("Fully approved (security + system). Bot **@%s** has been created.", bot.Username)
+	if len(partialErrors) > 0 {
+		cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** was created, but: %s", bot.Username, escapeMarkdown(strings.Join(partialErrors, "; ")))
+	}
 	result := p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: true, ApproverUsername: actingUser.Username,
 		CardTitle:  exerciseLabel(req.Exercise) + "Bot Account Request Approved",
-		CardText:   fmt.Sprintf("Fully approved (security + system). Bot **@%s** has been created.", bot.Username),
+		CardText:   cardText,
 		StatusLine: outcome,
 	})
 	p.sendBotExtrasReply(req, tokenValue, tokenExpiresAt, incomingWebhookURL, outgoingWebhookCreated, partialErrors)
@@ -623,18 +631,34 @@ func (p *Plugin) decideWebhookRequest(actingUserID, requestID, clickedPostID str
 	}
 
 	outcome := fmt.Sprintf("✅ Fully approved (security + system) for %s. %s webhook **%s** created.", requesterUsername(requester, req.RequesterID), req.WebhookType, escapeMarkdown(req.DisplayName))
+	cardText := fmt.Sprintf("Fully approved (security + system). %s", dmMsg)
+	event := eventApproved
+	detail := map[string]any{"webhook_type": req.WebhookType}
+	if req.WebhookType == webhookTypeIncoming {
+		// Incoming HookID is the secret URL; identify via transfer handle after index write.
+	} else {
+		detail["hook_id"] = hookID
+	}
 	// Index the delivered hook so Transfer/Retire can find it later. A
 	// failure doesn't undo the approval, but approvers are told.
 	if idxErr := p.writeWebhookIndex(req, hookID, actingUser.Id); idxErr != nil {
-		outcome += " ⚠️ It could not be added to the Transfer/Retire list; a System Admin can manage it in the System Console."
+		event = eventApprovedPartial
+		warn := "It could not be added to the Transfer/Retire list; a System Admin can manage it in the System Console."
+		outcome += " ⚠️ " + warn
+		cardText += " ⚠️ " + warn
+		detail["problems"] = []string{warn}
+	} else if req.WebhookType == webhookTypeIncoming {
+		if entry, loadErr := p.loadWebhookIndex(hookID); loadErr == nil && entry != nil && entry.TransferHandle != "" {
+			detail["transfer_handle"] = entry.TransferHandle
+		}
 	}
-	p.decisionEvent(cards, eventApproved, fmt.Sprintf("@%s gave final approval; %s webhook \"%s\" created for %s",
-		actingUser.Username, req.WebhookType, escapeMarkdown(req.DisplayName), requesterUsername(requester, req.RequesterID)), map[string]any{"hook_id": hookID})
+	p.decisionEvent(cards, event, fmt.Sprintf("@%s gave final approval; %s webhook \"%s\" created for %s",
+		actingUser.Username, req.WebhookType, escapeMarkdown(req.DisplayName), requesterUsername(requester, req.RequesterID)), detail)
 	return p.finish(cards, "", outcome, ticketClose{
 		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 		Approved: true, ApproverUsername: actingUser.Username,
 		CardTitle:  exerciseLabel(req.Exercise) + "Webhook Request Approved",
-		CardText:   fmt.Sprintf("Fully approved (security + system). %s", dmMsg),
+		CardText:   cardText,
 		StatusLine: outcome,
 	})
 }

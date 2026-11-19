@@ -100,6 +100,9 @@ export const RequestBugReportModal = () => {
     }
 
     const submit = async () => {
+        if (submitting) {
+            return;
+        }
         if (!description.trim()) {
             setError('A description is required.');
             return;
