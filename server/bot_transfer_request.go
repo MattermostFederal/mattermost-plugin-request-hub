@@ -494,7 +494,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if disErr := p.disableBot(req.BotUserID, actingUser.Id); disErr != nil {
 			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, disErr)
 		}
-		revoked, revErr := p.revokeBotTokens(req.BotUserID, actingUser.Id)
+		revoked, revErr := p.revokeBotTokens(req.BotUserID, actingUser.Id, req.ID)
 		if revErr != nil {
 			partialErrors = append(partialErrors, "revoking bot tokens failed: "+revErr.Error())
 		}
@@ -525,7 +525,13 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 
 	// Transfer.
 	if assignErr := p.assignBot(req.BotUserID, req.NewOwnerUserID, actingUser.Id); assignErr != nil {
-		return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, assignErr)
+		// A lost REST response looks like a failure even though the server
+		// applied the change. Only unwind when the owner has not moved.
+		owner, ownerErr := p.liveBotOwnerID(req.BotUserID, "")
+		if ownerErr != nil || owner != req.NewOwnerUserID {
+			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, assignErr)
+		}
+		partialErrors = append(partialErrors, "the reassign call reported an error ("+assignErr.Error()+") but the bot already belongs to the new owner")
 	}
 	if idxErr := p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID); idxErr != nil {
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")

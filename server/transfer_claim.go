@@ -29,10 +29,38 @@ const (
 	kvTransferFulfillingPrefix = "transfer_fulfilling_"
 
 	// transferFulfillWindow bounds how long a fulfill marker protects a
-	// claim. It is well above the longest fulfill (a handful of REST calls,
-	// each capped by transferRESTTimeout).
-	transferFulfillWindow = 15 * time.Minute
+	// claim. Revoke-all walks every token on a bot, each call capped by
+	// transferRESTTimeout, so the window is generous and the marker is
+	// renewed as the loop runs (renewTransferFulfilling).
+	transferFulfillWindow = 60 * time.Minute
+
+	transferClaimCASRetries = 5
 )
+
+// errTransferClaimLost reports that another ticket owns the asset claim.
+var errTransferClaimLost = errors.New("another transfer ticket took over the asset claim")
+
+// Claim values are "requestID|generation". The generation rises each time a
+// holder re-publishes its record after a failed fulfill, so a takeover that
+// already read the claim loses its CAS instead of stealing a live ticket.
+// Values written before versioning are bare request IDs (generation 0).
+func formatTransferClaim(requestID string, gen int64) string {
+	return requestID + "|" + strconv.FormatInt(gen, 10)
+}
+
+func parseTransferClaim(raw []byte) (requestID string, gen int64) {
+	value := strings.TrimSpace(string(raw))
+	id, genPart, versioned := strings.Cut(value, "|")
+	id = strings.TrimSpace(id)
+	if !versioned {
+		return id, 0
+	}
+	parsed, parseErr := strconv.ParseInt(strings.TrimSpace(genPart), 10, 64)
+	if parseErr != nil {
+		return id, 0
+	}
+	return id, parsed
+}
 
 func transferAssetClaimKey(kind, assetKey string) string {
 	return kvTransferAssetClaimPrefix + kind + "_" + assetKey
@@ -64,6 +92,18 @@ func (p *Plugin) markTransferFulfilling(requestID string) error {
 		return errors.Wrap(appErr, "failed to mark transfer as being carried out")
 	}
 	return nil
+}
+
+// renewTransferFulfilling refreshes requestID's fulfill marker part-way
+// through a long side effect, so a revoke-all over many tokens cannot run
+// past transferFulfillWindow and free the asset mid-flight.
+func (p *Plugin) renewTransferFulfilling(requestID string) {
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+	if err := p.markTransferFulfilling(requestID); err != nil {
+		p.API.LogWarn("failed to renew transfer fulfill marker", "request_id", requestID, "error", err.Error())
+	}
 }
 
 // clearTransferFulfilling drops requestID's fulfill marker.
@@ -107,7 +147,7 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	}
 	key := transferAssetClaimKey(kind, assetKey)
 
-	ok, appErr := p.API.KVCompareAndSet(key, nil, []byte(requestID))
+	ok, appErr := p.API.KVCompareAndSet(key, nil, []byte(formatTransferClaim(requestID, 0)))
 	if appErr != nil {
 		return errors.New("could not claim that asset; try again")
 	}
@@ -119,12 +159,12 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if getErr != nil {
 		return errors.New("could not claim that asset; try again")
 	}
-	holder := strings.TrimSpace(string(raw))
+	holder, _ := parseTransferClaim(raw)
 	if holder == requestID {
 		return nil
 	}
 	if holder == "" {
-		ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(requestID))
+		ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(formatTransferClaim(requestID, 0)))
 		if appErr != nil {
 			return errors.New("could not claim that asset; try again")
 		}
@@ -158,7 +198,7 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 		return duplicateRequestError(kind, assetKey)
 	}
 
-	ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(requestID))
+	ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(formatTransferClaim(requestID, 0)))
 	if appErr != nil {
 		return errors.New("could not claim that asset; try again")
 	}
@@ -166,6 +206,31 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 		return duplicateRequestError(kind, assetKey)
 	}
 	return nil
+}
+
+// bumpTransferClaimGen raises the claim's generation while requestID still
+// owns it, so a takeover that already read the old value cannot CAS it away
+// while the holder puts its record back.
+func (p *Plugin) bumpTransferClaimGen(kind, assetKey, requestID string) error {
+	key := transferAssetClaimKey(kind, assetKey)
+	for range transferClaimCASRetries {
+		raw, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return errors.Wrap(appErr, "failed to read transfer asset claim")
+		}
+		holder, gen := parseTransferClaim(raw)
+		if holder != requestID {
+			return errTransferClaimLost
+		}
+		ok, casErr := p.API.KVCompareAndSet(key, raw, []byte(formatTransferClaim(requestID, gen+1)))
+		if casErr != nil {
+			return errors.Wrap(casErr, "failed to update transfer asset claim")
+		}
+		if ok {
+			return nil
+		}
+	}
+	return errors.New("failed to update transfer asset claim after concurrent updates")
 }
 
 // releaseTransferAssetClaim drops the claim when requestID still holds it.
@@ -183,11 +248,13 @@ func (p *Plugin) releaseTransferAssetClaim(kind, assetKey, requestID string) {
 	if appErr != nil || raw == nil {
 		return
 	}
-	if strings.TrimSpace(string(raw)) != requestID {
+	if holder, _ := parseTransferClaim(raw); holder != requestID {
 		return
 	}
+	// An incoming hook's ID is its secret URL and rides in assetKey, so the
+	// claim key must never reach the log.
 	if _, delErr := p.API.KVCompareAndDelete(key, raw); delErr != nil {
-		p.API.LogWarn("failed to release transfer asset claim", "key", key, "error", delErr.Error())
+		p.API.LogWarn("failed to release transfer asset claim", "request_id", requestID, "kind", kind, "error", delErr.Error())
 	}
 }
 
@@ -228,48 +295,48 @@ func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) (held 
 	if raw == nil {
 		return false, nil
 	}
-	return strings.TrimSpace(string(raw)) == requestID, nil
+	holder, _ := parseTransferClaim(raw)
+	return holder == requestID, nil
 }
 
 // restoreTransferRecord puts a claimed transfer ticket back after its
-// approval could not be carried out. The record goes back before the asset
-// claim is re-checked: a submit that saw the record missing and took the
-// claim in between is caught by the re-check, and one that comes after
-// sees the record and is refused.
+// approval could not be carried out. The record is published only once this
+// request is confirmed to still own the asset claim, so a lost claim never
+// leaves two open tickets on one asset. The claim generation is bumped
+// first: a takeover that already read the claim and is about to CAS it away
+// loses that race instead of stealing the ticket back.
 //
-// restored is true when this request still owns the claim (or ownership
-// could not be confirmed). err is set when the record could not be written,
-// or when the claim check failed after a successful write (record left in
-// place for retry). restored is false with a nil err when another ticket
-// holds the claim and this record was removed again.
+// restored is true when the record is in place (this request owns the claim,
+// or ownership could not be confirmed and the record is kept for a retry).
+// err is set when the record could not be written or the claim could not be
+// read. restored is false with a nil err when another ticket holds the
+// claim; nothing is written then.
 func (p *Plugin) restoreTransferRecord(kind, assetKey, requestID, key string, raw []byte) (restored bool, err error) {
-	if err := p.putPendingRequestKV(key, raw); err != nil {
-		// Best-effort: free the asset if we still own the claim so a stuck
-		// fulfill does not block the asset forever.
-		if held, holdErr := p.transferClaimStillHeld(kind, assetKey, requestID); holdErr == nil && held {
-			p.releaseTransferAssetClaim(kind, assetKey, requestID)
-		}
-		return false, err
-	}
 	held, holdErr := p.transferClaimStillHeld(kind, assetKey, requestID)
 	if holdErr != nil {
-		// Record is back; keep it so approvers can retry once KV recovers.
+		// Ownership unknown: keep the record so approvers can retry once KV
+		// recovers, rather than dropping a ticket that may still be valid.
+		if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
+			return false, putErr
+		}
 		return true, holdErr
 	}
-	if held {
-		return true, nil
+	if !held {
+		return false, nil
 	}
-	deleted, appErr := p.API.KVCompareAndDelete(key, raw)
-	switch {
-	case appErr != nil:
-		p.API.LogError("failed to remove transfer request that lost its asset claim", "request_id", requestID, "error", appErr.Error())
-		if delErr := p.API.KVDelete(key); delErr != nil {
-			p.API.LogError("failed to force-delete transfer request that lost its asset claim", "request_id", requestID, "error", delErr.Error())
-		} else {
-			p.untrackOpenRequestKey(key)
+	if bumpErr := p.bumpTransferClaimGen(kind, assetKey, requestID); bumpErr != nil {
+		if errors.Is(bumpErr, errTransferClaimLost) {
+			return false, nil
 		}
-	case deleted:
-		p.untrackOpenRequestKey(key)
+		if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
+			return false, putErr
+		}
+		return true, bumpErr
 	}
-	return false, nil
+	if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
+		// Free the asset so a stuck fulfill does not block it forever.
+		p.releaseTransferAssetClaim(kind, assetKey, requestID)
+		return false, putErr
+	}
+	return true, nil
 }

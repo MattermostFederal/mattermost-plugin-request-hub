@@ -221,7 +221,8 @@ func (p *Plugin) listWebhookIndex() ([]webhookIndexEntry, error) {
 		}
 		entry, loadErr := p.loadWebhookIndex(strings.TrimPrefix(key, kvWebhookIndexPrefix))
 		if loadErr != nil {
-			p.API.LogWarn("skipping unreadable webhook index entry", "key", key, "error", loadErr.Error())
+			// An incoming hook's ID is its secret URL and the key carries it.
+			p.API.LogWarn("skipping unreadable webhook index entry", "error", loadErr.Error())
 			continue
 		}
 		if entry != nil {

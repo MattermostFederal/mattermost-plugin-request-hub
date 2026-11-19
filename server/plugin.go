@@ -80,7 +80,10 @@ type Plugin struct {
 	getOutgoingWebhookForRecreateFn func(hookID, adminUserID string) (*outgoingWebhookRecreate, error)
 	// createOutgoingWebhookFromRecreateFn creates an outgoing hook from a
 	// recreate snapshot (nil in production → REST CreateOutgoingWebhook).
-	createOutgoingWebhookFromRecreateFn func(req *webhookRequest, snap *outgoingWebhookRecreate, adminUserID string) (dmMsg, hookID string, err error)
+	createOutgoingWebhookFromRecreateFn func(req *webhookRequest, snap *outgoingWebhookRecreate, adminUserID string) (dmMsg, hookID, token string, err error)
+	// outgoingWebhookTokenFn reads a recreated outgoing hook's token when a
+	// cutover is resumed (nil in production → REST GetOutgoingWebhook).
+	outgoingWebhookTokenFn func(hookID, adminUserID string) (string, error)
 	// restoreOutgoingWebhookTriggersFn replaces the REST trigger restore
 	// after an outgoing recreate (tests only).
 	restoreOutgoingWebhookTriggersFn func(hookID, adminUserID string, snap *outgoingWebhookRecreate) error

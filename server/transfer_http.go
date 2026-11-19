@@ -159,6 +159,7 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to list transferable assets", http.StatusInternalServerError)
 		return
 	}
+	noReassign := p.webhookReassignUnsupported()
 	for _, e := range hooks {
 		if e.RetiredAt != 0 {
 			continue
@@ -180,7 +181,8 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		}
 		// Incoming hook IDs are the secret URL. Orphaned incoming hooks must
 		// not be reassigned (same URL stays live); only retire / recreate.
-		if e.WebhookType == webhookTypeIncoming && !active {
+		// Servers that preserve the creator can't reassign anything.
+		if noReassign || (e.WebhookType == webhookTypeIncoming && !active) {
 			item.AllowedActions = []string{transferActionRetireRecreate, transferActionRetireOnly}
 		}
 		out["webhooks"] = append(out["webhooks"], item)

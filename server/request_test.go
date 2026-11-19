@@ -223,6 +223,9 @@ func stubLogLevels(api *plugintest.API) {
 		}
 	}
 	api.On("LogAuditRec", mock.Anything).Maybe()
+	// Transfer paths ask the server version to decide whether Reassign can
+	// move a webhook's creator. Tests that care register their own first.
+	api.On("GetServerVersion").Return("9.11.0").Maybe()
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()

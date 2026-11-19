@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +38,30 @@ const (
 	transferReasonOffboarding      = "offboarding"
 
 	maxTransferNoteLen = 500
+
+	// webhookReassignUnsupportedMsg is shown when the server will not change
+	// a webhook's creator, which makes Reassign a silent no-op.
+	webhookReassignUnsupportedMsg = "This Mattermost version keeps the original creator on a webhook, so Reassign can't move ownership — use Retire & recreate instead."
 )
+
+// serverMajorVersion parses the leading major number of a Mattermost version
+// string. ok is false when the version is missing or unparseable.
+func serverMajorVersion(version string) (major int, ok bool) {
+	majorPart, _, _ := strings.Cut(strings.TrimSpace(version), ".")
+	parsed, err := strconv.Atoi(strings.TrimSpace(majorPart))
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+// webhookReassignUnsupported reports whether this server preserves a
+// webhook's original creator through an update. Mattermost 11 does, so
+// Reassign would report success while ownership never moved.
+func (p *Plugin) webhookReassignUnsupported() bool {
+	major, ok := serverMajorVersion(p.API.GetServerVersion())
+	return ok && major >= 11
+}
 
 // transferAsset is the minimum an ACL check needs about a bot or webhook.
 type transferAsset struct {
@@ -241,9 +265,10 @@ func (p *Plugin) transferClient(adminUserID string) (*model.Client4, func(), err
 	return client, cleanup, nil
 }
 
-// listBotAccessTokens returns every access token on the bot, paging the
-// Mattermost API until a short page. Failures mid-pagination abort so
-// revoke-all never pretends to have finished.
+// listBotAccessTokens returns every access token on the bot. Mattermost's
+// page/offset token API has no ORDER BY, so rows can shift between pages and
+// a single walk can miss one. Two full walks must agree on the token-ID set;
+// anything else fails closed so revoke-all never pretends to have finished.
 func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.UserAccessToken, error) {
 	if p.listBotAccessTokensFn != nil {
 		return p.listBotAccessTokensFn(botUserID, adminUserID)
@@ -254,17 +279,49 @@ func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.Us
 	}
 	defer cleanup()
 	ctx := context.Background()
-	var out []*model.UserAccessToken
-	for page := 0; ; page++ {
-		tokens, _, listErr := client.GetUserAccessTokensForUser(ctx, botUserID, page, botAccessTokenListPerPage)
-		if listErr != nil {
-			return nil, errors.Wrap(listErr, "failed to list bot access tokens")
-		}
-		out = append(out, tokens...)
-		if len(tokens) < botAccessTokenListPerPage {
-			return out, nil
+	walk := func() (map[string]*model.UserAccessToken, []string, error) {
+		byID := map[string]*model.UserAccessToken{}
+		var order []string
+		for page := 0; ; page++ {
+			tokens, _, listErr := client.GetUserAccessTokensForUser(ctx, botUserID, page, botAccessTokenListPerPage)
+			if listErr != nil {
+				return nil, nil, errors.Wrap(listErr, "failed to list bot access tokens")
+			}
+			for _, tok := range tokens {
+				if tok == nil || tok.Id == "" {
+					continue
+				}
+				if _, dup := byID[tok.Id]; dup {
+					continue
+				}
+				byID[tok.Id] = tok
+				order = append(order, tok.Id)
+			}
+			if len(tokens) < botAccessTokenListPerPage {
+				return byID, order, nil
+			}
 		}
 	}
+
+	first, order, err := walk()
+	if err != nil {
+		return nil, err
+	}
+	second, _, err := walk()
+	if err != nil {
+		return nil, err
+	}
+	if len(first) != len(second) {
+		return nil, errors.Errorf("the bot's token list changed while it was being read (%d then %d tokens); try again", len(first), len(second))
+	}
+	out := make([]*model.UserAccessToken, 0, len(order))
+	for _, id := range order {
+		if _, ok := second[id]; !ok {
+			return nil, errors.New("the bot's token list changed while it was being read; try again")
+		}
+		out = append(out, first[id])
+	}
+	return out, nil
 }
 
 // assignBot reassigns a bot's Mattermost owner. model.BotPatch has no
@@ -355,73 +412,120 @@ func (p *Plugin) updateWebhookOwner(webhookType, hookID, newOwnerID, adminUserID
 	return nil
 }
 
-// revokeBotTokens revokes every access token on the bot (including ones the
-// owner created by hand) via an admin session, then cleans tracked reminder
-// rows. Already-revoked / not-found tokens count as success. Expiry rows are
-// dropped only after a confirmed revoke so reminders keep retrying on
-// transient failures.
-func (p *Plugin) revokeBotTokens(botUserID, adminUserID string) (int, error) {
-	revoked := 0
-	var failMsgs []string
-	seen := map[string]struct{}{}
+// botTokenTargets is every token to revoke on a bot, captured before any
+// revoke or replacement-create runs so rotation can issue the new token
+// first and still know exactly which old ones to kill.
+type botTokenTargets struct {
+	listed      []string          // token IDs from the live API list
+	tracked     map[string]string // RH-tracked token ID → expiry KV key
+	trackedIDs  []string          // tracked IDs in listing order
+	listFailure []string
+}
 
+// collectBotTokens captures the bot's current tokens without revoking any of
+// them: the live API list plus RH's tracked expiry rows.
+func (p *Plugin) collectBotTokens(botUserID, adminUserID string) botTokenTargets {
+	targets := botTokenTargets{tracked: map[string]string{}}
 	if adminUserID != "" {
 		tokens, listErr := p.listBotAccessTokens(botUserID, adminUserID)
 		if listErr != nil {
-			failMsgs = append(failMsgs, "list tokens: "+listErr.Error())
+			targets.listFailure = append(targets.listFailure, "list tokens: "+listErr.Error())
 		} else {
 			for _, tok := range tokens {
 				if tok == nil || tok.Id == "" {
 					continue
 				}
-				if appErr := p.API.RevokeUserAccessToken(tok.Id); appErr != nil {
-					if isNotFound(appErr) {
-						seen[tok.Id] = struct{}{}
-						revoked++
-						continue
-					}
-					p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", tok.Id, "error", appErr.Error())
-					failMsgs = append(failMsgs, "revoke "+tok.Id+": "+appErr.Error())
-					continue
-				}
-				seen[tok.Id] = struct{}{}
-				revoked++
+				targets.listed = append(targets.listed, tok.Id)
 			}
 		}
 	}
-
-	// Drop reminder rows for RH-tracked tokens (and revoke any the list missed).
 	keys, err := p.listTokenExpiryKeys()
 	if err != nil {
-		failMsgs = append(failMsgs, "list tracked: "+err.Error())
-	} else {
-		for _, key := range keys {
-			rec, _, loadErr := p.loadBotTokenExpiry(key)
-			if loadErr != nil {
-				failMsgs = append(failMsgs, "load "+key+": "+loadErr.Error())
-				continue
-			}
-			if rec == nil || rec.BotUserID != botUserID {
-				continue
-			}
-			if _, already := seen[rec.TokenID]; already {
-				p.deleteBotTokenExpiry(key)
-				continue
-			}
-			if appErr := p.API.RevokeUserAccessToken(rec.TokenID); appErr != nil && !isNotFound(appErr) {
-				p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", rec.TokenID, "error", appErr.Error())
-				failMsgs = append(failMsgs, "revoke "+rec.TokenID+": "+appErr.Error())
-				continue
-			}
-			seen[rec.TokenID] = struct{}{}
-			revoked++
-			p.deleteBotTokenExpiry(key)
+		targets.listFailure = append(targets.listFailure, "list tracked: "+err.Error())
+		return targets
+	}
+	for _, key := range keys {
+		rec, _, loadErr := p.loadBotTokenExpiry(key)
+		if loadErr != nil {
+			targets.listFailure = append(targets.listFailure, "load "+key+": "+loadErr.Error())
+			continue
 		}
+		if rec == nil || rec.BotUserID != botUserID {
+			continue
+		}
+		if _, dup := targets.tracked[rec.TokenID]; dup {
+			continue
+		}
+		targets.tracked[rec.TokenID] = key
+		targets.trackedIDs = append(targets.trackedIDs, rec.TokenID)
+	}
+	return targets
+}
+
+// botTokenRevokeRenewEvery is how many revoke attempts pass between fulfill
+// marker renewals during a long revoke-all.
+const botTokenRevokeRenewEvery = 25
+
+// revokeBotTokenTargets revokes a captured token set and cleans the tracked
+// reminder rows. Already-revoked / not-found tokens count as success. Expiry
+// rows are dropped only after a confirmed revoke so reminders keep retrying
+// on transient failures. requestID, when set, renews the transfer fulfill
+// marker as the loop runs.
+func (p *Plugin) revokeBotTokenTargets(botUserID, requestID string, targets botTokenTargets) (int, error) {
+	revoked := 0
+	seen := map[string]struct{}{}
+	failMsgs := append([]string(nil), targets.listFailure...)
+	attempts := 0
+	renew := func() {
+		attempts++
+		if attempts%botTokenRevokeRenewEvery == 0 {
+			p.renewTransferFulfilling(requestID)
+		}
+	}
+
+	for _, id := range targets.listed {
+		renew()
+		if appErr := p.API.RevokeUserAccessToken(id); appErr != nil {
+			if isNotFound(appErr) {
+				seen[id] = struct{}{}
+				revoked++
+				continue
+			}
+			p.API.LogWarn("failed to revoke bot token on transfer/retire", "bot_user_id", botUserID, "token_id", id, "error", appErr.Error())
+			failMsgs = append(failMsgs, "revoke "+id+": "+appErr.Error())
+			continue
+		}
+		seen[id] = struct{}{}
+		revoked++
+	}
+
+	// Drop reminder rows for RH-tracked tokens (and revoke any the list missed).
+	for _, id := range targets.trackedIDs {
+		key := targets.tracked[id]
+		if _, already := seen[id]; already {
+			p.deleteBotTokenExpiry(key)
+			continue
+		}
+		renew()
+		if appErr := p.API.RevokeUserAccessToken(id); appErr != nil && !isNotFound(appErr) {
+			p.API.LogWarn("failed to revoke tracked bot token on transfer/retire", "bot_user_id", botUserID, "token_id", id, "error", appErr.Error())
+			failMsgs = append(failMsgs, "revoke "+id+": "+appErr.Error())
+			continue
+		}
+		seen[id] = struct{}{}
+		revoked++
+		p.deleteBotTokenExpiry(key)
 	}
 	if len(failMsgs) > 0 {
 		return revoked, errors.Errorf("revoked %d token(s); failures: %s", revoked, strings.Join(failMsgs, "; "))
 	}
 	return revoked, nil
+}
+
+// revokeBotTokens revokes every access token on the bot (including ones the
+// owner created by hand) via an admin session.
+func (p *Plugin) revokeBotTokens(botUserID, adminUserID, requestID string) (int, error) {
+	return p.revokeBotTokenTargets(botUserID, requestID, p.collectBotTokens(botUserID, adminUserID))
 }
 
 // loadBotTokenExpiry reads one tracked-token record by its KV key.
@@ -454,24 +558,24 @@ func (p *Plugin) revokeNewlyIssuedBotToken(tokenID string) error {
 	return nil
 }
 
-// rotateBotToken revokes every token on the bot and issues a fresh one,
-// tracked for the new owner so expiry reminders reach them. Returns the new
-// token (ID, value and expiry) for the DM; an empty value means none was
-// created.
-// A partial revoke still issues the replacement, so the bot is never left
-// with its working tokens gone and nothing new; the revoke error is
-// returned alongside the token.
+// rotateBotToken issues a fresh token for the new owner, tracked so expiry
+// reminders reach them, and only then revokes the tokens the bot had before
+// it. Listing first and creating before revoking means a failed create
+// leaves the bot's working tokens alone, and the replacement can never land
+// in the revoke set. Returns the new token (ID, value and expiry) for the
+// DM; a revoke failure is returned alongside it.
 func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (revoked int, tokenID, tokenValue string, expiresAt int64, err error) {
-	revoked, revokeErr := p.revokeBotTokens(botUserID, adminUserID)
+	targets := p.collectBotTokens(botUserID, adminUserID)
 	tok, tokErr := p.createBotToken(botUserID, "Rotated API token for @"+botUsername)
 	if tokErr != nil {
 		tokErr = errors.Wrap(tokErr, "failed to create replacement token")
-		if revokeErr != nil {
-			tokErr = errors.Errorf("%s; %s", revokeErr.Error(), tokErr.Error())
+		if len(targets.listFailure) > 0 {
+			tokErr = errors.Errorf("%s; %s", strings.Join(targets.listFailure, "; "), tokErr.Error())
 		}
-		return revoked, "", "", 0, tokErr
+		return 0, "", "", 0, tokErr
 	}
 	p.trackBotTokenExpiry(tok, botUsername, newOwnerID, requestID)
+	revoked, revokeErr := p.revokeBotTokenTargets(botUserID, requestID, targets)
 	return revoked, tok.Id, tok.Token, tok.ExpiresAt, revokeErr
 }
 
