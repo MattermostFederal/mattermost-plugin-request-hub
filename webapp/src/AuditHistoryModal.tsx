@@ -41,7 +41,9 @@ export const KIND_OPTIONS: Array<[string, string]> = [
     ['team_member', 'Team member'],
     ['team_guest', 'Guest invite'],
     ['bot', 'Bot account'],
+    ['bot_transfer', 'Bot transfer / retire'],
     ['webhook', 'Webhook'],
+    ['webhook_transfer', 'Webhook transfer / retire'],
     ['audit_export', 'Audit export'],
     ['bug_report', 'Bug / feedback'],
 ];

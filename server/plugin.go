@@ -150,6 +150,7 @@ func (p *Plugin) OnActivate() error {
 		p.rebuildTokenExpiryIndex()
 		p.rebuildBotIndexKeys()
 		p.rebuildWebhookIndexKeys()
+		p.backfillWebhookIndexFromHistory()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

@@ -27,18 +27,37 @@ func TestDecideWithdraw_RequesterClosesPending(t *testing.T) {
 }
 
 func TestDecideWithdraw_AfterSecurityStepStillAllowed(t *testing.T) {
-	api, p, store := decisionFixture(t, "app1")
-	store[kvApprovalCardsPrefix+testChannelRequestID] = recordJSON(t, []string{"app1"})
+	api := &plugintest.API{}
+	stubLogLines(api)
+	t.Cleanup(func() { api.AssertExpectations(t) })
+	p := newTestPlugin(api)
+	p.setConfiguration(approvableConfig())
+	store := fakeKV(api)
+
+	id := model.NewId()
+	req := &botTransferRequest{
+		ID: id, RequesterID: "u_req", BotUserID: "bot1", BotUsername: "svcbot",
+		Action: transferActionTransfer, NewOwnerUserID: "u_new", Reason: transferReasonVoluntary,
+		ApprovalPostID: "app1", DMRootPostID: "dmroot", DMChannelID: "dm1",
+		twoStepState: securityStepDone(),
+	}
+	store[kvBotTransferRequestPrefix+id] = recordJSON(t, req)
+	store[kvApprovalCardsPrefix+id] = recordJSON(t, []string{"app1"})
+	store[pendingListKey(pendingKindBotTransfer, "u_req")] = recordJSON(t, []pendingEntry{{ID: id, CreatedAt: model.GetMillis(), Key: req.pendingKey()}})
+	store[transferAssetClaimKey(pendingKindBotTransfer, req.pendingKey())] = []byte(id)
+
+	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
+	api.On("GetUser", "u_new").Return(&model.User{Id: "u_new", Username: "newowner"}, nil).Maybe()
 	api.On("GetPost", "app1").Return(approvalCard("app1"), nil).Maybe()
-	api.On("GetTeam", "team1").Return(&model.Team{Id: "team1", DisplayName: "Eng"}, nil).Maybe()
+	api.On("GetPost", "dmroot").Return(ticketRoot(), nil).Maybe()
+	api.On("CreatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
 	updatedPosts(api)
 
-	// Two-step mid-flight is the same pending KV claim; channel requests have
-	// no security step, so this asserts withdraw still works while pending.
-	res := p.decideWithdraw("u_req", testChannelRequestID, "")
+	res := p.decideWithdraw("u_req", id, "")
 
 	require.Contains(t, res.Reply, "withdrawn")
-	require.NotContains(t, store, kvRequestPrefix+testChannelRequestID)
+	require.NotContains(t, store, kvBotTransferRequestPrefix+id)
+	require.NotContains(t, store, transferAssetClaimKey(pendingKindBotTransfer, req.pendingKey()))
 }
 
 func TestDecideWithdraw_OnlyRequester(t *testing.T) {

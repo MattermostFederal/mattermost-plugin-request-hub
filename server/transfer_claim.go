@@ -9,6 +9,10 @@ import (
 // Atomic per-asset lock for bot/webhook transfer tickets. Soft duplicate
 // scans (transferAssetPendingElsewhere) race under concurrent submit; this
 // CAS claim is the source of truth for "one open ticket per asset".
+//
+// Submit stores the request record before claiming so pendingRequestExists
+// is true for the holder during the claim window (avoids a second submitter
+// treating an in-flight claim as stale).
 
 const kvTransferAssetClaimPrefix = "transfer_asset_claim_"
 
@@ -30,8 +34,9 @@ func transferPendingAssetKey(rec storedRequest) string {
 }
 
 // claimTransferAsset CAS-writes requestID as the holder of assetKey. If
-// another live request already holds the claim, returns a duplicate error.
-// Stale claims (holder request gone) are overwritten.
+// another live request already holds the claim (or another open ticket
+// covers the asset), returns a duplicate error. Stale claims are overwritten
+// only when the holder request is gone and no other open ticket covers the asset.
 func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if kind != pendingKindBotTransfer && kind != pendingKindWebhookTransfer {
 		return nil
@@ -56,10 +61,16 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 		return errors.New("could not claim that asset; try again")
 	}
 	holder := strings.TrimSpace(string(raw))
-	if holder == "" || holder == requestID {
-		// Empty or re-claim of our own ID: force-set.
-		if setErr := p.API.KVSet(key, []byte(requestID)); setErr != nil {
+	if holder == requestID {
+		return nil
+	}
+	if holder == "" {
+		ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(requestID))
+		if appErr != nil {
 			return errors.New("could not claim that asset; try again")
+		}
+		if !ok {
+			return duplicateRequestError(kind, assetKey)
 		}
 		return nil
 	}
@@ -71,8 +82,16 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 	if exists {
 		return duplicateRequestError(kind, assetKey)
 	}
+	// Holder record missing: still refuse if another open ticket covers the
+	// asset (claim→store race on an older build, or a concurrent store).
+	held, holdErr := p.transferAssetPendingElsewhere(kind, assetKey, requestID)
+	if holdErr != nil {
+		return errors.New("could not check for an existing transfer ticket; try again")
+	}
+	if held {
+		return duplicateRequestError(kind, assetKey)
+	}
 
-	// Stale lock: replace only if still the same holder bytes.
 	ok, appErr = p.API.KVCompareAndSet(key, raw, []byte(requestID))
 	if appErr != nil {
 		return errors.New("could not claim that asset; try again")

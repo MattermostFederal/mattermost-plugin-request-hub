@@ -102,21 +102,22 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		return "", errors.New("pick Transfer or Retire")
 	}
 
+	ownerID := botIndexOwner(*index)
 	asset := transferAsset{
 		assetType: "bot", assetID: botUserID,
-		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
+		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
 	}
 	if err = p.canNominateTransfer(requesterID, asset); err != nil {
 		return "", err
 	}
 
-	reason := strings.TrimSpace(strings.ToLower(in.Reason))
-	if reason == "" {
-		if !p.userActive(index.OwnerUserID) {
-			reason = transferReasonOwnerDeactivated
-		} else {
-			reason = transferReasonVoluntary
-		}
+	ownerActive, ownerKnown := p.userActiveStatus(ownerID)
+	if !ownerKnown {
+		return "", errors.New("could not verify the current owner's account; try again")
+	}
+	reason, err := normalizeTransferReason(in.Reason, ownerActive)
+	if err != nil {
+		return "", err
 	}
 	note := strings.TrimSpace(in.Note)
 	if err = checkTextLen("note", note, maxTransferNoteLen); err != nil {
@@ -125,7 +126,9 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 
 	newOwnerID := strings.TrimSpace(in.NewOwnerUserID)
 	if action == transferActionTransfer {
-		if err = p.checkTransferNewOwner(newOwnerID); err != nil {
+		if err = p.checkTransferNewOwner(newOwnerID, transferNewOwnerOpts{
+			currentOwnerID: ownerID, noun: "bot",
+		}); err != nil {
 			return "", err
 		}
 	} else {
@@ -166,19 +169,22 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 	} else if held {
 		return "", duplicateRequestError(pendingKindBotTransfer, req.pendingKey())
 	}
-	if claimErr := p.claimTransferAsset(pendingKindBotTransfer, req.pendingKey(), req.ID); claimErr != nil {
-		return "", claimErr
-	}
+	// Store before claim so a concurrent submitter sees this request as live
+	// and cannot treat an in-flight claim as stale.
 	if err = p.reservePending(pendingKindBotTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
-		p.releaseTransferAssetClaim(pendingKindBotTransfer, req.pendingKey(), req.ID)
 		return "", err
 	}
 	if err = p.storeBotTransferRequest(req); err != nil {
-		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
 		p.API.LogError("failed to store bot transfer request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
 	sa.markStored()
+	if claimErr := p.claimTransferAsset(pendingKindBotTransfer, req.pendingKey(), req.ID); claimErr != nil {
+		p.deletePendingRequestKV(kvBotTransferRequestPrefix + req.ID)
+		p.releasePending(pendingKindBotTransfer, req.RequesterID, req.ID)
+		return "", claimErr
+	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		p.deletePendingRequestKV(kvBotTransferRequestPrefix + req.ID)
@@ -215,21 +221,6 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 		strings.ToLower(transferActionLabel(action)), req.BotUsername), nil
 }
 
-// checkTransferNewOwner requires an active, non-bot user for a transfer.
-func (p *Plugin) checkTransferNewOwner(ownerID string) error {
-	if ownerID == "" {
-		return errors.New("pick the new owner for the bot")
-	}
-	if !model.IsValidId(ownerID) {
-		return errors.New("the new owner must be picked from the list")
-	}
-	owner, appErr := p.API.GetUser(ownerID)
-	if appErr != nil || owner == nil || owner.DeleteAt != 0 || owner.IsBot {
-		return errors.New("the new owner must be an active user")
-	}
-	return nil
-}
-
 func (p *Plugin) postBotTransferApprovalRequest(req *botTransferRequest, requester *model.User) (postID, channelID string, err error) {
 	ch := p.ensureBotApprovalChannel()
 	go func() {
@@ -248,6 +239,7 @@ func botTransferRetryHeader(exercise bool) string {
 }
 
 func (p *Plugin) botTransferApprovalAttachment(req *botTransferRequest, requester *model.User) *model.MessageAttachment {
+	requester = requesterOrPlaceholder(requester, req.RequesterID)
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: "@" + requester.Username, Short: true},
 		{Title: "Action", Value: transferActionLabel(req.Action), Short: true},
@@ -262,7 +254,7 @@ func (p *Plugin) botTransferApprovalAttachment(req *botTransferRequest, requeste
 		fields = append(fields, &model.MessageAttachmentField{Title: "Rotate token", Value: rotate, Short: true})
 	}
 	if req.Reason != "" {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: req.Reason, Short: true})
+		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: escapeMarkdown(req.Reason), Short: true})
 	}
 	if req.Note != "" {
 		fields = append(fields, &model.MessageAttachmentField{Title: "Note", Value: escapeMarkdown(req.Note), Short: false})
@@ -407,7 +399,7 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		})
 	}
 
-	if msg := p.botTransferApprovalBlocker(req); msg != "" {
+	if msg := p.botTransferApprovalBlockerFor(req, actingUser.Id); msg != "" {
 		return decisionResult{Reply: msg}
 	}
 
@@ -419,7 +411,9 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Title: "Bot " + transferActionLabel(req.Action) + " Request Update",
 			Text:  fmt.Sprintf("Your request to %s bot **@%s** received the %s approval; awaiting the other approval.", verb, req.BotUsername, step),
-		}, p.botTransferApprovalHeader(req.Exercise), func() *model.MessageAttachment { return p.botTransferApprovalAttachment(&newReq, requester) })
+		}, p.botTransferApprovalHeader(req.Exercise), func() *model.MessageAttachment {
+			return p.botTransferApprovalAttachment(&newReq, requesterOrPlaceholder(requester, req.RequesterID))
+		})
 	}
 
 	if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
@@ -444,15 +438,34 @@ func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) string {
 	if index == nil || index.RetiredAt != 0 {
 		return fmt.Sprintf("Bot @%s is no longer managed (or was retired). Deny this request instead.", req.BotUsername)
 	}
+	ownerID := botIndexOwner(*index)
 	asset := transferAsset{
 		assetType: "bot", assetID: req.BotUserID,
-		ownerUserID: index.OwnerUserID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
+		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
 	}
 	if err := p.canNominateTransfer(req.RequesterID, asset); err != nil {
 		return "The requester can no longer transfer or retire this bot (" + err.Error() + "). Deny this request instead."
 	}
 	if req.Action == transferActionTransfer {
-		if err := p.checkTransferNewOwner(req.NewOwnerUserID); err != nil {
+		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
+			currentOwnerID: ownerID, actingUserID: "", noun: "bot",
+		}); err != nil {
+			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
+		}
+	}
+	return ""
+}
+
+// botTransferApprovalBlockerFor adds approve-time checks that need the actor
+// (e.g. cannot approve a transfer that names yourself as the new owner).
+func (p *Plugin) botTransferApprovalBlockerFor(req *botTransferRequest, actingUserID string) string {
+	if msg := p.botTransferApprovalBlocker(req); msg != "" {
+		return msg
+	}
+	if req.Action == transferActionTransfer {
+		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
+			currentOwnerID: "", actingUserID: actingUserID, noun: "bot",
+		}); err != nil {
 			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
 		}
 	}
@@ -480,12 +493,17 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		p.clearOrphanNotice("bot", req.BotUserID)
 		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
+		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tracked tokens revoked.", req.BotUsername)
+		if len(partialErrors) > 0 {
+			outcome = fmt.Sprintf("⚠️ Fully approved with issues. Bot **@%s** retired.", req.BotUsername)
+			cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** was disabled, but: %s.", req.BotUsername, escapeMarkdown(strings.Join(partialErrors, "; ")))
+		}
 		p.auditTransferApproved(cards, req, actingUser, requester, revoked, 0, false, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Approved: true, ApproverUsername: actingUser.Username,
 			CardTitle:  "Bot Retire Approved",
-			CardText:   fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tracked tokens revoked.", req.BotUsername),
+			CardText:   cardText,
 			StatusLine: outcome,
 		})
 	}

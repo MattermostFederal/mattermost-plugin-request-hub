@@ -35,6 +35,9 @@ type Props = {
     onChange: (value: string) => void;
     placeholder?: string;
 
+    // single limits the picker to one username (transfer new-owner).
+    single?: boolean;
+
     // teamId, when set, scopes autocomplete to members of that team
     // (channel create / Channel Admin). Mutually exclusive with notInTeamId.
     teamId?: string;
@@ -130,7 +133,7 @@ const UserAvatar: React.FC<{user: User; size?: number}> = ({user, size = 26}) =>
     );
 };
 
-export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeholder, teamId, notInTeamId, usernameBadges}) => {
+export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeholder, single, teamId, notInTeamId, usernameBadges}) => {
     const [selected, setSelected] = useState<string[]>(() => parseUsernames(value));
     const [query, setQuery] = useState('');
     const [candidates, setCandidates] = useState<User[]>([]);
@@ -263,7 +266,7 @@ export const MemberPicker: React.FC<Props> = ({value, disabled, onChange, placeh
         if (!username || selected.includes(username)) {
             return;
         }
-        commit([...selected, username]);
+        commit(single ? [username] : [...selected, username]);
         setQuery('');
         setCandidates([]);
     };

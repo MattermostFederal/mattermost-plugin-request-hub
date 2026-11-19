@@ -336,7 +336,19 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 
 	t.Run("prefers live callback over stale snapshot", func(t *testing.T) {
 		gotCallback = ""
-		p.deleteWebhookFn = defaultDelete
+		createBeforeDelete := false
+		deleted := false
+		p.createWebhookFn = func(req *webhookRequest, adminUserID string) (string, string, error) {
+			require.False(t, deleted, "must create replacement before deleting the old hook")
+			createBeforeDelete = true
+			gotCallback = req.CallbackURL
+			return "Outgoing webhook created.", "new-hook", nil
+		}
+		p.deleteWebhookFn = func(string, string) error {
+			require.True(t, createBeforeDelete)
+			deleted = true
+			return nil
+		}
 		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
 			require.Equal(t, "old-hook", hookID)
 			return "https://hooks.example.com/live", nil
@@ -352,11 +364,49 @@ func TestFulfillWebhookRetireRecreate_OutgoingUsesCallback(t *testing.T) {
 			&model.User{Id: "u_req", Username: "req"},
 			newDecisionCards("t2", "", ""), nil, kvWebhookTransferRequestPrefix+"t2")
 		require.Equal(t, "https://hooks.example.com/live", gotCallback)
+		require.True(t, createBeforeDelete && deleted)
 		require.Contains(t, res.Outcome, "recreated")
+		p.deleteWebhookFn = defaultDelete
+		p.createWebhookFn = func(req *webhookRequest, adminUserID string) (string, string, error) {
+			gotCallback = req.CallbackURL
+			return "Outgoing webhook created.", "new-hook", nil
+		}
+	})
+
+	t.Run("create failure leaves old hook intact", func(t *testing.T) {
+		deleted := false
+		p.deleteWebhookFn = func(string, string) error {
+			deleted = true
+			return nil
+		}
+		p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+			return "", "", errors.New("create failed")
+		}
+		p.getOutgoingWebhookCallbackFn = func(string, string) (string, error) {
+			return "https://hooks.example.com/live", nil
+		}
+		raw := []byte(`{"id":"t-fail"}`)
+		req := &webhookTransferRequest{
+			ID: "t-fail", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+		}
+		res := p.fulfillWebhookRetireRecreate(req,
+			&model.User{Id: "admin1", Username: "admin"},
+			&model.User{Id: "u_req", Username: "req"},
+			newDecisionCards("t-fail", "", ""), raw, kvWebhookTransferRequestPrefix+"t-fail")
+		require.False(t, deleted)
+		require.True(t, res.audited)
+		p.deleteWebhookFn = defaultDelete
 	})
 
 	t.Run("live fetch when snapshot empty", func(t *testing.T) {
 		gotCallback = ""
+		p.createWebhookFn = func(req *webhookRequest, adminUserID string) (string, string, error) {
+			gotCallback = req.CallbackURL
+			return "Outgoing webhook created.", "new-hook", nil
+		}
+		p.deleteWebhookFn = defaultDelete
 		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
 			require.Equal(t, "old-hook", hookID)
 			return "https://hooks.example.com/live-only", nil

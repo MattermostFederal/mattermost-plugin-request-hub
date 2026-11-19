@@ -53,15 +53,100 @@ func rotateDefaultOn(reason string) bool {
 	}
 }
 
-// userActive reports whether a user exists and is not deactivated. A lookup
-// failure (including not-found) counts as inactive, which is what drives the
-// orphan path.
-func (p *Plugin) userActive(userID string) bool {
+// userActiveStatus reports whether a user is active. known is false when
+// GetUser failed for a reason other than not-found (transient errors must
+// not widen orphan filing rights).
+func (p *Plugin) userActiveStatus(userID string) (active bool, known bool) {
 	if strings.TrimSpace(userID) == "" {
-		return false
+		return false, true
 	}
 	user, appErr := p.API.GetUser(userID)
-	return appErr == nil && user != nil && user.DeleteAt == 0
+	if appErr != nil {
+		if isNotFound(appErr) {
+			return false, true
+		}
+		return false, false
+	}
+	return user != nil && user.DeleteAt == 0, true
+}
+
+// userActive reports whether a user exists and is not deactivated. Lookup
+// failures other than not-found count as inactive for display paths that
+// cannot surface an error; ACL paths must use userActiveStatus instead.
+func (p *Plugin) userActive(userID string) bool {
+	active, _ := p.userActiveStatus(userID)
+	return active
+}
+
+// normalizeTransferReason accepts only the known reason enum (or empty →
+// default from owner activity). Free text belongs in Note.
+func normalizeTransferReason(reason string, ownerActive bool) (string, error) {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	if reason == "" {
+		if !ownerActive {
+			return transferReasonOwnerDeactivated, nil
+		}
+		return transferReasonVoluntary, nil
+	}
+	switch reason {
+	case transferReasonVoluntary, transferReasonOwnerDeactivated, transferReasonOffboarding:
+		return reason, nil
+	default:
+		return "", errors.New("pick a valid reason (voluntary, owner_deactivated, or offboarding)")
+	}
+}
+
+// transferNewOwnerOpts carries extra checks for the successor on a transfer.
+type transferNewOwnerOpts struct {
+	currentOwnerID string
+	actingUserID   string // when set (approve time), blocks approving a transfer to yourself
+	channelID      string // webhook target: successor must be a member (unless sysadmin)
+	webhookType    string
+	noun           string // "bot" / "webhook" for error text
+}
+
+// checkTransferNewOwner requires an active, non-bot, non-guest user who is
+// not the current owner. Optional channel membership and "not yourself"
+// checks apply when those fields are set.
+func (p *Plugin) checkTransferNewOwner(ownerID string, opts transferNewOwnerOpts) error {
+	noun := opts.noun
+	if noun == "" {
+		noun = "asset"
+	}
+	if ownerID == "" {
+		return errors.Errorf("pick the new owner for the %s", noun)
+	}
+	if !model.IsValidId(ownerID) {
+		return errors.New("the new owner must be picked from the list")
+	}
+	if opts.currentOwnerID != "" && ownerID == opts.currentOwnerID {
+		return errors.Errorf("pick someone other than the current %s owner", noun)
+	}
+	if opts.actingUserID != "" && ownerID == opts.actingUserID {
+		return errors.New("you can't approve a transfer that names you as the new owner — ask another approver")
+	}
+	owner, appErr := p.API.GetUser(ownerID)
+	if appErr != nil || owner == nil || owner.DeleteAt != 0 || owner.IsBot {
+		return errors.New("the new owner must be an active user")
+	}
+	if owner.IsGuest() {
+		return errors.New("the new owner can't be a guest account")
+	}
+	if opts.channelID != "" && !owner.IsSystemAdmin() {
+		if _, memErr := p.API.GetChannelMember(opts.channelID, ownerID); memErr != nil {
+			return errors.New("the new owner must be a member of the webhook's channel")
+		}
+		if opts.webhookType == webhookTypeOutgoing {
+			ch, chErr := p.API.GetChannel(opts.channelID)
+			if chErr != nil || ch == nil {
+				return errors.New("could not verify the webhook's channel for the new owner")
+			}
+			if ch.Type != model.ChannelTypeOpen {
+				return errors.New("outgoing webhooks can only use public channels")
+			}
+		}
+	}
+	return nil
 }
 
 // canNominateTransfer enforces policy 5: while the asset's owner is active,
@@ -81,7 +166,11 @@ func (p *Plugin) canNominateTransfer(actingUserID string, asset transferAsset) e
 	if noun == "" {
 		noun = "asset"
 	}
-	if p.userActive(asset.ownerUserID) {
+	ownerActive, ownerKnown := p.userActiveStatus(asset.ownerUserID)
+	if !ownerKnown {
+		return errors.New("could not verify the current owner's account; try again")
+	}
+	if ownerActive {
 		if actingUserID == asset.ownerUserID {
 			return nil
 		}

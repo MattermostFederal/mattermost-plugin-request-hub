@@ -115,9 +115,16 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 		return "", err
 	}
 
+	ownerActive, ownerKnown := p.userActiveStatus(index.OwnerUserID)
+	if !ownerKnown {
+		return "", errors.New("could not verify the current owner's account; try again")
+	}
 	newOwnerID := strings.TrimSpace(in.NewOwnerUserID)
 	if webhookTransferNeedsNewOwner(action) {
-		if err = p.checkTransferNewOwner(newOwnerID); err != nil {
+		if err = p.checkTransferNewOwner(newOwnerID, transferNewOwnerOpts{
+			currentOwnerID: index.OwnerUserID, channelID: index.ChannelID,
+			webhookType: index.WebhookType, noun: "webhook",
+		}); err != nil {
 			return "", err
 		}
 	} else {
@@ -127,13 +134,9 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	if err = checkTextLen("note", note, maxTransferNoteLen); err != nil {
 		return "", err
 	}
-	reason := strings.TrimSpace(strings.ToLower(in.Reason))
-	if reason == "" {
-		if !p.userActive(index.OwnerUserID) {
-			reason = transferReasonOwnerDeactivated
-		} else {
-			reason = transferReasonVoluntary
-		}
+	reason, err := normalizeTransferReason(in.Reason, ownerActive)
+	if err != nil {
+		return "", err
 	}
 
 	req := &webhookTransferRequest{
@@ -158,19 +161,20 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	} else if held {
 		return "", duplicateRequestError(pendingKindWebhookTransfer, req.pendingKey())
 	}
-	if claimErr := p.claimTransferAsset(pendingKindWebhookTransfer, req.pendingKey(), req.ID); claimErr != nil {
-		return "", claimErr
-	}
 	if err = p.reservePending(pendingKindWebhookTransfer, req.RequesterID, newPendingEntry(req), p.getConfiguration()); err != nil {
-		p.releaseTransferAssetClaim(pendingKindWebhookTransfer, req.pendingKey(), req.ID)
 		return "", err
 	}
 	if err = p.storeWebhookTransferRequest(req); err != nil {
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
 		p.API.LogError("failed to store webhook transfer request", "error", err.Error())
 		return "", errors.New("could not save your request; try again")
 	}
 	sa.markStored()
+	if claimErr := p.claimTransferAsset(pendingKindWebhookTransfer, req.pendingKey(), req.ID); claimErr != nil {
+		p.deletePendingRequestKV(kvWebhookTransferRequestPrefix + req.ID)
+		p.releasePending(pendingKindWebhookTransfer, req.RequesterID, req.ID)
+		return "", claimErr
+	}
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		p.deletePendingRequestKV(kvWebhookTransferRequestPrefix + req.ID)
@@ -225,6 +229,7 @@ func webhookTransferRetryHeader(exercise bool) string {
 }
 
 func (p *Plugin) webhookTransferApprovalAttachment(req *webhookTransferRequest, requester *model.User) *model.MessageAttachment {
+	requester = requesterOrPlaceholder(requester, req.RequesterID)
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: "@" + requester.Username, Short: true},
 		{Title: "Action", Value: webhookTransferActionLabel(req.Action), Short: true},
@@ -235,7 +240,7 @@ func (p *Plugin) webhookTransferApprovalAttachment(req *webhookTransferRequest, 
 		fields = append(fields, &model.MessageAttachmentField{Title: "New owner", Value: p.mentionList([]string{req.NewOwnerUserID}), Short: true})
 	}
 	if req.Reason != "" {
-		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: req.Reason, Short: true})
+		fields = append(fields, &model.MessageAttachmentField{Title: "Reason", Value: escapeMarkdown(req.Reason), Short: true})
 	}
 	if req.Note != "" {
 		fields = append(fields, &model.MessageAttachmentField{Title: "Note", Value: escapeMarkdown(req.Note), Short: false})
@@ -380,7 +385,7 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		})
 	}
 
-	if msg := p.webhookTransferApprovalBlocker(req); msg != "" {
+	if msg := p.webhookTransferApprovalBlockerFor(req, actingUser); msg != "" {
 		return decisionResult{Reply: msg}
 	}
 
@@ -392,7 +397,9 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
 			Title: "Webhook " + label + " Request Update",
 			Text:  fmt.Sprintf("Your %s request for the %s webhook **%s** received the %s approval; awaiting the other approval.", strings.ToLower(label), req.WebhookType, escapeMarkdown(req.DisplayName), step),
-		}, p.webhookTransferApprovalHeader(req.Exercise), func() *model.MessageAttachment { return p.webhookTransferApprovalAttachment(&newReq, requester) })
+		}, p.webhookTransferApprovalHeader(req.Exercise), func() *model.MessageAttachment {
+			return p.webhookTransferApprovalAttachment(&newReq, requesterOrPlaceholder(requester, req.RequesterID))
+		})
 	}
 
 	if res, ok := p.claimRecord(key, rawReq, cards, "webhook transfer request"); !ok {
@@ -402,15 +409,22 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 	return p.fulfillWebhookTransferRequest(req, actingUser, requester, cards, rawReq, key)
 }
 
-// webhookTransferApprovalBlocker re-checks successor validity and live
-// nominate ACL before final approval (same idea as botTransferApprovalBlocker).
-func (p *Plugin) webhookTransferApprovalBlocker(req *webhookTransferRequest) string {
+// webhookTransferApprovalBlockerFor re-checks successor validity, live
+// nominate ACL, and that the hook still exists before final approval.
+func (p *Plugin) webhookTransferApprovalBlockerFor(req *webhookTransferRequest, actingUser *model.User) string {
 	index, indexErr := p.loadWebhookIndex(req.HookID)
 	if indexErr != nil {
 		return "Could not re-check webhook ownership; try Approve again."
 	}
 	if index == nil || index.RetiredAt != 0 {
 		return "That webhook is no longer managed (or was retired). Deny this request instead."
+	}
+	if actingUser != nil {
+		if exists, existErr := p.webhookStillExists(req.WebhookType, req.HookID, actingUser.Id); existErr != nil {
+			return "Could not re-check whether the webhook still exists; try Approve again."
+		} else if !exists {
+			return "That webhook no longer exists in Mattermost. Deny this request instead."
+		}
 	}
 	asset := transferAsset{
 		assetType: "webhook", assetID: req.HookID,
@@ -420,7 +434,14 @@ func (p *Plugin) webhookTransferApprovalBlocker(req *webhookTransferRequest) str
 		return "The requester can no longer transfer or retire this webhook (" + err.Error() + "). Deny this request instead."
 	}
 	if webhookTransferNeedsNewOwner(req.Action) {
-		if err := p.checkTransferNewOwner(req.NewOwnerUserID); err != nil {
+		actingID := ""
+		if actingUser != nil {
+			actingID = actingUser.Id
+		}
+		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
+			currentOwnerID: index.OwnerUserID, actingUserID: actingID,
+			channelID: index.ChannelID, webhookType: index.WebhookType, noun: "webhook",
+		}); err != nil {
 			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
 		}
 	}
@@ -452,7 +473,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		})
 
 	case transferActionRetireOnly:
-		if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil {
+		if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil && !webhookDeleteAlreadyGone(err) {
 			return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
 		}
 		p.retireWebhookIndex(req.HookID)
@@ -472,12 +493,11 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 	}
 }
 
-// fulfillWebhookRetireRecreate deletes the old hook and creates a new one
-// owned by the successor, DMing an incoming webhook's URL to the new owner.
-// Outgoing hooks load the live Mattermost record first so trigger words and
-// every callback URL are preserved; if the live hook cannot be loaded and the
-// snapshot is incomplete, the request stays pending (refuse) instead of
-// deleting a hook we cannot faithfully recreate.
+// fulfillWebhookRetireRecreate creates the replacement under the successor
+// first, then deletes the old hook. Outgoing hooks load the live Mattermost
+// record so trigger words and every callback URL are preserved; if the live
+// hook cannot be loaded and the snapshot is incomplete, the request stays
+// pending (refuse) instead of dropping fidelity.
 func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string) decisionResult {
 	var outgoingSnap *outgoingWebhookRecreate
 	callbackURL := strings.TrimSpace(req.CallbackURL)
@@ -504,13 +524,6 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		req.CallbackURL = callbackURL
 	}
 
-	if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil {
-		return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, err)
-	}
-	p.retireWebhookIndex(req.HookID)
-	// Old hook is gone — drop any leftover orphan-notice card even if recreate fails.
-	p.clearOrphanNotice("webhook", req.HookID)
-
 	synthetic := &webhookRequest{
 		ID:          req.ID,
 		RequesterID: req.NewOwnerUserID,
@@ -530,18 +543,17 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		dmMsg, newHookID, createErr = p.createWebhookForRequest(synthetic, actingUser.Id)
 	}
 	if createErr != nil {
-		// Old hook is already gone; record the gap for an admin to recreate.
-		partialErrors = append(partialErrors, "the replacement webhook could not be created: "+createErr.Error()+" — the old hook was deleted; recreate manually")
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
-		outcome := fmt.Sprintf("⚠️ Fully approved, but the replacement %s webhook could not be created; the old one was deleted.", req.WebhookType)
-		p.auditWebhookTransferApproved(cards, req, actingUser, requester, partialErrors)
-		return p.finish(cards, "", outcome, ticketClose{
-			RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
-			Approved: true, ApproverUsername: actingUser.Username,
-			CardTitle: "Webhook Retired (recreate failed)", CardText: fmt.Sprintf("The old %s webhook **%s** was deleted, but the replacement couldn't be created. Ask a System Admin to recreate it under the new owner.", req.WebhookType, escapeMarkdown(req.DisplayName)),
-			StatusLine: outcome,
-		})
+		// Old hook is untouched — leave the ticket pending for a retry.
+		return p.restoreWebhookTransferAfterFailure(req, requester, cards, rawReq, key, createErr)
 	}
+
+	if err := p.deleteWebhook(req.WebhookType, req.HookID, actingUser.Id); err != nil && !webhookDeleteAlreadyGone(err) {
+		// Replacement exists; old still present. Close with a partial so an
+		// admin can delete the old hook manually.
+		partialErrors = append(partialErrors, "the old webhook could not be deleted after recreate: "+err.Error()+" — delete hook "+req.HookID+" manually; new hook is "+newHookID)
+	}
+	p.retireWebhookIndex(req.HookID)
+	p.clearOrphanNotice("webhook", req.HookID)
 	p.writeWebhookIndex(synthetic, newHookID, actingUser.Id)
 
 	switch req.WebhookType {

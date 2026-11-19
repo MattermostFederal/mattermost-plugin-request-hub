@@ -70,6 +70,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const teamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
 
     const [assets, setAssets] = useState<TransferableAsset[]>([]);
+    const [assetsLoading, setAssetsLoading] = useState(false);
     const [loadError, setLoadError] = useState('');
     const [assetId, setAssetId] = useState('');
     const [action, setAction] = useState(isBot ? 'transfer' : 'reassign');
@@ -90,6 +91,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
             return undefined;
         }
         let cancelled = false;
+        setAssetsLoading(true);
         fetchTransferableAssets().then((all) => {
             if (cancelled) {
                 return;
@@ -97,12 +99,14 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
             const list = isBot ? all.bots : all.webhooks;
             setAssets(list);
             setLoadError('');
+            setAssetsLoading(false);
             if (list.length === 1) {
                 setAssetId(list[0].asset_id);
             }
         }).catch(() => {
             if (!cancelled) {
                 setLoadError('Could not load the assets you can transfer. Try again.');
+                setAssetsLoading(false);
             }
         });
         return () => {
@@ -116,12 +120,15 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
         }
         const selected = assets.find((a) => a.asset_id === assetId);
         if (selected?.orphaned) {
+            // Mark touched so the checked UI matches what we submit.
             setRotate(true);
+            setRotateTouched(true);
         }
     }, [assetId, assets, isBot, rotateTouched]);
 
     const reset = () => {
         setAssets([]);
+        setAssetsLoading(false);
         setLoadError('');
         setAssetId('');
         setAction(isBot ? 'transfer' : 'reassign');
@@ -251,8 +258,9 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                     className='form-control'
                                     value={assetId}
                                     onChange={(e) => setAssetId(e.target.value)}
+                                    disabled={assetsLoading}
                                 >
-                                    <option value=''>{assets.length ? 'Select…' : 'Nothing you can transfer or retire'}</option>
+                                    <option value=''>{assetsLoading ? 'Loading…' : (assets.length ? 'Select…' : 'Nothing you can transfer or retire')}</option>
                                     {assets.map((a) => (
                                         <option
                                             key={a.asset_id}
@@ -297,6 +305,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
                                     value={newOwner}
                                     onChange={setNewOwner}
                                     teamId={teamId}
+                                    single={true}
                                     placeholder='Type a name…'
                                 />
                             </div>

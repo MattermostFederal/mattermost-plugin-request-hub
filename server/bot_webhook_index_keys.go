@@ -39,7 +39,10 @@ func (p *Plugin) scanWebhookIndexKeys() ([]string, error) {
 }
 
 func (p *Plugin) scanPrefixedIndexKeys(prefix, indexStore string) ([]string, error) {
-	const perPage = 200
+	perPage := botIndexPageSize
+	if prefix == kvWebhookIndexPrefix {
+		perPage = webhookIndexPageSize
+	}
 	var keys []string
 	for page := 0; ; page++ {
 		batch, appErr := p.API.KVList(page, perPage)

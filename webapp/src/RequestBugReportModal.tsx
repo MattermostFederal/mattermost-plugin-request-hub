@@ -30,9 +30,11 @@ const dialogStyle: React.CSSProperties = {
 const fieldStyle: React.CSSProperties = {marginBottom: 16};
 const labelStyle: React.CSSProperties = {display: 'block', fontWeight: 600, marginBottom: 4, fontSize: 14};
 
+// About-area options for bug reports. Exclude bug_report itself (the server
+// rejects it) and keep transfer kinds that KIND_OPTIONS already lists.
 const ABOUT_OPTIONS: Array<[string, string]> = [
     ['general', 'General / other'],
-    ...KIND_OPTIONS,
+    ...KIND_OPTIONS.filter(([value]) => value !== 'bug_report'),
 ];
 
 export const RequestBugReportModal = () => {
