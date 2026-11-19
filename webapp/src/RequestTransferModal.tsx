@@ -80,6 +80,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
     const teamId = useSelector((state: GlobalState) => getCurrentTeamId(state));
 
     const [assets, setAssets] = useState<TransferableAsset[]>([]);
+
     // Start true so the first paint does not flash "Nothing you can transfer".
     const [assetsLoading, setAssetsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
@@ -130,6 +131,7 @@ export const RequestTransferModal: React.FC<Props> = ({kind}) => {
             return;
         }
         const selected = assets.find((a) => a.asset_id === assetId);
+
         // Reset rotate when switching bots so an orphaned default does not
         // carry over to a live bot.
         setRotate(Boolean(selected?.orphaned));

@@ -108,7 +108,7 @@ func TestWebhookIndexRoundTrip(t *testing.T) {
 		ID: "r1", RequesterID: "u_req", WebhookType: webhookTypeOutgoing, ChannelID: "ch1", TeamID: "t1",
 		DisplayName: "Relay", CallbackURL: "https://hooks.example.com/out",
 	}
-	p.writeWebhookIndex(req, "hook1", "admin1")
+	require.NoError(t, p.writeWebhookIndex(req, "hook1", "admin1"))
 
 	got, err := p.loadWebhookIndex("hook1")
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestWebhookIndexRoundTrip(t *testing.T) {
 	require.Equal(t, "https://hooks.example.com/out", got.CallbackURL)
 	require.Zero(t, got.RetiredAt)
 
-	p.updateWebhookIndexOwner("hook1", "u_new")
+	require.NoError(t, p.updateWebhookIndexOwner("hook1", "u_new"))
 	got, err = p.loadWebhookIndex("hook1")
 	require.NoError(t, err)
 	require.Equal(t, "u_new", got.OwnerUserID)
@@ -128,7 +128,7 @@ func TestWebhookIndexRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 
-	p.retireWebhookIndex("hook1")
+	require.NoError(t, p.retireWebhookIndex("hook1"))
 	got, err = p.loadWebhookIndex("hook1")
 	require.NoError(t, err)
 	require.NotZero(t, got.RetiredAt)
@@ -140,8 +140,8 @@ func TestWriteWebhookIndexSkipsExerciseAndEmptyHook(t *testing.T) {
 	store := memKV(api)
 	p := newTestPlugin(api)
 
-	p.writeWebhookIndex(&webhookRequest{ID: "r1", Exercise: true, WebhookType: webhookTypeIncoming}, "hook1", "a")
-	p.writeWebhookIndex(&webhookRequest{ID: "r2", WebhookType: webhookTypeIncoming}, "", "a")
+	require.NoError(t, p.writeWebhookIndex(&webhookRequest{ID: "r1", Exercise: true, WebhookType: webhookTypeIncoming}, "hook1", "a"))
+	require.NoError(t, p.writeWebhookIndex(&webhookRequest{ID: "r2", WebhookType: webhookTypeIncoming}, "", "a"))
 	require.Empty(t, store)
 }
 

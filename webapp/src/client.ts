@@ -158,6 +158,7 @@ export type TransferableAsset = {
     owner_id: string;
     owner_active: boolean;
     orphaned: boolean;
+
     // When set (orphaned incoming), only these actions are offered.
     allowed_actions?: string[];
 };
