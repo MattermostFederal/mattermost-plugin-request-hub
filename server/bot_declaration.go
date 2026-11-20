@@ -267,33 +267,132 @@ func (p *Plugin) botHomeBlocker(req *botRequest, requester *model.User) string {
 // what was declared for it, so the bot can be listed and traced by its user
 // ID even after the request's history is gone.
 type botIndexEntry struct {
-	BotUserID          string         `json:"bot_user_id"`
-	RequestID          string         `json:"request_id"`
-	Username           string         `json:"username"`
-	DisplayName        string         `json:"display_name,omitempty"`
-	RequesterID        string         `json:"requester_id"`
-	OwnerUserID        string         `json:"owner_user_id,omitempty"`
-	CreatedAt          int64          `json:"created_at"`
-	RequestedAt        int64          `json:"requested_at,omitempty"`
-	ApprovedBy         string         `json:"approved_by,omitempty"`
-	Purpose            string         `json:"purpose,omitempty"`
-	PrivilegeLevel     string         `json:"privilege_level,omitempty"`
-	DataIngestion      string         `json:"data_ingestion,omitempty"`
-	HostingEnv         string         `json:"hosting_env,omitempty"`
-	HostingOtherDetail string         `json:"hosting_other_detail,omitempty"`
-	ArchitectureURL    string         `json:"architecture_url,omitempty"`
-	IntegrationURL     string         `json:"integration_endpoint,omitempty"`
-	HomeTeamID         string         `json:"home_team_id,omitempty"`
-	HomeChannelID      string         `json:"home_channel_id,omitempty"`
+	BotUserID          string `json:"bot_user_id"`
+	RequestID          string `json:"request_id"`
+	Username           string `json:"username"`
+	DisplayName        string `json:"display_name,omitempty"`
+	RequesterID        string `json:"requester_id"`
+	OwnerUserID        string `json:"owner_user_id,omitempty"`
+	CreatedAt          int64  `json:"created_at"`
+	RequestedAt        int64  `json:"requested_at,omitempty"`
+	ApprovedBy         string `json:"approved_by,omitempty"`
+	Purpose            string `json:"purpose,omitempty"`
+	PrivilegeLevel     string `json:"privilege_level,omitempty"`
+	DataIngestion      string `json:"data_ingestion,omitempty"`
+	HostingEnv         string `json:"hosting_env,omitempty"`
+	HostingOtherDetail string `json:"hosting_other_detail,omitempty"`
+	ArchitectureURL    string `json:"architecture_url,omitempty"`
+	IntegrationURL     string `json:"integration_endpoint,omitempty"`
+	HomeTeamID         string `json:"home_team_id,omitempty"`
+	HomeChannelID      string `json:"home_channel_id,omitempty"`
+	// HasToken / HasIncomingWebhook / HasOutgoingWebhook record what was
+	// issued with the bot so inventory can name auth and webhook ownership.
+	HasToken           bool           `json:"has_token,omitempty"`
+	HasIncomingWebhook bool           `json:"has_incoming_webhook,omitempty"`
+	HasOutgoingWebhook bool           `json:"has_outgoing_webhook,omitempty"`
 	Compliance         *botCompliance `json:"compliance,omitempty"`
+	// RetiredAt marks a bot retired by a transfer/retire ticket without
+	// dropping the index, so transfer pickers skip it. We keep the row
+	// (rather than deleting the key) so the inventory still shows a retired
+	// bot and who retired it. Zero means live.
+	RetiredAt int64 `json:"retired_at,omitempty"`
 }
 
-// writeBotIndex records a bot created for req. Exercise bots are tracked
-// in the exercise manifest instead. A failure is logged: the bot exists
-// either way, and its history still links it to the request.
-func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID string) {
+// botIndexOwner is the bot's effective owner. Older index rows left owner
+// empty when the owner was the requester, so fall back to the requester.
+func botIndexOwner(e botIndexEntry) string {
+	if e.OwnerUserID != "" {
+		return e.OwnerUserID
+	}
+	return e.RequesterID
+}
+
+const botIndexCASRetries = 5
+
+// updateBotIndexOwner records a new owner on a bot's index entry.
+func (p *Plugin) updateBotIndexOwner(botUserID, newOwnerID string) error {
+	return p.mutateBotIndex(botUserID, func(entry *botIndexEntry) error {
+		if entry == nil {
+			return errors.New("bot index entry not found")
+		}
+		entry.OwnerUserID = newOwnerID
+		return nil
+	})
+}
+
+// retireBotIndex marks a bot's index entry retired.
+func (p *Plugin) retireBotIndex(botUserID string) error {
+	return p.mutateBotIndex(botUserID, func(entry *botIndexEntry) error {
+		if entry == nil {
+			return nil
+		}
+		entry.RetiredAt = model.GetMillis()
+		return nil
+	})
+}
+
+// mutateBotIndex loads a bot index row, applies fn, and CAS-writes it back
+// with a bounded retry so concurrent owner/retire updates cannot clobber
+// each other.
+func (p *Plugin) mutateBotIndex(botUserID string, fn func(*botIndexEntry) error) error {
+	key := kvBotIndexPrefix + botUserID
+	for range botIndexCASRetries {
+		raw, appErr := p.API.KVGet(key)
+		if appErr != nil {
+			return errors.Wrap(appErr, "failed to load bot index entry")
+		}
+		var entry *botIndexEntry
+		if raw != nil {
+			var e botIndexEntry
+			if err := json.Unmarshal(raw, &e); err != nil {
+				return errors.Wrap(err, "failed to unmarshal bot index entry")
+			}
+			entry = &e
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+		if entry == nil {
+			return nil
+		}
+		data, err := json.Marshal(*entry)
+		if err != nil {
+			return errors.Wrap(err, "failed to marshal bot index entry")
+		}
+		ok, casErr := p.API.KVCompareAndSet(key, raw, data)
+		if casErr != nil {
+			return errors.Wrap(casErr, "failed to update bot index entry")
+		}
+		if ok {
+			p.trackBotIndexKey(entry.BotUserID)
+			return nil
+		}
+	}
+	return errors.New("failed to update bot index entry after concurrent updates")
+}
+
+// saveBotIndexEntry writes a whole index row, for a bot RH just created.
+// Changes to an existing row go through mutateBotIndex.
+func (p *Plugin) saveBotIndexEntry(entry botIndexEntry) error {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		p.API.LogWarn("failed to marshal bot index entry", "bot_user_id", entry.BotUserID, "error", err.Error())
+		return errors.Wrap(err, "failed to marshal bot index entry")
+	}
+	if appErr := p.API.KVSet(kvBotIndexPrefix+entry.BotUserID, data); appErr != nil {
+		p.API.LogWarn("failed to write bot index entry", "bot_user_id", entry.BotUserID, "error", appErr.Error())
+		return errors.Wrap(appErr, "failed to write bot index entry")
+	}
+	p.trackBotIndexKey(entry.BotUserID)
+	return nil
+}
+
+// writeBotIndex records a bot created for req. Credential flags reflect what
+// was actually created. Exercise bots are tracked in the exercise manifest
+// instead. Returns an error when the index could not be written.
+func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID string, hasToken, hasIncoming, hasOutgoing bool) error {
 	if req.Exercise {
-		return
+		return nil
 	}
 	ownerID := strings.TrimSpace(req.OwnerUserID)
 	if ownerID == "" {
@@ -307,16 +406,16 @@ func (p *Plugin) writeBotIndex(req *botRequest, bot *model.Bot, approverID strin
 		HostingEnv: req.HostingEnv, HostingOtherDetail: req.HostingOtherDetail,
 		ArchitectureURL: req.ArchitectureURL, IntegrationURL: req.IntegrationURL,
 		HomeTeamID: req.HomeTeamID, HomeChannelID: req.HomeChannelID,
-		Compliance: req.Compliance,
+		HasToken:           hasToken,
+		HasIncomingWebhook: hasIncoming,
+		HasOutgoingWebhook: hasOutgoing,
+		Compliance:         req.Compliance,
 	}
-	data, err := json.Marshal(entry)
-	if err != nil {
-		p.API.LogError("failed to marshal bot index entry", "bot_user_id", bot.UserId, "error", err.Error())
-		return
+	if err := p.saveBotIndexEntry(entry); err != nil {
+		p.API.LogError("failed to write bot index entry", "bot_user_id", bot.UserId, "request_id", req.ID, "error", err.Error())
+		return err
 	}
-	if appErr := p.API.KVSet(kvBotIndexPrefix+bot.UserId, data); appErr != nil {
-		p.API.LogError("failed to write bot index entry", "bot_user_id", bot.UserId, "request_id", req.ID, "error", appErr.Error())
-	}
+	return nil
 }
 
 // loadBotIndex returns the index entry for a bot, or nil when Request Hub
@@ -337,29 +436,26 @@ func (p *Plugin) loadBotIndex(botUserID string) (*botIndexEntry, error) {
 }
 
 // listBotIndex returns every bot index entry. Unreadable entries are
-// logged and skipped.
+// logged and skipped. Prefers the compact bot-index key list so pickers
+// do not page the entire plugin KV store.
 func (p *Plugin) listBotIndex() ([]botIndexEntry, error) {
+	keys, err := p.listBotIndexKeys()
+	if err != nil {
+		return nil, err
+	}
 	var out []botIndexEntry
-	for page := 0; ; page++ {
-		keys, appErr := p.API.KVList(page, botIndexPageSize)
-		if appErr != nil {
-			return nil, appErr
+	for _, key := range keys {
+		if !strings.HasPrefix(key, kvBotIndexPrefix) {
+			continue
 		}
-		for _, key := range keys {
-			if !strings.HasPrefix(key, kvBotIndexPrefix) {
-				continue
-			}
-			entry, err := p.loadBotIndex(strings.TrimPrefix(key, kvBotIndexPrefix))
-			if err != nil {
-				p.API.LogWarn("skipping unreadable bot index entry", "key", key, "error", err.Error())
-				continue
-			}
-			if entry != nil {
-				out = append(out, *entry)
-			}
+		entry, loadErr := p.loadBotIndex(strings.TrimPrefix(key, kvBotIndexPrefix))
+		if loadErr != nil {
+			p.API.LogWarn("skipping unreadable bot index entry", "key", key, "error", loadErr.Error())
+			continue
 		}
-		if len(keys) < botIndexPageSize {
-			return out, nil
+		if entry != nil {
+			out = append(out, *entry)
 		}
 	}
+	return out, nil
 }

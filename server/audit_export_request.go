@@ -274,7 +274,7 @@ func (p *Plugin) submitAuditExportRequest(requesterID string, f auditExportFilte
 	req.ApprovalChannelID = approvalChannelID
 
 	req.DMRootPostID, req.DMChannelID = p.postTicketCreatedDM(req.RequesterID,
-		p.auditExportApprovalAttachment(req, requester), ticketSubmittedIntro("audit export request"))
+		p.auditExportApprovalAttachment(req, requester), ticketSubmittedIntro("audit export request"), req.ID)
 
 	p.persistTicketPosts(ticketPersist{
 		KVKey: kvAuditExportRequestPrefix + req.ID, RawBefore: rawBefore, Record: req,

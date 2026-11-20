@@ -907,12 +907,21 @@ func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
 			out = append(out, ch)
 		}
 	}
-	if cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests {
+	if p.auditChannelMayIncludeTeamAdmins() {
 		if ch := p.ensureAuditChannel(); ch != nil {
 			out = append(out, ch)
 		}
 	}
 	return out
+}
+
+// auditChannelMayIncludeTeamAdmins reports whether the audit channel's
+// seeded membership can reach past System Admins under the current
+// settings. Kept in step with keepSeededTeamAdminOnChannel, which is what
+// decides who stays in that channel.
+func (p *Plugin) auditChannelMayIncludeTeamAdmins() bool {
+	cfg := p.getConfiguration()
+	return cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests
 }
 
 // ensureTeamCreationApprovalChannelForVisibility ensures the team-requests
@@ -995,6 +1004,10 @@ func (p *Plugin) syncPrimaryTeamAdminVisibility() {
 	if err != nil || team == nil {
 		return
 	}
+	// Before the members arrive, not after: reports filed while the audit
+	// channel was System Admin-only must not be sitting there when Team
+	// Admins are seeded into it.
+	p.redactBugReportAuditCards()
 	channels := p.primaryTAVisibilityChannels()
 	adminIDs := p.listTeamAdminIDs(team.Id)
 	if len(channels) > 0 {
@@ -1015,6 +1028,7 @@ func (p *Plugin) ensurePrimaryTeamAdminVisibilityForUser(userID string) {
 	if userID == "" || userID == p.botUserID || !p.isApprovalTeamAdmin(userID) {
 		return
 	}
+	p.redactBugReportAuditCards()
 	for _, ch := range p.primaryTAVisibilityChannels() {
 		p.seedTAVisibility(ch, userID)
 	}
@@ -1053,6 +1067,7 @@ func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	if !isTeamAdminMember(member) {
 		return
 	}
+	p.redactBugReportAuditCards()
 	for _, ch := range p.primaryTAVisibilityChannels() {
 		p.seedTAVisibility(ch, user.Id)
 	}
@@ -1183,7 +1198,7 @@ func (p *Plugin) keepSeededTeamAdminOnChannel(ch *model.Channel, approvalTeamID 
 	case "mattermost-team-requests":
 		return cfg.AllowApprovalTeamAdminsForTeamRequests
 	case "mattermost-audit-requests":
-		return cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests
+		return p.auditChannelMayIncludeTeamAdmins()
 	case "mattermost-channel-requests":
 		if approvalTeamID != "" && ch.TeamId == approvalTeamID {
 			if cfg.PerTeamApprovalChannels {

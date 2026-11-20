@@ -23,6 +23,9 @@ const ALL_OFF = {
     team_guest: false,
     bot: false,
     webhook: false,
+    bug_report: false,
+    bot_transfer: false,
+    webhook_transfer: false,
 };
 
 const ALL_TILES = [

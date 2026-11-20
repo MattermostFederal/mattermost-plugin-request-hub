@@ -64,6 +64,47 @@ type Plugin struct {
 	// Test seams for webhook create/delete side effects (nil in production).
 	createWebhookFn func(req *webhookRequest, adminUserID string) (dmMsg, hookID string, err error)
 	deleteWebhookFn func(webhookType, hookID string) error
+
+	// Test seams for bot ownership/state REST calls (nil in production).
+	assignBotFn  func(botUserID, newOwnerID, adminUserID string) error
+	disableBotFn func(botUserID, adminUserID string) error
+	// updateWebhookOwnerFn reassigns a standalone webhook's creator/owner via
+	// REST (nil in production).
+	updateWebhookOwnerFn func(webhookType, hookID, newOwnerID, adminUserID string) error
+	// liveWebhookOwnerFn reads a webhook's current Mattermost owner
+	// (nil in production → live REST Get).
+	liveWebhookOwnerFn func(webhookType, hookID, adminUserID string) (string, error)
+	// incomingWebhookChannelFn reads where an incoming hook posts now, so
+	// retire+recreate can refuse a hook that moved channel
+	// (nil in production → live REST Get).
+	incomingWebhookChannelFn func(hookID, adminUserID string) (string, error)
+	// listIncomingWebhooksFn lists a team's live incoming hooks so the index
+	// backfill can identify one from an approval that recorded no hook ID
+	// (nil in production → REST GetIncomingWebhooksForTeam).
+	listIncomingWebhooksFn func(teamID, adminUserID string) ([]*model.IncomingWebhook, error)
+	// getOutgoingWebhookCallbackFn returns the first callback URL for an
+	// outgoing hook on retire+recreate (nil in production → live REST Get).
+	// Prefer getOutgoingWebhookForRecreateFn when tests need full fidelity.
+	getOutgoingWebhookCallbackFn func(hookID, adminUserID string) (string, error)
+	// getOutgoingWebhookForRecreateFn returns the live outgoing fields to copy
+	// on retire+recreate (nil in production → live REST Get).
+	getOutgoingWebhookForRecreateFn func(hookID, adminUserID string) (*outgoingWebhookRecreate, error)
+	// createOutgoingWebhookFromRecreateFn creates an outgoing hook from a
+	// recreate snapshot (nil in production → REST CreateOutgoingWebhook).
+	createOutgoingWebhookFromRecreateFn func(req *webhookRequest, snap *outgoingWebhookRecreate, adminUserID string) (dmMsg, hookID, token string, err error)
+	// outgoingWebhookTokenFn reads a recreated outgoing hook's token when a
+	// cutover is resumed (nil in production → REST GetOutgoingWebhook).
+	outgoingWebhookTokenFn func(hookID, adminUserID string) (string, error)
+	// restoreOutgoingWebhookTriggersFn replaces the REST trigger restore
+	// after an outgoing recreate (tests only).
+	restoreOutgoingWebhookTriggersFn func(hookID, adminUserID string, snap *outgoingWebhookRecreate) error
+	// listBotAccessTokensFn lists every access token on a bot for revoke-all
+	// (nil in production → paged REST GetUserAccessTokensForUser).
+	listBotAccessTokensFn func(botUserID, adminUserID string) ([]*model.UserAccessToken, error)
+	// listBotAccessTokensPageFn fetches one page of a bot's access tokens,
+	// so tests can reproduce the unordered paging the walk guards against
+	// (nil in production → REST GetUserAccessTokensForUser).
+	listBotAccessTokensPageFn func(botUserID, adminUserID string, page int) ([]*model.UserAccessToken, error)
 }
 
 func (p *Plugin) OnActivate() error {
@@ -131,6 +172,9 @@ func (p *Plugin) OnActivate() error {
 		// plugin KV scan (histories, anchors, bot index, …).
 		p.rebuildOpenRequestIndex()
 		p.rebuildTokenExpiryIndex()
+		p.rebuildBotIndexKeys()
+		p.rebuildWebhookIndexKeys()
+		p.backfillWebhookIndexFromHistory()
 		// One-shot: force every ticket/approval channel (root, bot, webhook,
 		// team-creation, audit, per-team) into the managed
 		// "Mattermost: Request Hub" sidebar category for all current members

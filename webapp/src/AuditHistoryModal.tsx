@@ -41,11 +41,14 @@ export const KIND_OPTIONS: Array<[string, string]> = [
     ['team_member', 'Team member'],
     ['team_guest', 'Guest invite'],
     ['bot', 'Bot account'],
+    ['bot_transfer', 'Bot transfer / retire'],
     ['webhook', 'Webhook'],
+    ['webhook_transfer', 'Webhook transfer / retire'],
     ['audit_export', 'Audit export'],
+    ['bug_report', 'Bug / feedback'],
 ];
 
-const STATUS_OPTIONS = ['pending', 'approved', 'denied', 'expired', 'failed', 'lost', 'closed'];
+const STATUS_OPTIONS = ['pending', 'approved', 'denied', 'withdrawn', 'acknowledged', 'expired', 'failed', 'lost', 'closed'];
 
 const EVENT_LABELS: Record<string, string> = {
     submitted: 'Submitted',
@@ -55,6 +58,8 @@ const EVENT_LABELS: Record<string, string> = {
     approved: 'Approved',
     approved_partial: 'Approved with problems',
     denied: 'Denied',
+    withdrawn: 'Withdrawn',
+    acknowledged: 'Acknowledged',
     expired: 'Expired',
     approve_failed: 'Approval failed',
     lost: 'Request lost',

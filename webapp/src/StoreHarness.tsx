@@ -7,6 +7,7 @@ import type {Reducer} from 'redux';
 import reducer, {
     openAdminRequestModal,
     openBotRequestModal,
+    openBugReportModal,
     openAuditExportRequestModal,
     openAuditHistoryModal,
     openHubModal,
@@ -64,6 +65,7 @@ const reopeners = {
     hub: openHubModal,
     'audit history': openAuditHistoryModal,
     'audit export request': openAuditExportRequestModal,
+    'bug report': openBugReportModal,
     incoming: openIncomingWebhookModal,
     outgoing: openOutgoingWebhookModal,
 };

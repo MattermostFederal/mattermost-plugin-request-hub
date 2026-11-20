@@ -1137,19 +1137,24 @@ var (
 		routeSubmitTeamMemberWebapp, routeSubmitTeamGuestWebapp,
 		routeSubmitBotWebapp, routeSubmitIncomingWebhookWebapp,
 		routeSubmitOutgoingWebhookWebapp,
+		routeSubmitBugReportWebapp, routeBugReportDialog,
+		routeSubmitBotTransferWebapp, routeSubmitWebhookTransferWebapp,
 	}
 	// untoggledSubmitRoutes take requests of a type with no admin toggle.
 	untoggledSubmitRoutes = []string{routeSubmitAuditExportWebapp}
 	lookupRoutes          = []string{
 		routePrefixes, routeTeams, routeChannels, routeUserAutocomplete,
 		routeSidebarCategories, routeConfig, routeBotForm, routeAuditExport, routeAuditRequests, routeAuditRequest, routeAuditAccess,
+		routeMyRequests, routeTransferableAssets,
 	}
 	actionRoutes = []string{
-		routeApprove, routeDeny, routeApproveAdmin, routeDenyAdmin,
+		routeApprove, routeDeny, routeWithdraw, routeApproveAdmin, routeDenyAdmin,
 		routeApproveTeam, routeDenyTeam, routeApproveTeamAdmin, routeDenyTeamAdmin,
 		routeApproveTeamMember, routeDenyTeamMember, routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot, routeApproveWebhook, routeDenyWebhook,
-		routeApproveAuditExport, routeDenyAuditExport,
+		routeApproveBotTransfer, routeDenyBotTransfer,
+		routeApproveWebhookTransfer, routeDenyWebhookTransfer,
+		routeApproveAuditExport, routeDenyAuditExport, routeAcknowledgeBugReport,
 	}
 )
 

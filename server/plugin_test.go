@@ -28,6 +28,7 @@ func TestOnActivate_EnsuresBotAndRegistersCommand(t *testing.T) {
 		return c.Trigger == commandTrigger && c.AutoComplete && c.AutocompleteData != nil &&
 			c.AutocompleteData.Trigger == commandTrigger
 	})).Return(nil)
+	api.On("KVList", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()

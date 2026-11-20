@@ -41,7 +41,24 @@ func stubBotHome(api *plugintest.API) {
 
 // stubBotIndexWrite accepts the bot index entry written on approval.
 func stubBotIndexWrite(api *plugintest.API) {
+	api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) })).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) }), mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) }), mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
+}
+
+// stubWebhookIndexWrite accepts the webhook index entry written on approval.
+func stubWebhookIndexWrite(api *plugintest.API) {
+	api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvWebhookIndexPrefix) })).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvWebhookIndexPrefix) }), mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvWebhookIndexPrefix) }), mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvWebhookTransferHandlePrefix) })).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvWebhookTransferHandlePrefix) }), mock.Anything, mock.Anything).Return(true, nil).Maybe()
 }
 
 // homeBotApproval is a request with its security step done, a full
@@ -177,17 +194,18 @@ func TestBotRequestCommand_RefusesOutsideATeamChannel(t *testing.T) {
 
 func TestWriteAndLoadBotIndex(t *testing.T) {
 	api := &plugintest.API{}
+	stubLogLines(api)
 	stubBotHome(api)
-	var stored []byte
-	api.On("KVSet", mock.MatchedBy(func(key string) bool { return strings.HasPrefix(key, kvBotIndexPrefix) }), mock.Anything).
-		Run(func(args mock.Arguments) { stored = args.Get(1).([]byte) }).Return(nil)
-	api.On("KVGet", kvBotIndexPrefix+"b1").Return(stored, nil).Maybe()
+	store := memKV(api)
 	p := newTestPlugin(api)
 
 	req := homeBotApproval()
 	req.OwnerUserID = ""
-	p.writeBotIndex(req, &model.Bot{UserId: "b1", Username: "svcbot"}, "approver")
+	req.RequestToken = true
+	req.IncomingWebhookChannelID = "wh-ch"
+	require.NoError(t, p.writeBotIndex(req, &model.Bot{UserId: "b1", Username: "svcbot"}, "approver", true, true, false))
 
+	stored := store[kvBotIndexPrefix+"b1"]
 	require.NotEmpty(t, stored)
 	var index botIndexEntry
 	require.NoError(t, json.Unmarshal(stored, &index))
@@ -197,6 +215,9 @@ func TestWriteAndLoadBotIndex(t *testing.T) {
 	require.Equal(t, hostingCICD, index.HostingEnv)
 	require.Equal(t, testBotIntegURL, index.IntegrationURL)
 	require.Equal(t, req.RequesterID, index.OwnerUserID, "empty owner is stored as the requester")
+	require.True(t, index.HasToken)
+	require.True(t, index.HasIncomingWebhook)
+	require.False(t, index.HasOutgoingWebhook)
 }
 
 func TestMMPrivilegeLabel_NeverAdmin(t *testing.T) {

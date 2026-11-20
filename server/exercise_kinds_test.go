@@ -247,11 +247,22 @@ func TestExercise_PopulateSeedsEveryKind(t *testing.T) {
 		}
 	}
 
-	// Every card is marked and mentions nobody.
+	// Every approval card is marked and mentions nobody.
+	// Ticket DMs also have a Withdraw action; only count cards with Approve.
 	cards := 0
 	for _, post := range f.posts {
 		atts := post.Attachments()
-		if len(atts) == 0 || len(atts[0].Actions) == 0 {
+		if len(atts) == 0 {
+			continue
+		}
+		hasApprove := false
+		for _, a := range atts[0].Actions {
+			if a != nil && a.Id == "approve" {
+				hasApprove = true
+				break
+			}
+		}
+		if !hasApprove {
 			continue
 		}
 		cards++
@@ -732,10 +743,23 @@ func TestExercise_SeedsToSystemAdminDMsWithoutAnApprovalChannel(t *testing.T) {
 	f.populate(t)
 	cards := 0
 	for _, post := range f.posts {
-		if atts := post.Attachments(); len(atts) > 0 && len(atts[0].Actions) > 0 {
-			cards++
-			require.Equal(t, "dm", post.ChannelId, atts[0].Title)
+		atts := post.Attachments()
+		if len(atts) == 0 {
+			continue
 		}
+		// Ticket DMs carry a Withdraw button; only approval cards have Approve.
+		hasApprove := false
+		for _, a := range atts[0].Actions {
+			if a != nil && a.Id == "approve" {
+				hasApprove = true
+				break
+			}
+		}
+		if !hasApprove {
+			continue
+		}
+		cards++
+		require.Equal(t, "dm", post.ChannelId, atts[0].Title)
 	}
 	require.Equal(t, 20, cards, "each of the two System Admins gets every card")
 }

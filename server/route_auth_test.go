@@ -261,6 +261,10 @@ func TestSubmitRoutes_TurnedOffTypeRefusesBeforeReadingTheBody(t *testing.T) {
 		routeSubmitBotWebapp:             botRequestsDisabledMsg,
 		routeSubmitIncomingWebhookWebapp: webhookRequestsDisabledMsg,
 		routeSubmitOutgoingWebhookWebapp: webhookRequestsDisabledMsg,
+		routeSubmitBugReportWebapp:       bugReportRequestsDisabledMsg,
+		routeBugReportDialog:             bugReportRequestsDisabledMsg,
+		routeSubmitBotTransferWebapp:     botTransferRequestsDisabledMsg,
+		routeSubmitWebhookTransferWebapp: webhookTransferRequestsDisabledMsg,
 	}
 	require.Len(t, disabled, len(submitRoutes))
 	for _, route := range submitRoutes {

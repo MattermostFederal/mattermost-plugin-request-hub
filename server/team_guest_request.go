@@ -171,6 +171,7 @@ func (p *Plugin) sendTeamGuestTicketCreatedDM(req *teamGuestRequest, requester *
 		req.RequesterID,
 		p.teamGuestApprovalAttachment(req, requester, team),
 		ticketSubmittedIntro("guest invite request"),
+		req.ID,
 	)
 }
 
