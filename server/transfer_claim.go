@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,9 @@ import (
 // could end up on one asset. Entering restoring renews the lease, so a
 // restoring claim whose lease has aged out belongs to a restorer that died
 // mid-write and is treated as abandoned — otherwise the asset would be
-// locked for good.
+// locked for good. The phase value also fences the write: it is CAS-cleared
+// afterwards, so a takeover that landed in the gap loses that CAS and the
+// record it would have shadowed is withdrawn.
 
 const (
 	kvTransferAssetClaimPrefix = "transfer_asset_claim_"
@@ -476,26 +479,16 @@ func (p *Plugin) transferClaimStillHeld(lease transferLease) (held bool, err err
 }
 
 // restoreTransferRecord puts a claimed transfer ticket back after its
-// approval could not be carried out. The record is published only while
-// this request owns the claim and holds it in the restoring phase, which no
-// takeover may break — so a lost claim never leaves two open tickets on one
-// asset. The generation is bumped as the phase changes: a takeover that
-// already read the claim and is about to CAS it away loses that race.
+// approval could not be carried out. The record is published inside a claim
+// fence, so a lost claim never leaves two open tickets on one asset.
 //
 // restored is true only when the record is in place and this request owned
 // the claim while it was written. err is set when the record could not be
-// written, the claim could not be read, or the move into the restoring
-// phase failed; nothing is published in those cases, because a record put
-// back without confirmed ownership is how one asset ends up with two open
-// tickets. restored is false with a nil err when another ticket holds the
-// claim.
-//
-// A write that still fails after its retries leaves the claim alone. The
-// side effects may already have moved the asset, so freeing it would let a
-// second ticket act on a half-finished handover; the lease ages out
-// instead.
+// written or the claim could not be read; nothing is published in those
+// cases, because a record put back without confirmed ownership is how one
+// asset ends up with two open tickets. restored is false with a nil err
+// when another ticket holds the claim.
 func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []byte) (restored bool, err error) {
-	kind, assetKey, requestID := lease.kind, lease.assetKey, lease.requestID
 	held, holdErr := p.transferClaimStillHeld(lease)
 	if holdErr != nil {
 		return false, holdErr
@@ -503,62 +496,139 @@ func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []by
 	if !held {
 		return false, nil
 	}
-	if phaseErr := p.updateTransferClaim(kind, assetKey, requestID, lease.attemptID, func(c *transferClaim) error {
+	return p.publishRestoredRecord(lease, key, raw)
+}
+
+// publishRestoredRecord writes a claimed ticket back inside a claim fence.
+// Each attempt stamps the claim into the restoring phase, writes the
+// record, then CAS-clears that exact claim value: a takeover landing in the
+// gap between "I still hold the claim" and the KV write loses the closing
+// CAS, and the bytes just written are withdrawn rather than left as a
+// second open ticket. Another ownership read before the write would not
+// catch that takeover — it lands after the read.
+//
+// A failed write is retried while the fence still holds. The record is what
+// a later Approve loads to pick a part-finished handover up, so a single
+// flaky write must not be what decides the ticket is gone for good. A write
+// that still fails leaves the claim mid-restore: the side effects may
+// already have moved the asset, so freeing it would let a second ticket act
+// on a half-finished handover; the lease ages out instead.
+func (p *Plugin) publishRestoredRecord(lease transferLease, key string, raw []byte) (restored bool, err error) {
+	var putErr error
+	for range transferRecordPutRetries {
+		gate, gateErr := p.enterRestoringPhase(lease)
+		if gateErr != nil {
+			if errors.Is(gateErr, errTransferClaimLost) {
+				return false, nil
+			}
+			return false, gateErr
+		}
+		if putErr = p.putPendingRequestKV(key, raw); putErr != nil {
+			continue
+		}
+		fenced, fenceErr := p.closeRestoringPhase(lease, gate)
+		switch {
+		case fenceErr != nil:
+			// The record is published and the claim could not be read back;
+			// the lease ages out on its own if nothing picks the ticket up.
+			return true, fenceErr
+		case fenced:
+			return true, nil
+		case p.transferClaimHeldByOtherRequest(lease.kind, lease.assetKey, lease.requestID):
+			// The write was not fenced and the asset belongs to another
+			// ticket now, so these bytes would be a second open ticket.
+			p.deleteTransferRecordIfUnchanged(key, raw)
+			return false, nil
+		default:
+			// Still this ticket's asset: a newer attempt on the same ticket
+			// re-stamped the claim, and withdrawing the bytes then would
+			// throw the ticket away. They stay, but this attempt did not
+			// own the write, so it does not claim the restore either.
+			return false, nil
+		}
+	}
+	return false, putErr
+}
+
+// enterRestoringPhase CAS-marks the claim as mid-restore and hands back the
+// exact bytes it wrote, which fence the record write that follows. The
+// generation is bumped as the phase changes: a takeover that already read
+// the claim and is about to CAS it away loses that race.
+func (p *Plugin) enterRestoringPhase(lease transferLease) ([]byte, error) {
+	var gate []byte
+	err := p.updateTransferClaim(lease.kind, lease.assetKey, lease.requestID, lease.attemptID, func(c *transferClaim) error {
 		c.phase = transferPhaseRestoring
 		c.generation++
 		c.leaseAt = model.GetMillis()
+		gate = c.encode()
 		return nil
-	}); phaseErr != nil {
-		if errors.Is(phaseErr, errTransferClaimLost) {
-			return false, nil
-		}
-		return false, phaseErr
+	})
+	if err != nil {
+		return nil, err
 	}
-	if putErr := p.publishRestoredRecord(key, raw); putErr != nil {
-		// The record could not be put back, so nothing names the handover
-		// any more. The claim is deliberately left in place: a bot whose
-		// ownership already moved must not have its asset handed to a
-		// second ticket, and the lease ages out on its own if nobody picks
-		// this one up.
-		return false, putErr
-	}
-	if phaseErr := p.updateTransferClaim(kind, assetKey, requestID, lease.attemptID, func(c *transferClaim) error {
-		c.phase = transferPhaseHeld
-		// The record is back, so no attempt owns the asset any more.
-		c.attemptID = ""
-		c.leaseAt = model.GetMillis()
-		return nil
-	}); phaseErr != nil {
-		if errors.Is(phaseErr, errTransferClaimLost) {
-			// The claim went away under a restore that should have been
-			// protected. Only another ticket owning the asset makes this
-			// record a second open ticket: a newer attempt on this same
-			// ticket legitimately republished it, and withdrawing the
-			// bytes then would throw the ticket away.
-			if p.transferClaimHeldByOtherRequest(kind, assetKey, requestID) {
-				p.deleteTransferRecordIfUnchanged(key, raw)
-			}
-			return false, nil
-		}
-		// The record is published and this request still owns the claim;
-		// the lease ages out on its own if nothing picks the ticket up.
-		return true, phaseErr
-	}
-	return true, nil
+	return gate, nil
 }
 
-// publishRestoredRecord writes a claimed ticket back, retrying a failed
-// write while the claim is still held in the restoring phase. The record is
-// what a later Approve loads to pick a part-finished handover up, so a
-// single flaky write must not be what decides the ticket is gone for good.
-func (p *Plugin) publishRestoredRecord(key string, raw []byte) error {
-	var err error
-	for range transferRecordPutRetries {
-		if err = p.putPendingRequestKV(key, raw); err == nil {
-			return nil
-		}
+// closeRestoringPhase drops the restoring mark while the claim still holds
+// exactly the bytes enterRestoringPhase wrote. fenced is false when
+// anything touched the claim while the record was being written.
+func (p *Plugin) closeRestoringPhase(lease transferLease, gate []byte) (fenced bool, err error) {
+	done := parseTransferClaim(gate)
+	done.phase = transferPhaseHeld
+	// The record is back, so no attempt owns the asset any more.
+	done.attemptID = ""
+	done.leaseAt = model.GetMillis()
+	// An incoming hook's ID is its secret URL and rides in assetKey, so the
+	// claim key must never reach the log.
+	ok, appErr := p.API.KVCompareAndSet(transferAssetClaimKey(lease.kind, lease.assetKey), gate, done.encode())
+	if appErr != nil {
+		return false, errors.Wrap(appErr, "failed to clear the transfer asset claim's restoring phase")
 	}
-	return err
+	return ok, nil
+}
+
+// writeTransferCheckpoint publishes rec at key while this attempt still
+// owns the asset: the lease is renewed immediately before the write, and
+// the write is a CAS against prev — the bytes this attempt last stored at
+// key, nil when it has stored none yet. Reading the claim before the write
+// is not enough on its own; the CAS is what stops a checkpoint landing on a
+// record another attempt owns.
+func (p *Plugin) writeTransferCheckpoint(lease transferLease, key string, prev []byte, rec any) ([]byte, error) {
+	if err := p.renewTransferLease(lease); err != nil {
+		return nil, errors.Wrap(err, "the asset claim could not be renewed before the checkpoint was recorded")
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to record the transfer checkpoint")
+	}
+	ok, appErr := p.API.KVCompareAndSet(key, prev, data)
+	if appErr != nil {
+		return nil, errors.Wrap(appErr, "failed to store the transfer checkpoint")
+	}
+	if !ok {
+		return nil, errors.New("the ticket changed while the handover was running")
+	}
+	p.trackOpenRequestKey(key)
+	return data, nil
+}
+
+// clearTransferCheckpoint removes exactly the checkpoint bytes this attempt
+// wrote, once the handover is finished. A checkpoint that survives is still
+// an open ticket naming side effects that already landed, so the caller
+// must not close the ticket as approved on an error here.
+func (p *Plugin) clearTransferCheckpoint(key string, raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	deleted, appErr := p.API.KVCompareAndDelete(key, raw)
+	if appErr != nil {
+		return errors.Wrap(appErr, "failed to clear the transfer checkpoint")
+	}
+	if !deleted {
+		return errors.New("the ticket changed while the handover was finishing")
+	}
+	p.untrackOpenRequestKey(key)
+	return nil
 }
 
 // transferClaimHeldByOtherRequest reports whether the asset claim now names

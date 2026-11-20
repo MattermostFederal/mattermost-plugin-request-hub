@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,6 +45,63 @@ func storedBugReport(t *testing.T, store map[string][]byte) *bugReportRequest {
 		Events: []auditEvent{{At: 1, Event: eventSubmitted}},
 	})
 	return req
+}
+
+// Turning a Team Admin toggle on seeds Team Admins into the audit channel,
+// so reports already sitting there have to be taken out and re-sent as
+// System Admin DMs before the new members arrive.
+func TestRedactBugReportAuditCards_MovesChannelCardsToSystemAdminDMs(t *testing.T) {
+	p, api, store := bugReportPlugin(t)
+	cfg := *p.getConfiguration()
+	cfg.AllowTeamAdminApprovers = true
+	p.setConfiguration(&cfg)
+
+	req := storedBugReport(t, store)
+	store[kvApprovalCardsPrefix+req.ID] = recordJSON(t, []string{"card1"})
+	store[kvOpenRequestIndex] = recordJSON(t, []string{kvBugReportRequestPrefix + req.ID})
+
+	var deleted []string
+	api.On("DeletePost", mock.Anything).Return(func(id string) *model.AppError {
+		deleted = append(deleted, id)
+		return nil
+	}).Maybe()
+	api.On("GetUsers", mock.Anything).Return([]*model.User{sysadmin("admin1")}, nil).Maybe()
+	api.On("GetDirectChannel", "admin1", "bot-user-id").Return(&model.Channel{Id: "dm-admin"}, nil).Maybe()
+	var dmChannels []string
+	api.On("CreatePost", mock.Anything).Return(func(post *model.Post) (*model.Post, *model.AppError) {
+		dmChannels = append(dmChannels, post.ChannelId)
+		return &model.Post{Id: "dm-card"}, nil
+	}).Maybe()
+
+	p.redactBugReportAuditCards()
+
+	require.Equal(t, []string{"card1"}, deleted, "the channel copy goes")
+	require.Equal(t, []string{"dm-admin"}, dmChannels, "Acknowledge is still reachable, by DM")
+
+	var moved bugReportRequest
+	require.NoError(t, json.Unmarshal(store[kvBugReportRequestPrefix+req.ID], &moved))
+	require.Empty(t, moved.ApprovalChannelID)
+	require.Empty(t, moved.ApprovalPostID)
+
+	// Idempotent: a second sweep has nothing left to move.
+	deleted, dmChannels = nil, nil
+	p.redactBugReportAuditCards()
+	require.Empty(t, deleted)
+	require.Empty(t, dmChannels)
+}
+
+// With both toggles off the audit channel is System Admins only, which is
+// the audience the report was promised. Nothing moves.
+func TestRedactBugReportAuditCards_LeavesCardsAloneWhileTheChannelIsAdminOnly(t *testing.T) {
+	p, api, store := bugReportPlugin(t)
+	req := storedBugReport(t, store)
+	store[kvApprovalCardsPrefix+req.ID] = recordJSON(t, []string{"card1"})
+	store[kvOpenRequestIndex] = recordJSON(t, []string{kvBugReportRequestPrefix + req.ID})
+
+	p.redactBugReportAuditCards()
+
+	api.AssertNotCalled(t, "DeletePost", mock.Anything)
+	require.NotEmpty(t, store[kvBugReportRequestPrefix+req.ID])
 }
 
 func TestSubmitBugReportRequest_PostsToAuditChannel(t *testing.T) {

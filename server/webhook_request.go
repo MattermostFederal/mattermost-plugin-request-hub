@@ -368,6 +368,16 @@ func (p *Plugin) webhookStillExists(webhookType, hookID, adminUserID string) (bo
 		}
 		return true, nil
 	}
+	if p.incomingWebhookChannelFn != nil && webhookType == webhookTypeIncoming {
+		_, err := p.incomingWebhookChannelFn(hookID, adminUserID)
+		if err != nil {
+			if isNotFoundErr(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
 	client, cleanup, err := p.transferClient(adminUserID)
 	if err != nil {
 		return false, err

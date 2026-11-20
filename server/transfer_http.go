@@ -187,12 +187,16 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		// never offers a hook the submit check will turn down — or hide one
 		// whose index row has fallen behind a reassign.
 		owner, liveKnown := p.webhookOwnerForChecksWith(&entry, reads)
-		if !liveKnown && userID != owner && !caller.IsSystemAdmin() {
+		if !liveKnown && !caller.IsSystemAdmin() && userID != owner && userID != e.RequesterID {
 			// The index row is the last thing Request Hub was told, not
 			// who owns the hook now. A stale "owner deactivated" widens
 			// canNominateTransfer to everyone who can see the channel, so
 			// an unverified row must not be what hands a hook — and an
-			// incoming hook's handle — to a channel member.
+			// incoming hook's handle — to a channel member. The indexed
+			// owner and the original requester are named on the row
+			// itself and submit accepts a nomination from either on the
+			// same unverified row, so hiding the hook from them only
+			// leaves the picker disagreeing with the form behind it.
 			continue
 		}
 		asset := transferAsset{assetType: "webhook", assetID: e.HookID, ownerUserID: owner, requesterID: e.RequesterID, channelID: e.ChannelID}

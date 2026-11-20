@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -228,6 +229,92 @@ func (p *Plugin) submitBugReportRequest(requesterID, category, aboutKind, aboutO
 		where = "directly to the System Admins"
 	}
 	return "Your report was sent " + where + ". You'll get a DM update when one acknowledges it.", nil
+}
+
+// redactBugReportAuditCards takes every open bug report card back out of the
+// audit channel once that channel's membership can reach past System Admins,
+// and re-sends it as System Admin DMs. Reports filed while both approver
+// toggles were off went into the channel on the promise that only System
+// Admins would read them, and turning a toggle on seeds Team Admins into
+// that channel — so the cards have to go before the members arrive.
+func (p *Plugin) redactBugReportAuditCards() {
+	if !p.auditChannelMayIncludeTeamAdmins() {
+		return
+	}
+	keys, err := p.listRequestKeys()
+	if err != nil {
+		p.API.LogWarn("bug report redaction: could not list open requests", "error", err.Error())
+		return
+	}
+	for _, key := range keys {
+		if strings.HasPrefix(key, kvBugReportRequestPrefix) {
+			p.redactBugReportAuditCard(key)
+		}
+	}
+}
+
+// redactBugReportAuditCard moves one bug report's channel card to System
+// Admin DMs. The record's post fields are cleared first, by CAS, so the
+// claim is what decides which caller does the deleting; the channel copy
+// then goes before the DMs are sent, because losing the Acknowledge button
+// costs an acknowledgement while leaving the card up costs the reporter the
+// audience they were promised. The reporter's DM thread and the audit
+// history stay as they are — those were never channel-wide.
+func (p *Plugin) redactBugReportAuditCard(key string) {
+	raw, appErr := p.API.KVGet(key)
+	if appErr != nil || raw == nil {
+		return
+	}
+	var req bugReportRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		p.API.LogWarn("bug report redaction: could not read record", "key", key, "error", err.Error())
+		return
+	}
+	if req.ApprovalChannelID == "" {
+		return
+	}
+	cards, cardErr := p.loadApprovalCards(req.ID)
+	if cardErr != nil {
+		p.API.LogWarn("bug report redaction: could not load cards", "request_id", req.ID, "error", cardErr.Error())
+		return
+	}
+	if req.ApprovalPostID != "" && !slices.Contains(cards, req.ApprovalPostID) {
+		cards = append(cards, req.ApprovalPostID)
+	}
+
+	moved := req
+	moved.ApprovalPostID = ""
+	moved.ApprovalChannelID = ""
+	data, marshalErr := json.Marshal(&moved)
+	if marshalErr != nil {
+		p.API.LogWarn("bug report redaction: could not rewrite record", "request_id", req.ID, "error", marshalErr.Error())
+		return
+	}
+	claimed, appErr := p.API.KVCompareAndSet(key, raw, data)
+	if appErr != nil {
+		p.API.LogWarn("bug report redaction: could not claim record", "request_id", req.ID, "error", appErr.Error())
+		return
+	}
+	if !claimed {
+		// Another sweep took it, or it was acknowledged while this one
+		// read it. Either way its card is no longer this caller's to move.
+		return
+	}
+
+	p.deleteApprovalCardPosts(cards)
+	p.deleteApprovalCards(req.ID)
+	p.API.LogInfo("bug report redaction: card removed from audit channel", "request_id", req.ID, "cards", len(cards))
+
+	requester, _ := p.API.GetUser(req.RequesterID)
+	posted, postErr := p.postApprovalToSystemAdmins(p.bugReportAttachment(&moved, requesterOrPlaceholder(requester, req.RequesterID)))
+	if postErr != nil {
+		p.API.LogWarn("bug report redaction: could not DM the report to System Admins",
+			"request_id", req.ID, "error", postErr.Error())
+		return
+	}
+	if saveErr := p.saveApprovalCards(req.ID, posted); saveErr != nil {
+		p.API.LogWarn("bug report redaction: could not record the new cards", "request_id", req.ID, "error", saveErr.Error())
+	}
 }
 
 func (p *Plugin) bugReportAttachment(req *bugReportRequest, requester *model.User) *model.MessageAttachment {

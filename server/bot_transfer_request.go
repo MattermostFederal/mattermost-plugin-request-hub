@@ -15,15 +15,16 @@ const (
 
 	botTransferRequestsDisabledMsg = "Bot transfer/retire requests are currently disabled by an administrator."
 
-	// resumeAfterAssignBlockedMsg is shown when something tries to close a
+	// resumeAfterAssignBlockedMsg is shown to an approver who cannot close a
 	// ticket whose approval already reached AssignBot. The record is the
-	// only note that the bot may have moved, so Approve is the only way
-	// out of that state however old the ticket is.
-	resumeAfterAssignBlockedMsg = "An earlier approval may already have moved this bot, so the request can't be closed — click Approve to finish the handover. If it should be abandoned instead, a System Admin has to put the ownership and the tokens back by hand first."
+	// only note that the bot may have moved, so Approve is the way out of
+	// that state however old the ticket is — or a System Admin puts the bot
+	// back by hand and Deny closes it as reconciled.
+	resumeAfterAssignBlockedMsg = "An earlier approval may already have moved this bot, so the request can't be closed — click Approve to finish the handover. To abandon it instead, a System Admin has to put the ownership and the tokens back by hand (or delete the bot) and then Deny, which closes it as reconciled."
 
 	// resumeAfterAssignWithdrawBlockedMsg is the same refusal for the
 	// requester's Withdraw button, which has no Approve to offer.
-	resumeAfterAssignWithdrawBlockedMsg = "An earlier approval may already have moved this bot, so this request can't be withdrawn — an approver has to finish the handover."
+	resumeAfterAssignWithdrawBlockedMsg = "An earlier approval may already have moved this bot, so this request can't be withdrawn — an approver has to finish the handover, or a System Admin has to put the bot back and close the request."
 )
 
 // botTransferRequest transfers an RH-managed bot to a new owner, or retires
@@ -54,6 +55,14 @@ type botTransferRequest struct {
 	// those checks are skipped and the remaining effects (index, rotation)
 	// are picked up instead.
 	ResumeAfterAssign bool `json:"resume_after_assign,omitempty"`
+	// AssignAttempted marks a ticket whose AssignBot came back ambiguous —
+	// a timeout, a 5xx, a dropped connection — while the owner read that
+	// followed still showed the previous owner. Nothing says ownership
+	// moved, so expiry, Deny and the nominate checks all stay in force;
+	// but the call can still land afterwards, so an Approve that finds the
+	// successor in place finishes the handover rather than refusing a
+	// ticket that supposedly never started one.
+	AssignAttempted bool `json:"assign_attempted,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -391,6 +400,14 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 	// state, so it is let through however old the ticket is; Deny is
 	// refused below, whatever the ticket's age.
 	expired := (canSec || canSys) && requestExpired(req.CreatedAt, p.getConfiguration().ExpiryDays(), model.GetMillis())
+	if expired && req.AssignAttempted {
+		// Expiring deletes the only record of an ambiguous AssignBot. The
+		// call can land after the owner read that followed it, so check
+		// the bot before the record goes.
+		if _, msg := p.checkBotTransferReconciled(req); msg != "" {
+			return decisionResult{Reply: msg}
+		}
+	}
 	if days := p.getConfiguration().ExpiryDays(); expired && !req.ResumeAfterAssign {
 		return p.expireRequest(cards, expiredRequest{
 			kvKey: key, raw: rawReq, kind: pendingKindBotTransfer, requestID: req.ID, requesterID: req.RequesterID,
@@ -409,9 +426,26 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		}
 		// The ticket is the only record that an approval already reached
 		// AssignBot, so denying it at any age loses track of a bot that may
-		// already belong to the successor.
+		// already belong to the successor. A System Admin who has put the
+		// bot back — or removed it — closes it through the reconcile path
+		// instead; everyone else is sent to Approve.
 		if req.ResumeAfterAssign {
-			return decisionResult{Reply: resumeAfterAssignBlockedMsg}
+			if !actingUser.IsSystemAdmin() {
+				return decisionResult{Reply: resumeAfterAssignBlockedMsg}
+			}
+			state, msg := p.checkBotTransferReconciled(req)
+			if msg != "" {
+				return decisionResult{Reply: msg}
+			}
+			return p.closeReconciledBotTransfer(req, actingUser, requester, cards, rawReq, key, state)
+		}
+		// An ambiguous AssignBot can still land after the owner read that
+		// followed it, so a Deny checks once more before it throws the only
+		// record of the attempt away.
+		if req.AssignAttempted {
+			if _, msg := p.checkBotTransferReconciled(req); msg != "" {
+				return decisionResult{Reply: msg}
+			}
 		}
 		if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
 			return res
@@ -466,6 +500,68 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 	return p.fulfillBotTransferRequest(req, actingUser, requester, cards, rawReq, key)
 }
 
+// botTransferReconcileState is the asset state behind a ticket whose
+// approval may already have moved the bot.
+type botTransferReconcileState struct {
+	// botGone is true when the bot no longer exists at all.
+	botGone bool
+	// ownerUserID is the bot's live owner when it still exists.
+	ownerUserID string
+}
+
+// checkBotTransferReconciled reads the bot a part-finished handover left
+// behind. msg is the refusal when the ticket must not be closed yet: it is
+// the only note that the bot may have moved, so it is thrown away only on
+// evidence that nothing is left half-done — the bot is gone, or it does not
+// belong to the successor.
+func (p *Plugin) checkBotTransferReconciled(req *botTransferRequest) (state botTransferReconcileState, msg string) {
+	owner, err := p.liveBotOwnerID(req.BotUserID, "")
+	switch {
+	case errors.Is(err, errBotGone):
+		return botTransferReconcileState{botGone: true}, ""
+	case err != nil:
+		return state, fmt.Sprintf("Could not check who owns bot @%s now, so this request can't be closed yet — try again.", req.BotUsername)
+	case req.Action == transferActionTransfer && owner != "" && owner == req.NewOwnerUserID:
+		return state, fmt.Sprintf("Bot @%s already belongs to %s, so closing this request would lose track of the handover — click Approve to finish it, or move the bot back and revoke the tokens you don't want live, then Deny again.",
+			req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
+	default:
+		return botTransferReconcileState{ownerUserID: owner}, ""
+	}
+}
+
+// closeReconciledBotTransfer closes a handover a System Admin has put right
+// by hand. Nothing is left for Approve to finish, so the ticket and the
+// asset claim go together — which is what lets a fresh request be filed
+// against the bot.
+func (p *Plugin) closeReconciledBotTransfer(req *botTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string, state botTransferReconcileState) decisionResult {
+	if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
+		return res
+	}
+	p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
+	verb := strings.ToLower(transferActionLabel(req.Action))
+	found := fmt.Sprintf("bot @%s belongs to %s", req.BotUsername, p.mentionList([]string{state.ownerUserID}))
+	if state.botGone {
+		found = fmt.Sprintf("bot @%s no longer exists", req.BotUsername)
+	}
+	p.decisionEvent(cards, eventReconciled,
+		fmt.Sprintf("@%s closed the request to %s bot @%s from %s after reconciling it by hand: %s",
+			actingUser.Username, verb, req.BotUsername, requesterUsername(requester, req.RequesterID), found),
+		map[string]any{
+			"bot_user_id": req.BotUserID, "action": req.Action,
+			"bot_gone": state.botGone, "live_owner_id": state.ownerUserID,
+			"new_owner_id": req.NewOwnerUserID,
+		})
+	outcome := fmt.Sprintf("🧹 Closed by @%s after reconciling: %s.", actingUser.Username, found)
+	return p.finish(cards, "", outcome, ticketClose{
+		RequesterID: req.RequesterID, DMRootPostID: req.DMRootPostID, DMChannelID: req.DMChannelID,
+		Reconciled: true, ApproverUsername: actingUser.Username,
+		CardTitle:   "Bot " + transferActionLabel(req.Action) + " Request Closed",
+		CardText:    fmt.Sprintf("A System Admin closed your request to %s bot **@%s** after putting the bot back by hand. Submit it again if you still need it.", verb, req.BotUsername),
+		StatusLine:  outcome,
+		ThreadReply: fmt.Sprintf("🧹 **Closed** by @%s after reconciling the bot by hand.", actingUser.Username),
+	})
+}
+
 // botTransferApprovalBlocker re-checks before final approval that a transfer
 // still has a valid new owner, that the bot still exists, and that the
 // nominator ACL still holds against the live index owner.
@@ -473,7 +569,9 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 // recovery is true when this approval is finishing a handover whose
 // AssignBot already landed. Owner-based checks are skipped then — every one
 // of them would refuse the attempt that has to finish the index row and the
-// token rotation.
+// token rotation. A ticket only carrying AssignAttempted keeps every check
+// unless the bot really is the successor's: nothing says ownership moved,
+// so nothing may be waved through on the strength of the attempt alone.
 func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) (msg string, recovery bool) {
 	if _, appErr := p.API.GetBot(req.BotUserID, true); appErr != nil {
 		return fmt.Sprintf("Bot @%s no longer exists. Deny this request instead.", req.BotUsername), false
@@ -498,8 +596,10 @@ func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) (msg string
 	}
 	if req.Action == transferActionTransfer && ownerID != "" && ownerID == req.NewOwnerUserID {
 		// A retry of an approval that got as far as AssignBot: the bot
-		// already belongs to the successor, so finish the rest.
-		if req.ResumeAfterAssign {
+		// already belongs to the successor, so finish the rest. An
+		// ambiguous AssignBot counts here too — the call landed after the
+		// owner read that followed it.
+		if req.ResumeAfterAssign || req.AssignAttempted {
 			return "", true
 		}
 		// No approval of this ticket ever reached AssignBot, so the bot was
@@ -611,12 +711,44 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 			resume.ResumeAfterAssign = true
 			return p.restoreBotTransferAfterFailure(&resume, actingUser, requester, cards,
 				p.botTransferRecordBytes(&resume, rawReq), key, assignErr)
-		case owner != req.NewOwnerUserID:
+		case owner != req.NewOwnerUserID && serverRefused(assignErr):
+			// The server turned the call down, so ownership cannot have
+			// moved and the ticket goes back as it was.
 			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, assignErr)
+		case owner != req.NewOwnerUserID:
+			// A timeout, a 5xx or a dropped connection: the owner reads as
+			// the previous one, but the call can still land, and the read
+			// itself can be answered by a replica that has not caught up.
+			// Mark the attempt so a later Approve that finds the successor
+			// in place finishes the handover instead of refusing a ticket
+			// that supposedly never started one. Ownership has not moved as
+			// far as anyone can tell, so expiry, Deny and the nominate
+			// checks all stay in force.
+			attempted := *req
+			attempted.AssignAttempted = true
+			return p.restoreBotTransferAfterFailure(&attempted, actingUser, requester, cards,
+				p.botTransferRecordBytes(&attempted, rawReq), key, assignErr)
 		default:
 			partialErrors = append(partialErrors, "the reassign call reported an error ("+assignErr.Error()+") but the bot already belongs to the new owner")
 		}
 	}
+
+	// The bot is the successor's now, and claiming the approval deleted the
+	// pending record. Until the index row and the tokens are done this
+	// checkpoint is the only thing that says a handover is half-finished,
+	// so it goes in before either of them: a crash in between otherwise
+	// leaves the previous owner's tokens live on a bot that is no longer
+	// theirs, with no ticket for anyone to finish.
+	resume := *req
+	resume.ResumeAfterAssign = true
+	resume.AssignAttempted = false
+	resumeRaw, resumeErr := p.writeTransferCheckpoint(resume.transferLease(), key, nil, &resume)
+	if resumeErr != nil {
+		return p.restoreBotTransferAfterFailure(&resume, actingUser, requester, cards,
+			p.botTransferRecordBytes(&resume, rawReq), key,
+			errors.Wrap(resumeErr, "the bot was reassigned but the handover could not be recorded; retry Approve to finish the index row and the token rotation"))
+	}
+
 	if idxErr := p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID); idxErr != nil {
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
 	}
@@ -628,6 +760,14 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		rotation := p.rotateBotTokenForTransfer(req, actingUser.Id, lease)
 		revoked, rotated, tokenExpiresAt = rotation.revoked, rotation.rotated, rotation.expiresAt
 		partialErrors = append(partialErrors, rotation.partialErrors...)
+	}
+
+	// Everything is done, so the checkpoint goes. A checkpoint left behind
+	// is an open ticket naming a handover nothing resolves, so the ticket
+	// is not closed as approved until it is gone.
+	if clearErr := p.clearTransferCheckpoint(key, resumeRaw); clearErr != nil {
+		return p.restoreBotTransferAfterFailure(&resume, actingUser, requester, cards, resumeRaw, key,
+			errors.Wrap(clearErr, "the handover finished but its checkpoint could not be cleared; retry Approve to close the request"))
 	}
 
 	p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
@@ -819,7 +959,7 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 // not be kept. A handover that may already have moved the bot is not
 // something the requester can put right by filing the same request again.
 func (p *Plugin) botTransferReconcileAdvice(req *botTransferRequest) string {
-	if req.Action == transferActionTransfer && req.ResumeAfterAssign {
+	if req.Action == transferActionTransfer && (req.ResumeAfterAssign || req.AssignAttempted) {
 		return fmt.Sprintf("Bot @%s may already belong to %s: a System Admin has to check its owner and its tokens, then finish or undo the handover by hand.",
 			req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
 	}

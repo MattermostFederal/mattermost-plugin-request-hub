@@ -66,6 +66,14 @@ func stubLogs(api *plugintest.API) {
 	stubLogsWithStripKV(api)
 }
 
+// stubNoOpenRequests answers the KV scan behind listRequestKeys with an
+// empty store. Needed by tests that seed Team Admins: that path sweeps the
+// audit channel for bug report cards first. Register it after any KVList
+// expectation the test cares about — testify takes the first match.
+func stubNoOpenRequests(api *plugintest.API) {
+	api.On("KVList", mock.Anything, mock.Anything).Return([]string{}, nil).Maybe()
+}
+
 // stubLogsWithStripKV is stubLogs plus a handle on the in-memory adopt-strip
 // marker store.
 func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {

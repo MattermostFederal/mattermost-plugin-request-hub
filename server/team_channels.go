@@ -1004,6 +1004,10 @@ func (p *Plugin) syncPrimaryTeamAdminVisibility() {
 	if err != nil || team == nil {
 		return
 	}
+	// Before the members arrive, not after: reports filed while the audit
+	// channel was System Admin-only must not be sitting there when Team
+	// Admins are seeded into it.
+	p.redactBugReportAuditCards()
 	channels := p.primaryTAVisibilityChannels()
 	adminIDs := p.listTeamAdminIDs(team.Id)
 	if len(channels) > 0 {
@@ -1024,6 +1028,7 @@ func (p *Plugin) ensurePrimaryTeamAdminVisibilityForUser(userID string) {
 	if userID == "" || userID == p.botUserID || !p.isApprovalTeamAdmin(userID) {
 		return
 	}
+	p.redactBugReportAuditCards()
 	for _, ch := range p.primaryTAVisibilityChannels() {
 		p.seedTAVisibility(ch, userID)
 	}
@@ -1062,6 +1067,7 @@ func (p *Plugin) reconcilePrimaryTeamAdminVisibilityForUser(user *model.User) {
 	if !isTeamAdminMember(member) {
 		return
 	}
+	p.redactBugReportAuditCards()
 	for _, ch := range p.primaryTAVisibilityChannels() {
 		p.seedTAVisibility(ch, user.Id)
 	}

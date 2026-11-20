@@ -65,6 +65,18 @@ func (p *Plugin) webhookReassignUnsupported() bool {
 	return ok && major >= 9
 }
 
+// serverRefused reports an error Mattermost clearly turned down (a 4xx), so
+// the call it names cannot have taken effect. Anything else — a timeout, a
+// 5xx, a dropped connection — may have landed with its response lost, and
+// callers have to treat the outcome as unknown rather than as a no-op.
+func serverRefused(err error) bool {
+	var appErr *model.AppError
+	if !errors.As(err, &appErr) || appErr == nil {
+		return false
+	}
+	return appErr.StatusCode >= http.StatusBadRequest && appErr.StatusCode < http.StatusInternalServerError
+}
+
 // transferAsset is the minimum an ACL check needs about a bot or webhook.
 type transferAsset struct {
 	assetType   string // "bot" | "webhook"
@@ -322,21 +334,40 @@ func (p *Plugin) liveWebhookScope(webhookType, hookID, adminUserID string) (owne
 	return owner, channelID, true
 }
 
-// webhookOwnerForChecks is the owner the nominate ACL and successor checks
-// run against: the live Mattermost owner when it can be read, otherwise the
-// index row. A live owner that disagrees with the index is written back,
-// so a reassign whose index write failed stops handing transfer rights to
-// the previous owner.
-func (p *Plugin) webhookOwnerForChecks(index *webhookIndexEntry, adminUserID string) string {
-	reads := p.oneShotReads(adminUserID)
+// webhookScopeForChecks is the owner and the channel a submit runs its
+// checks against: Mattermost's own values when they can be read, otherwise
+// the index row. A live value that disagrees with the index is written
+// back, so a ticket filed after the hook moved is filed against the channel
+// it sits in now. Approval re-checks the same place, so "submit a new
+// request for the channel it is in now" is advice a requester can act on
+// rather than one that files the same refusal again. index is updated in
+// place to match what was adopted.
+func (p *Plugin) webhookScopeForChecks(index *webhookIndexEntry, readerUserID string) (owner, channelID string) {
+	if index == nil {
+		return "", ""
+	}
+	reads := p.oneShotReads(readerUserID)
 	defer reads.close()
-	owner, _ := p.webhookOwnerForChecksWith(index, reads)
-	return owner
+	owner, _ = p.webhookOwnerForChecksWith(index, reads)
+	channelID = index.ChannelID
+	live, known := reads.webhookChannelID(index.WebhookType, index.HookID)
+	if !known || live == channelID {
+		return owner, channelID
+	}
+	if err := p.updateWebhookIndexChannel(index.HookID, live); err != nil {
+		p.API.LogWarn("failed to repair a stale webhook index channel", "request_id", index.RequestID, "error", err.Error())
+	}
+	index.ChannelID = live
+	return owner, live
 }
 
-// webhookOwnerForChecksWith is webhookOwnerForChecks over a shared read
-// batch. liveKnown is false when Mattermost could not be asked, so callers
-// that list assets can tell a verified owner from the index's last word.
+// webhookOwnerForChecksWith is the owner the nominate ACL and successor
+// checks run against: the live Mattermost owner when it can be read,
+// otherwise the index row, which is written back when the two disagree so a
+// reassign whose index write failed stops handing transfer rights to the
+// previous owner. liveKnown is false when Mattermost could not be asked, so
+// callers that list assets can tell a verified owner from the index's last
+// word.
 func (p *Plugin) webhookOwnerForChecksWith(index *webhookIndexEntry, reads *transferReads) (owner string, liveKnown bool) {
 	if index == nil {
 		return "", false

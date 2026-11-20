@@ -283,6 +283,25 @@ func (p *Plugin) updateWebhookIndexOwner(hookID, newOwnerID string) error {
 	return nil
 }
 
+// updateWebhookIndexChannel records where a webhook posts now. The channel
+// decides who may step in once the hook is orphaned and who the successor
+// is vetted against, so a row that has fallen behind a move is repaired
+// rather than carried into the next ticket.
+func (p *Plugin) updateWebhookIndexChannel(hookID, channelID string) error {
+	_, err := p.mutateWebhookIndex(hookID, func(e *webhookIndexEntry) error {
+		if e == nil {
+			return errors.New("webhook index entry not found")
+		}
+		e.ChannelID = channelID
+		return nil
+	})
+	if err != nil {
+		p.API.LogWarn("failed to update webhook index channel", "error", err.Error())
+		return err
+	}
+	return nil
+}
+
 // ensureIncomingTransferHandle returns the opaque public asset id for an
 // incoming hook, creating and persisting a handle when older index rows lack
 // one. Outgoing hooks keep returning the real HookID. Returns empty when the

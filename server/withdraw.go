@@ -68,6 +68,14 @@ func (p *Plugin) decideWithdraw(actingUserID, requestID, clickedPostID string) d
 		if r.ResumeAfterAssign {
 			return decisionResult{Reply: resumeAfterAssignWithdrawBlockedMsg}
 		}
+		// An ambiguous AssignBot can land after the owner read that
+		// followed it, so the bot is looked at once more before the only
+		// record of the attempt goes.
+		if r.AssignAttempted {
+			if _, msg := p.checkBotTransferReconciled(r); msg != "" {
+				return decisionResult{Reply: resumeAfterAssignWithdrawBlockedMsg}
+			}
+		}
 	}
 	var posts ticketPostIDs
 	_ = json.Unmarshal(raw, &posts)

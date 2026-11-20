@@ -12,6 +12,37 @@ import (
 func TestTicketSubmittedIntro(t *testing.T) {
 	require.Contains(t, ticketSubmittedIntro("channel request"), "channel request")
 	require.Contains(t, ticketSubmittedIntro(""), "request has been submitted")
+	// The button is added by postTicketCreatedDM, so the intro itself must
+	// not promise it.
+	require.NotContains(t, ticketSubmittedIntro("channel request"), "Withdraw")
+	require.NotContains(t, ticketAcknowledgedIntro("bug report"), "Withdraw")
+}
+
+// The DM only names the Withdraw button on a card that carries it.
+func TestPostTicketCreatedDM_MentionsWithdrawOnlyWithTheButton(t *testing.T) {
+	setup := func() (*Plugin, *[]*model.Post) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		p := newTestPlugin(api)
+		posted := &[]*model.Post{}
+		api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
+		api.On("CreatePost", mock.Anything).Return(func(post *model.Post) (*model.Post, *model.AppError) {
+			*posted = append(*posted, post)
+			return &model.Post{Id: "dm-root", ChannelId: "dm1"}, nil
+		})
+		return p, posted
+	}
+
+	p, posted := setup()
+	p.postTicketCreatedDM("u_req", &model.MessageAttachment{Title: "Channel request"}, ticketSubmittedIntro("channel request"), "r1")
+	require.Len(t, *posted, 1)
+	require.Contains(t, (*posted)[0].Message, withdrawIntroSentence)
+
+	// No request ID means no Withdraw action, so no Withdraw sentence.
+	p, posted = setup()
+	p.postTicketCreatedDM("u_req", &model.MessageAttachment{Title: "Channel request"}, ticketSubmittedIntro("channel request"), "")
+	require.Len(t, *posted, 1)
+	require.NotContains(t, (*posted)[0].Message, "Withdraw")
 }
 
 func TestPostTicketCreatedDM(t *testing.T) {

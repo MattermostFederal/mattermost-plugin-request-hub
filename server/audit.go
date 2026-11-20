@@ -56,6 +56,7 @@ const (
 	eventLost                = "lost"
 	eventUndelivered         = "undelivered"
 	eventClosedAfterTeardown = "closed_after_teardown"
+	eventReconciled          = "reconciled"
 	eventDecisionRefused     = "decision_refused"
 	eventMessageRelayed      = "message_relayed"
 	eventMessageDropped      = "message_dropped"
@@ -115,6 +116,7 @@ var auditEventSpecs = map[string]auditEventSpec{
 	eventLost:                {status: historyLost, card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventUndelivered:         {status: historyFailed, card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventClosedAfterTeardown: {status: historyClosed, card: auditNote, level: auditLevelLifecycle},
+	eventReconciled:          {status: historyClosed, card: auditNote, level: auditLevelDecisions},
 	eventDecisionRefused:     {card: auditRefused, level: auditLevelAll, failed: true, existingOnly: true},
 	eventMessageRelayed:      {card: auditMessage, level: auditLevelAll},
 	eventMessageDropped:      {card: auditRefused, level: auditLevelAll, failed: true},

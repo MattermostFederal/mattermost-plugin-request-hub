@@ -78,6 +78,10 @@ type Plugin struct {
 	// retire+recreate can refuse a hook that moved channel
 	// (nil in production → live REST Get).
 	incomingWebhookChannelFn func(hookID, adminUserID string) (string, error)
+	// listIncomingWebhooksFn lists a team's live incoming hooks so the index
+	// backfill can identify one from an approval that recorded no hook ID
+	// (nil in production → REST GetIncomingWebhooksForTeam).
+	listIncomingWebhooksFn func(teamID, adminUserID string) ([]*model.IncomingWebhook, error)
 	// getOutgoingWebhookCallbackFn returns the first callback URL for an
 	// outgoing hook on retire+recreate (nil in production → live REST Get).
 	// Prefer getOutgoingWebhookForRecreateFn when tests need full fidelity.

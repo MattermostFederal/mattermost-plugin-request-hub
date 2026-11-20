@@ -25,6 +25,95 @@ func backfillHistory(t *testing.T, requestID, requesterID, hookID string) []byte
 	})
 }
 
+// backfillIncomingHistory is an approved standalone incoming webhook
+// request. Incoming approvals record a transfer handle rather than a hook
+// ID — the ID is the secret URL — so there is nothing in history to index
+// from.
+func backfillIncomingHistory(t *testing.T, requestID, requesterID, displayName string) []byte {
+	t.Helper()
+	snap, err := json.Marshal(&webhookRequest{
+		ID: requestID, RequesterID: requesterID, WebhookType: webhookTypeIncoming,
+		ChannelID: "ch1", TeamID: "t1", DisplayName: displayName,
+	})
+	require.NoError(t, err)
+	return recordJSON(t, &requestHistory{
+		RequestID: requestID, Kind: pendingKindWebhook, RequesterID: requesterID, Status: historyApproved,
+		Request: snap,
+		Events:  []auditEvent{{Event: eventApproved, Detail: map[string]any{"transfer_handle": model.NewId()}}},
+	})
+}
+
+// An incoming hook is identified against the live hooks, by the fields the
+// create call took from the request. No secret goes into the index beyond
+// the hook ID the index is keyed on everywhere else.
+func TestBackfillWebhookIndex_IdentifiesIncomingHooksFromTheLiveList(t *testing.T) {
+	requesterID := model.NewId()
+	hookID := model.NewId()
+
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+	store[kvHistoryPrefix+"r-in"] = backfillIncomingHistory(t, "r-in", requesterID, "Alerts")
+
+	adminID := model.NewId()
+	api.On("GetUsers", &model.UserGetOptions{Role: model.SystemAdminRoleId, Active: true, Page: 0, PerPage: 1}).
+		Return([]*model.User{{Id: adminID}}, nil).Once()
+	listed := 0
+	p.listIncomingWebhooksFn = func(teamID, actingID string) ([]*model.IncomingWebhook, error) {
+		listed++
+		require.Equal(t, "t1", teamID)
+		require.Equal(t, adminID, actingID)
+		return []*model.IncomingWebhook{
+			{Id: hookID, ChannelId: "ch1", TeamId: "t1", UserId: requesterID, DisplayName: "Alerts"},
+			// Same channel, somebody else's hook.
+			{Id: model.NewId(), ChannelId: "ch1", TeamId: "t1", UserId: model.NewId(), DisplayName: "Alerts"},
+		}, nil
+	}
+	p.incomingWebhookChannelFn = func(string, string) (string, error) { return "ch1", nil }
+	p.liveWebhookOwnerFn = func(string, string, string) (string, error) { return requesterID, nil }
+
+	p.backfillWebhookIndexFromHistory()
+
+	indexed, err := p.loadWebhookIndex(hookID)
+	require.NoError(t, err)
+	require.NotNil(t, indexed)
+	require.Equal(t, webhookTypeIncoming, indexed.WebhookType)
+	require.Equal(t, requesterID, indexed.OwnerUserID)
+	require.NotEmpty(t, indexed.TransferHandle, "the picker hands out the handle, never the hook ID")
+	require.Equal(t, 1, listed, "a team's hooks are listed once per run")
+}
+
+// Two hooks that both fit the request is not a hook anyone can name.
+// Guessing would hand one hook's transfer rights to the other's owner.
+func TestBackfillWebhookIndex_SkipsAmbiguousIncomingMatches(t *testing.T) {
+	requesterID := model.NewId()
+	first, second := model.NewId(), model.NewId()
+
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+	store[kvHistoryPrefix+"r-in"] = backfillIncomingHistory(t, "r-in", requesterID, "Alerts")
+
+	api.On("GetUsers", &model.UserGetOptions{Role: model.SystemAdminRoleId, Active: true, Page: 0, PerPage: 1}).
+		Return([]*model.User{{Id: model.NewId()}}, nil).Once()
+	p.listIncomingWebhooksFn = func(string, string) ([]*model.IncomingWebhook, error) {
+		return []*model.IncomingWebhook{
+			{Id: first, ChannelId: "ch1", TeamId: "t1", UserId: requesterID, DisplayName: "Alerts"},
+			{Id: second, ChannelId: "ch1", TeamId: "t1", UserId: requesterID, DisplayName: "Alerts"},
+		}, nil
+	}
+
+	p.backfillWebhookIndexFromHistory()
+
+	for _, id := range []string{first, second} {
+		indexed, err := p.loadWebhookIndex(id)
+		require.NoError(t, err)
+		require.Nil(t, indexed)
+	}
+}
+
 func TestBackfillWebhookIndex_UsesTheLiveOwnerAndChannel(t *testing.T) {
 	requesterID := model.NewId()
 	liveOwnerID := model.NewId()
