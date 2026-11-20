@@ -63,8 +63,9 @@ func (p *Plugin) decideWithdraw(actingUserID, requestID, clickedPostID string) d
 	}
 	var posts ticketPostIDs
 	_ = json.Unmarshal(raw, &posts)
-	if clickedPostID != "" && posts.DMRootPostID != "" && clickedPostID != posts.DMRootPostID {
-		// Withdraw lives on the ticket DM root; refuse spoofed clicks.
+	// Withdraw lives on the ticket DM root; refuse spoofed clicks, including
+	// when the ticket records no DM root to compare against.
+	if clickedPostID != "" && (posts.DMRootPostID == "" || clickedPostID != posts.DMRootPostID) {
 		return decisionResult{Reply: buttonNotOnCardText}
 	}
 

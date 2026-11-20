@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -19,21 +20,46 @@ import (
 // create-if-absent, so reconciling on each activation is cheap and lets a
 // later run pick up what an earlier one missed.
 func (p *Plugin) backfillWebhookIndexFromHistory() {
+	// Reading a hook's live owner needs webhook-management rights, so the
+	// whole run borrows one System Admin's session.
+	adminUserID := p.backfillAdminUserID()
 	for page := 0; ; page++ {
 		keys, listErr := p.API.KVList(page, webhookIndexPageSize)
 		if listErr != nil {
 			p.API.LogWarn("webhook index backfill: KVList failed", "error", listErr.Error())
 			return
 		}
-		p.backfillWebhookIndexKeys(keys)
+		p.backfillWebhookIndexKeys(keys, adminUserID)
 		if len(keys) < webhookIndexPageSize {
 			return
 		}
 	}
 }
 
+// backfillAdminUserID resolves an active System Admin whose session can read
+// live webhooks, on the first hook that actually needs one. Most activations
+// find nothing to index, and listing admins every time would be wasted work.
+// Empty when none can be listed; the run then writes nothing.
+func (p *Plugin) backfillAdminUserID() func() string {
+	var (
+		once sync.Once
+		id   string
+	)
+	return func() string {
+		once.Do(func() {
+			admins, appErr := p.API.GetUsers(&model.UserGetOptions{Role: model.SystemAdminRoleId, Active: true, Page: 0, PerPage: 1})
+			if appErr != nil || len(admins) == 0 {
+				p.API.LogWarn("webhook index backfill: no System Admin available to read live webhook owners")
+				return
+			}
+			id = admins[0].Id
+		})
+		return id
+	}
+}
+
 // backfillWebhookIndexKeys indexes the approved webhook requests among keys.
-func (p *Plugin) backfillWebhookIndexKeys(keys []string) {
+func (p *Plugin) backfillWebhookIndexKeys(keys []string, adminUserID func() string) {
 	for _, key := range keys {
 		if !strings.HasPrefix(key, kvHistoryPrefix) {
 			continue
@@ -78,6 +104,15 @@ func (p *Plugin) backfillWebhookIndexKeys(keys []string) {
 		if snap.ID == "" {
 			snap.ID = h.RequestID
 		}
+		// The owner may have moved on since the request was approved, and an
+		// index row is what grants transfer rights. Without the live owner
+		// this row would hand them to whoever filed the original request, so
+		// skip it and let a later run pick the hook up.
+		owner, ownerKnown := p.liveWebhookOwnerID(snap.WebhookType, hookID, adminUserID())
+		if !ownerKnown {
+			p.API.LogWarn("webhook index backfill: skipping a hook whose live owner could not be read", "request_id", h.RequestID)
+			continue
+		}
 		entry := webhookIndexEntry{
 			HookID:      hookID,
 			WebhookType: snap.WebhookType,
@@ -86,7 +121,7 @@ func (p *Plugin) backfillWebhookIndexKeys(keys []string) {
 			DisplayName: snap.DisplayName,
 			Description: strings.TrimSpace(snap.Description),
 			CallbackURL: strings.TrimSpace(snap.CallbackURL),
-			OwnerUserID: snap.RequesterID,
+			OwnerUserID: owner,
 			RequesterID: snap.RequesterID,
 			RequestID:   snap.ID,
 			CreatedAt:   model.GetMillis(),

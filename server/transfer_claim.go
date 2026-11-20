@@ -27,9 +27,12 @@ import (
 // frees the asset once the lease ages out instead of locking it for good.
 //
 // Putting a record back after a failed fulfill runs in the restoring phase,
-// which no takeover may break however stale the lease looks: the gap
-// between "I still hold the claim" and the KV write is exactly where two
-// tickets could end up on one asset.
+// which no takeover may break while its lease is alive: the gap between
+// "I still hold the claim" and the KV write is exactly where two tickets
+// could end up on one asset. Entering restoring renews the lease, so a
+// restoring claim whose lease has aged out belongs to a restorer that died
+// mid-write and is treated as abandoned — otherwise the asset would be
+// locked for good.
 
 const (
 	kvTransferAssetClaimPrefix = "transfer_asset_claim_"
@@ -172,10 +175,10 @@ func (p *Plugin) claimTransferAsset(kind, assetKey, requestID string) error {
 			return duplicateRequestError(kind, assetKey)
 		}
 		// The holder's record is missing: it is between the fulfill claim
-		// and its REST calls, or putting the record back. Restoring must
-		// never be interrupted, and anything else is protected until its
-		// lease runs out.
-		if claim.phase == transferPhaseRestoring || !claim.leaseExpired(model.GetMillis()) {
+		// and its REST calls, or putting the record back. Either way it is
+		// protected until its lease runs out — including a restoring
+		// holder, which renews the lease as it republishes.
+		if !claim.leaseExpired(model.GetMillis()) {
 			return duplicateRequestError(kind, assetKey)
 		}
 		held, holdErr := p.transferAssetPendingElsewhere(kind, assetKey, requestID)
@@ -228,19 +231,24 @@ func (p *Plugin) updateTransferClaim(kind, assetKey, requestID string, fn func(*
 // beginTransferFulfill moves the claim into the fulfilling phase on a fresh
 // lease. It runs before the pending record is deleted, so the asset stays
 // protected while the REST side effects run.
-func (p *Plugin) beginTransferFulfill(kind, assetKey, requestID string) error {
+//
+// created is true when this call invented the claim row from nothing, and
+// claimBytes are the exact bytes it wrote — an approval that then fails to
+// claim the record has to take its own row back rather than release a claim
+// it never really owned.
+func (p *Plugin) beginTransferFulfill(kind, assetKey, requestID string) (created bool, claimBytes []byte, err error) {
 	// A ticket filed before per-asset claims existed has no claim row, and
 	// an unclaimed asset belongs to nobody: take it rather than refuse the
 	// approval.
-	fresh := transferClaim{requestID: requestID, phase: transferPhaseFulfilling, leaseAt: model.GetMillis()}
-	ok, appErr := p.API.KVCompareAndSet(transferAssetClaimKey(kind, assetKey), nil, fresh.encode())
+	fresh := transferClaim{requestID: requestID, phase: transferPhaseFulfilling, leaseAt: model.GetMillis()}.encode()
+	ok, appErr := p.API.KVCompareAndSet(transferAssetClaimKey(kind, assetKey), nil, fresh)
 	if appErr != nil {
-		return errors.Wrap(appErr, "failed to update transfer asset claim")
+		return false, nil, errors.Wrap(appErr, "failed to update transfer asset claim")
 	}
 	if ok {
-		return nil
+		return true, fresh, nil
 	}
-	return p.updateTransferClaim(kind, assetKey, requestID, func(c *transferClaim) {
+	return false, nil, p.updateTransferClaim(kind, assetKey, requestID, func(c *transferClaim) {
 		c.phase = transferPhaseFulfilling
 		c.leaseAt = model.GetMillis()
 	})
@@ -299,14 +307,36 @@ func (p *Plugin) releaseTransferTicket(kind, userID, requestID, assetKey string)
 // claims the pending record. The claim goes first so the asset is never
 // unprotected while the record is gone.
 func (p *Plugin) claimTransferForFulfill(kind, assetKey, requestID, key string, rawReq []byte, cards decisionCards, what string) (decisionResult, bool) {
-	if err := p.beginTransferFulfill(kind, assetKey, requestID); err != nil {
+	created, claimBytes, err := p.beginTransferFulfill(kind, assetKey, requestID)
+	if err != nil {
 		if errors.Is(err, errTransferClaimLost) {
 			return decisionResult{Reply: "Another transfer ticket now owns this asset. Deny this request instead."}, false
 		}
 		p.API.LogError("failed to mark "+what+" as being carried out", "request_id", requestID, "error", err.Error())
 		return decisionResult{Reply: "Could not process that request; try Approve again."}, false
 	}
-	return p.claimRecord(key, rawReq, cards, what)
+	res, ok := p.claimRecord(key, rawReq, cards, what)
+	if !ok && created {
+		// This approval invented the claim row and then lost the record, so
+		// the asset it is holding belongs to nobody. Take back exactly those
+		// bytes; releasing by holder would also drop a row someone else
+		// legitimately re-wrote in the meantime.
+		p.deleteTransferClaimIfUnchanged(kind, assetKey, requestID, claimBytes)
+	}
+	return res, ok
+}
+
+// deleteTransferClaimIfUnchanged removes a claim row only while it still
+// holds the exact bytes the caller wrote.
+func (p *Plugin) deleteTransferClaimIfUnchanged(kind, assetKey, requestID string, raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	// An incoming hook's ID is its secret URL and rides in assetKey, so the
+	// claim key must never reach the log.
+	if _, appErr := p.API.KVCompareAndDelete(transferAssetClaimKey(kind, assetKey), raw); appErr != nil {
+		p.API.LogWarn("failed to drop a transfer asset claim after a lost record", "request_id", requestID, "kind", kind, "error", appErr.Error())
+	}
 }
 
 // transferClaimStillHeld reports whether requestID still owns the per-asset
@@ -335,20 +365,17 @@ func (p *Plugin) transferClaimStillHeld(kind, assetKey, requestID string) (held 
 // asset. The generation is bumped as the phase changes: a takeover that
 // already read the claim and is about to CAS it away loses that race.
 //
-// restored is true when the record is in place (this request owns the claim,
-// or ownership could not be confirmed and the record is kept for a retry).
-// err is set when the record could not be written or the claim could not be
-// read. restored is false with a nil err when another ticket holds the
-// claim; nothing is written then.
+// restored is true only when the record is in place and this request owned
+// the claim while it was written. err is set when the record could not be
+// written, the claim could not be read, or the move into the restoring
+// phase failed; nothing is published in those cases, because a record put
+// back without confirmed ownership is how one asset ends up with two open
+// tickets. restored is false with a nil err when another ticket holds the
+// claim.
 func (p *Plugin) restoreTransferRecord(kind, assetKey, requestID, key string, raw []byte) (restored bool, err error) {
 	held, holdErr := p.transferClaimStillHeld(kind, assetKey, requestID)
 	if holdErr != nil {
-		// Ownership unknown: keep the record so approvers can retry once KV
-		// recovers, rather than dropping a ticket that may still be valid.
-		if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
-			return false, putErr
-		}
-		return true, holdErr
+		return false, holdErr
 	}
 	if !held {
 		return false, nil
@@ -361,10 +388,7 @@ func (p *Plugin) restoreTransferRecord(kind, assetKey, requestID, key string, ra
 		if errors.Is(phaseErr, errTransferClaimLost) {
 			return false, nil
 		}
-		if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
-			return false, putErr
-		}
-		return true, phaseErr
+		return false, phaseErr
 	}
 	if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
 		// Free the asset so a stuck fulfill does not block it forever.

@@ -94,6 +94,69 @@ func (p *Plugin) liveBotOwnerID(botUserID, indexOwner string) (string, error) {
 	return indexOwner, nil
 }
 
+// liveWebhookOwnerID reads a webhook's current Mattermost owner. The RH
+// index falls behind whenever a reassign changed the hook but could not
+// write the index row, so ownership checks must prefer the live value.
+//
+// known is false when the hook could not be read at all — reading someone
+// else's hook needs Manage*Webhooks, which a plain requester does not have
+// — and callers fall back to the index owner rather than refusing them.
+func (p *Plugin) liveWebhookOwnerID(webhookType, hookID, adminUserID string) (owner string, known bool) {
+	hookID = strings.TrimSpace(hookID)
+	if hookID == "" || strings.TrimSpace(adminUserID) == "" {
+		return "", false
+	}
+	if p.liveWebhookOwnerFn != nil {
+		live, err := p.liveWebhookOwnerFn(webhookType, hookID, adminUserID)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(live), strings.TrimSpace(live) != ""
+	}
+	if webhookType == webhookTypeOutgoing {
+		// Reuse the recreate read so an outgoing hook is fetched one way.
+		snap, snapErr := p.loadOutgoingWebhookForRecreate(hookID, adminUserID)
+		if snapErr != nil || snap == nil {
+			return "", false
+		}
+		creator := strings.TrimSpace(snap.CreatorID)
+		return creator, creator != ""
+	}
+	if webhookType != webhookTypeIncoming {
+		return "", false
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return "", false
+	}
+	defer cleanup()
+	hook, _, apiErr := client.GetIncomingWebhook(context.Background(), hookID, "")
+	if apiErr != nil || hook == nil || strings.TrimSpace(hook.UserId) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(hook.UserId), true
+}
+
+// webhookOwnerForChecks is the owner the nominate ACL and successor checks
+// run against: the live Mattermost owner when it can be read, otherwise the
+// index row. A live owner that disagrees with the index is written back,
+// so a reassign whose index write failed stops handing transfer rights to
+// the previous owner.
+func (p *Plugin) webhookOwnerForChecks(index *webhookIndexEntry, adminUserID string) string {
+	if index == nil {
+		return ""
+	}
+	indexOwner := webhookIndexOwner(*index)
+	live, known := p.liveWebhookOwnerID(index.WebhookType, index.HookID, adminUserID)
+	if !known || live == indexOwner {
+		return indexOwner
+	}
+	if err := p.updateWebhookIndexOwner(index.HookID, live); err != nil {
+		p.API.LogWarn("failed to repair a stale webhook index owner", "request_id", index.RequestID, "error", err.Error())
+	}
+	return live
+}
+
 // rotateDefaultOn reports whether token rotation defaults on for a reason:
 // offboarding and owner-deactivated handoffs rotate by default; a voluntary
 // handoff leaves it to the requester.
@@ -510,16 +573,19 @@ func (f *tokenRevokeFailures) messages() []string {
 // revokeBotTokenTargets revokes a captured token set and cleans the tracked
 // reminder rows. Already-revoked / not-found tokens count as success. Expiry
 // rows are dropped only after a confirmed revoke so reminders keep retrying
-// on transient failures. The lease, when set, is renewed as the loop runs;
-// losing it stops the walk before the next revoke.
+// on transient failures. The lease, when set, is checked before the first
+// revoke and renewed as the loop runs; losing it stops the walk before the
+// next revoke, so an approval that no longer owns the asset never touches a
+// token.
 func (p *Plugin) revokeBotTokenTargets(botUserID string, lease transferLease, targets botTokenTargets) (int, error) {
 	revoked := 0
 	seen := map[string]struct{}{}
 	fails := tokenRevokeFailures{general: append([]string(nil), targets.listFailure...)}
 	attempts := 0
 	renew := func() error {
+		at := attempts
 		attempts++
-		if attempts%botTokenRevokeRenewEvery != 0 {
+		if at%botTokenRevokeRenewEvery != 0 {
 			return nil
 		}
 		return p.renewTransferLease(lease)
@@ -625,7 +691,9 @@ type issuedBotToken struct {
 // the successor's replacement, tracked so expiry reminders reach them.
 // Nothing is revoked: listing first and creating before revoking means a
 // failed create leaves the bot's working tokens alone, and the replacement
-// can never land in the revoke set.
+// can never land in the revoke set. The captured targets come back even on
+// a failed create, so a caller whose ownership change already landed can
+// still cut the previous owner off.
 func (p *Plugin) issueReplacementBotToken(botUserID, botUsername, newOwnerID, adminUserID, requestID string) (issuedBotToken, error) {
 	targets := p.collectBotTokens(botUserID, adminUserID)
 	tok, tokErr := p.createBotToken(botUserID, "Rotated API token for @"+botUsername)
@@ -634,7 +702,7 @@ func (p *Plugin) issueReplacementBotToken(botUserID, botUsername, newOwnerID, ad
 		if len(targets.listFailure) > 0 {
 			tokErr = errors.Errorf("%s; %s", strings.Join(targets.listFailure, "; "), tokErr.Error())
 		}
-		return issuedBotToken{}, tokErr
+		return issuedBotToken{targets: targets}, tokErr
 	}
 	p.trackBotTokenExpiry(tok, botUsername, newOwnerID, requestID)
 	return issuedBotToken{targets: targets, tokenID: tok.Id, token: tok.Token, expiresAt: tok.ExpiresAt}, nil

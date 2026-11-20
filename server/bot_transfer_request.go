@@ -38,6 +38,12 @@ type botTransferRequest struct {
 	Note        string `json:"note,omitempty"`
 	CreatedAt   int64  `json:"created_at,omitempty"`
 	Exercise    bool   `json:"exercise,omitempty"`
+	// ResumeAfterAssign marks a ticket whose approval already called
+	// AssignBot and could not confirm the outcome. Ownership may have
+	// moved, which makes every owner-based re-check refuse the retry, so
+	// those checks are skipped and the remaining effects (index, rotation)
+	// are picked up instead.
+	ResumeAfterAssign bool `json:"resume_after_assign,omitempty"`
 
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
 	ApprovalChannelID string `json:"approval_channel_id,omitempty"`
@@ -449,7 +455,18 @@ func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) string {
 	indexOwner := botIndexOwner(*index)
 	ownerID, liveErr := p.liveBotOwnerID(req.BotUserID, indexOwner)
 	if liveErr != nil {
+		if req.ResumeAfterAssign {
+			// Ownership may already have moved; what is left to do (index
+			// row, token rotation) does not depend on the previous owner.
+			return ""
+		}
 		return "Could not re-check the bot's current owner; try Approve again."
+	}
+	// A retry of an approval that got as far as AssignBot: the bot already
+	// belongs to the successor, so the owner-based checks below would all
+	// refuse the attempt that has to finish the remaining effects.
+	if req.Action == transferActionTransfer && (req.ResumeAfterAssign || ownerID == req.NewOwnerUserID) {
+		return ""
 	}
 	asset := transferAsset{
 		assetType: "bot", assetID: req.BotUserID,
@@ -524,15 +541,26 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		})
 	}
 
-	// Transfer.
+	// Transfer. AssignBot is idempotent, so a resumed ticket runs it again
+	// rather than trusting a marker that only says the call was attempted.
 	if assignErr := p.assignBot(req.BotUserID, req.NewOwnerUserID, actingUser.Id); assignErr != nil {
 		// A lost REST response looks like a failure even though the server
 		// applied the change. Only unwind when the owner has not moved.
 		owner, ownerErr := p.liveBotOwnerID(req.BotUserID, "")
-		if ownerErr != nil || owner != req.NewOwnerUserID {
+		switch {
+		case ownerErr != nil:
+			// Whether ownership moved is unknown. Putting the ticket back
+			// unmarked would hand the retry to blockers that refuse a bot
+			// already owned by the successor, so record the attempt.
+			resume := *req
+			resume.ResumeAfterAssign = true
+			return p.restoreBotTransferAfterFailure(&resume, actingUser, requester, cards,
+				p.botTransferRecordBytes(&resume, rawReq), key, assignErr)
+		case owner != req.NewOwnerUserID:
 			return p.restoreBotTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, assignErr)
+		default:
+			partialErrors = append(partialErrors, "the reassign call reported an error ("+assignErr.Error()+") but the bot already belongs to the new owner")
 		}
-		partialErrors = append(partialErrors, "the reassign call reported an error ("+assignErr.Error()+") but the bot already belongs to the new owner")
 	}
 	if idxErr := p.updateBotIndexOwner(req.BotUserID, req.NewOwnerUserID); idxErr != nil {
 		partialErrors = append(partialErrors, "bot index owner could not be updated: "+idxErr.Error()+" — transfer rights may still show the previous owner")
@@ -573,6 +601,17 @@ func (req *botTransferRequest) transferLease() transferLease {
 	return transferLease{kind: pendingKindBotTransfer, assetKey: req.pendingKey(), requestID: req.ID}
 }
 
+// botTransferRecordBytes marshals the ticket as it stands now, falling back
+// to the bytes this approval started from.
+func (p *Plugin) botTransferRecordBytes(req *botTransferRequest, fallback []byte) []byte {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		p.API.LogError("failed to record bot transfer resume state", "request_id", req.ID, "error", err.Error())
+		return fallback
+	}
+	return raw
+}
+
 // botTokenRotation is what a transfer's token rotation ended up doing.
 type botTokenRotation struct {
 	revoked       int
@@ -591,7 +630,18 @@ func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID
 	var out botTokenRotation
 	issued, issueErr := p.issueReplacementBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUserID, req.ID)
 	if issueErr != nil {
-		out.partialErrors = append(out.partialErrors, "token rotation failed: "+issueErr.Error()+" — rotate manually for the new owner")
+		// Ownership has already moved, so leaving the previous owner's
+		// tokens live would hand them working access to a bot that is no
+		// longer theirs. Cut them off and report that the successor still
+		// needs a token issued by hand.
+		revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, issued.targets)
+		out.revoked = revoked
+		msg := "token rotation failed: " + issueErr.Error() + " — the previous owner's tokens were revoked, so issue a new token for the new owner manually"
+		if revokeErr != nil {
+			msg = "token rotation failed: " + issueErr.Error() + ", and not every old token could be revoked: " + revokeErr.Error() +
+				" — revoke the remaining tokens and issue a new one for the new owner manually"
+		}
+		out.partialErrors = append(out.partialErrors, msg)
 		return out
 	}
 

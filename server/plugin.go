@@ -71,6 +71,9 @@ type Plugin struct {
 	// updateWebhookOwnerFn reassigns a standalone webhook's creator/owner via
 	// REST (nil in production).
 	updateWebhookOwnerFn func(webhookType, hookID, newOwnerID, adminUserID string) error
+	// liveWebhookOwnerFn reads a webhook's current Mattermost owner
+	// (nil in production → live REST Get).
+	liveWebhookOwnerFn func(webhookType, hookID, adminUserID string) (string, error)
 	// getOutgoingWebhookCallbackFn returns the first callback URL for an
 	// outgoing hook on retire+recreate (nil in production → live REST Get).
 	// Prefer getOutgoingWebhookForRecreateFn when tests need full fidelity.

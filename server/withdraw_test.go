@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -75,6 +76,71 @@ func TestDecideWithdraw_WrongCardRefused(t *testing.T) {
 	res := p.decideWithdraw("u_req", testChannelRequestID, "someone-elses-post")
 
 	require.Equal(t, buttonNotOnCardText, res.Reply)
+}
+
+func TestDecideWithdraw_CardClickNeedsADMRoot(t *testing.T) {
+	api, p, store := decisionFixture(t, "app1")
+
+	// A ticket with no recorded DM root has no Withdraw button, so a click
+	// claiming to come from one is spoofed.
+	var req channelRequest
+	require.NoError(t, json.Unmarshal(store[kvRequestPrefix+testChannelRequestID], &req))
+	req.DMRootPostID = ""
+	store[kvRequestPrefix+testChannelRequestID] = recordJSON(t, &req)
+	api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
+
+	res := p.decideWithdraw("u_req", testChannelRequestID, "someone-elses-post")
+
+	require.Equal(t, buttonNotOnCardText, res.Reply)
+	require.Contains(t, store, kvRequestPrefix+testChannelRequestID, "a refused click leaves the ticket alone")
+}
+
+func TestDecideWithdraw_LostClaimKeepsTheTicket(t *testing.T) {
+	cases := []struct {
+		name     string
+		casErr   *model.AppError
+		casOK    bool
+		wantHint string
+	}{
+		{name: "another decision claimed it first", casOK: false, wantHint: "just updated"},
+		{name: "the store could not be reached", casErr: testAppErr("kv down"), wantHint: "Could not process"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &plugintest.API{}
+			stubLogLines(api)
+			t.Cleanup(func() { api.AssertExpectations(t) })
+			p := newTestPlugin(api)
+			p.setConfiguration(approvableConfig())
+
+			id := model.NewId()
+			req := &botTransferRequest{
+				ID: id, RequesterID: "u_req", BotUserID: "bot1", BotUsername: "svcbot",
+				Action: transferActionTransfer, NewOwnerUserID: "u_new", Reason: transferReasonVoluntary,
+				ApprovalPostID: "app1", DMRootPostID: "dmroot", DMChannelID: "dm1",
+			}
+			key := kvBotTransferRequestPrefix + id
+			claimKey := transferAssetClaimKey(pendingKindBotTransfer, req.pendingKey())
+			// Registered before fakeKV so this claim attempt is the one that fails.
+			api.On("KVCompareAndDelete", key, mock.Anything).Return(tc.casOK, tc.casErr)
+			store := fakeKV(api)
+			store[key] = recordJSON(t, req)
+			store[claimKey] = []byte(id)
+			store[pendingListKey(pendingKindBotTransfer, "u_req")] = recordJSON(t, []pendingEntry{{ID: id, CreatedAt: model.GetMillis(), Key: req.pendingKey()}})
+
+			api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
+			api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
+
+			res := p.decideWithdraw("u_req", id, "dmroot")
+
+			require.Contains(t, res.Reply, tc.wantHint)
+			require.Nil(t, res.Update, "a withdraw that never landed must not repaint the ticket DM")
+			require.Empty(t, res.Outcome, "approval cards stay as they are")
+			require.Contains(t, store, key, "the request is still open")
+			require.Contains(t, store, claimKey, "the bot keeps its asset claim")
+			api.AssertNotCalled(t, "UpdatePost", mock.Anything)
+		})
+	}
 }
 
 func TestExecuteWithdraw_NeedsValidID(t *testing.T) {
