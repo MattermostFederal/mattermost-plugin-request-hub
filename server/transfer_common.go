@@ -56,11 +56,13 @@ func serverMajorVersion(version string) (major int, ok bool) {
 }
 
 // webhookReassignUnsupported reports whether this server preserves a
-// webhook's original creator through an update. Mattermost 11 does, so
-// Reassign would report success while ownership never moved.
+// webhook's original creator through an update, which would make Reassign
+// report success while ownership never moved. Both the 9.11 federal build
+// and Mattermost 11 restore the stored creator, so every major from 9 up is
+// treated as unsupported rather than guessing per patch release.
 func (p *Plugin) webhookReassignUnsupported() bool {
 	major, ok := serverMajorVersion(p.API.GetServerVersion())
-	return ok && major >= 11
+	return ok && major >= 9
 }
 
 // transferAsset is the minimum an ACL check needs about a bot or webhook.
@@ -135,6 +137,32 @@ func (p *Plugin) liveWebhookOwnerID(webhookType, hookID, adminUserID string) (ow
 		return "", false
 	}
 	return strings.TrimSpace(hook.UserId), true
+}
+
+// liveIncomingWebhookChannelID reads where an incoming hook posts now. A
+// retire+recreate rebuilds the hook from the ticket, so a hook that has
+// been moved since must not be rebuilt in the channel the reviewers saw.
+func (p *Plugin) liveIncomingWebhookChannelID(hookID, adminUserID string) (string, error) {
+	hookID = strings.TrimSpace(hookID)
+	if hookID == "" {
+		return "", errors.New("the webhook's ID is unknown")
+	}
+	if p.incomingWebhookChannelFn != nil {
+		return p.incomingWebhookChannelFn(hookID, adminUserID)
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	hook, _, apiErr := client.GetIncomingWebhook(context.Background(), hookID, "")
+	if apiErr != nil {
+		return "", errors.Wrap(apiErr, "failed to load incoming webhook")
+	}
+	if hook == nil {
+		return "", errors.New("incoming webhook not found")
+	}
+	return strings.TrimSpace(hook.ChannelId), nil
 }
 
 // webhookOwnerForChecks is the owner the nominate ACL and successor checks

@@ -14,10 +14,10 @@ import (
 // CAS claim is the source of truth for "one open ticket per asset".
 //
 // One KV value owns the asset for the whole life of a ticket. It carries
-// the holding request, a generation, the phase that request is in, and when
-// its lease was last renewed:
+// the holding request, a generation, the phase that request is in, when its
+// lease was last renewed, and which fulfill attempt wrote it:
 //
-//	requestID|generation|phase|leaseAt
+//	requestID|generation|phase|leaseAt|attemptID
 //
 // Submit stores the request record before claiming, so pendingRequestExists
 // is true for the holder during the claim window. Final approval deletes
@@ -55,6 +55,11 @@ const (
 // errTransferClaimLost reports that another ticket owns the asset claim.
 var errTransferClaimLost = errors.New("another transfer ticket took over the asset claim")
 
+// errTransferFulfillInFlight reports that this ticket's approval is already
+// being carried out under a live lease, so a second approver must not start
+// a parallel run of the same side effects.
+var errTransferFulfillInFlight = errors.New("this transfer is already being carried out")
+
 // transferClaim is a decoded per-asset claim value.
 type transferClaim struct {
 	requestID string
@@ -64,6 +69,10 @@ type transferClaim struct {
 	generation int64
 	phase      string
 	leaseAt    int64 // millis of the last renewal
+	// attemptID separates two fulfill attempts on the same ticket that land
+	// in the same millisecond, so an attempt that has to take its own row
+	// back can never CAS-delete the row another attempt owns.
+	attemptID string
 }
 
 // transferLease names the claim a long-running fulfill has to keep
@@ -88,6 +97,7 @@ func (c transferClaim) encode() []byte {
 		strconv.FormatInt(c.generation, 10),
 		phase,
 		strconv.FormatInt(c.leaseAt, 10),
+		c.attemptID,
 	}, "|"))
 }
 
@@ -112,6 +122,9 @@ func parseTransferClaim(raw []byte) transferClaim {
 	}
 	if len(parts) > 3 {
 		claim.leaseAt, _ = strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64)
+	}
+	if len(parts) > 4 {
+		claim.attemptID = strings.TrimSpace(parts[4])
 	}
 	return claim
 }
@@ -235,23 +248,47 @@ func (p *Plugin) updateTransferClaim(kind, assetKey, requestID string, fn func(*
 // created is true when this call invented the claim row from nothing, and
 // claimBytes are the exact bytes it wrote — an approval that then fails to
 // claim the record has to take its own row back rather than release a claim
-// it never really owned.
+// it never really owned. Every attempt carries its own attemptID, so two
+// approvers entering in the same millisecond never write the same bytes.
+//
+// errTransferFulfillInFlight means another approver is already running this
+// ticket's side effects under a live lease; the checkpoint it leaves behind
+// is what lets a retry pick the work up once that lease ages out.
 func (p *Plugin) beginTransferFulfill(kind, assetKey, requestID string) (created bool, claimBytes []byte, err error) {
 	// A ticket filed before per-asset claims existed has no claim row, and
 	// an unclaimed asset belongs to nobody: take it rather than refuse the
 	// approval.
-	fresh := transferClaim{requestID: requestID, phase: transferPhaseFulfilling, leaseAt: model.GetMillis()}.encode()
-	ok, appErr := p.API.KVCompareAndSet(transferAssetClaimKey(kind, assetKey), nil, fresh)
+	key := transferAssetClaimKey(kind, assetKey)
+	fresh := transferClaim{
+		requestID: requestID, phase: transferPhaseFulfilling,
+		leaseAt: model.GetMillis(), attemptID: model.NewId(),
+	}.encode()
+	ok, appErr := p.API.KVCompareAndSet(key, nil, fresh)
 	if appErr != nil {
 		return false, nil, errors.Wrap(appErr, "failed to update transfer asset claim")
 	}
 	if ok {
 		return true, fresh, nil
 	}
-	return false, nil, p.updateTransferClaim(kind, assetKey, requestID, func(c *transferClaim) {
+	raw, getErr := p.API.KVGet(key)
+	if getErr != nil {
+		return false, nil, errors.Wrap(getErr, "failed to read transfer asset claim")
+	}
+	if held := parseTransferClaim(raw); held.requestID == requestID &&
+		held.phase == transferPhaseFulfilling && !held.leaseExpired(model.GetMillis()) {
+		return false, nil, errTransferFulfillInFlight
+	}
+	var written []byte
+	err = p.updateTransferClaim(kind, assetKey, requestID, func(c *transferClaim) {
 		c.phase = transferPhaseFulfilling
 		c.leaseAt = model.GetMillis()
+		c.attemptID = model.NewId()
+		written = c.encode()
 	})
+	if err != nil {
+		return false, nil, err
+	}
+	return false, written, nil
 }
 
 // renewTransferLease refreshes the holder's lease part-way through a long
@@ -311,6 +348,9 @@ func (p *Plugin) claimTransferForFulfill(kind, assetKey, requestID, key string, 
 	if err != nil {
 		if errors.Is(err, errTransferClaimLost) {
 			return decisionResult{Reply: "Another transfer ticket now owns this asset. Deny this request instead."}, false
+		}
+		if errors.Is(err, errTransferFulfillInFlight) {
+			return decisionResult{Reply: "This request is already being carried out. Wait for that attempt to finish, then reload the card."}, false
 		}
 		p.API.LogError("failed to mark "+what+" as being carried out", "request_id", requestID, "error", err.Error())
 		return decisionResult{Reply: "Could not process that request; try Approve again."}, false

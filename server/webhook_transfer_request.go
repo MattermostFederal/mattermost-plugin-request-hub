@@ -618,6 +618,12 @@ const (
 	// cutoverStageOldDeleted: the old hook is gone; an outgoing
 	// replacement may still be on its temporary trigger.
 	cutoverStageOldDeleted = "old_deleted"
+	// cutoverStageCleanupPending: a replacement exists that nobody can use
+	// — its secret never reached the successor — and it could not be taken
+	// back down. The old hook is untouched, so the ticket carries the
+	// replacement's ID purely so Deny can remove it and Approve can clear
+	// it before creating another.
+	cutoverStageCleanupPending = "cleanup_pending"
 )
 
 const cutoverExpiryBlockedMsg = "This request is past the review window, but its replacement webhook already exists. Click Approve to finish the handover — a System Admin has to clean up by hand if it should be abandoned instead."
@@ -781,6 +787,21 @@ func (p *Plugin) denyStagedCutover(req *webhookTransferRequest, actingUser, requ
 // hook cannot be loaded and the snapshot is incomplete, the request stays
 // pending (refuse) instead of dropping fidelity.
 func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, rawReq []byte, key string) decisionResult {
+	// The last attempt left a replacement nobody can use. Take it down
+	// before making another, or the channel collects duplicate hooks.
+	if req.CutoverStage == cutoverStageCleanupPending {
+		stale := strings.TrimSpace(req.ResumeNewHookID)
+		if delErr := p.deleteWebhook(req.WebhookType, stale, actingUser.Id); delErr != nil && !webhookDeleteAlreadyGone(delErr) {
+			return p.pauseCutover(req, actingUser, requester, cards, key,
+				webhookCutover{newHookID: stale, channelID: req.ResumeChannelID, checkpoint: rawReq},
+				errors.Wrap(delErr, "the unused replacement webhook left by the last attempt could not be removed"))
+		}
+		req.clearCutover()
+		if _, cpErr := p.writeCutoverCheckpoint(req, key); cpErr != nil {
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, cpErr)
+		}
+		rawReq = p.cutoverRecordBytes(req, rawReq)
+	}
 	// A previous approval already made the replacement; finish that cutover
 	// instead of creating a second hook.
 	if strings.TrimSpace(req.ResumeNewHookID) != "" {
@@ -799,6 +820,13 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	var outgoingSnap *outgoingWebhookRecreate
 	callbackURL := strings.TrimSpace(req.CallbackURL)
 	channelID := req.ChannelID
+	if req.WebhookType == webhookTypeIncoming {
+		live, chErr := p.resolveIncomingRecreateChannel(req, actingUser.Id)
+		if chErr != nil {
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, chErr)
+		}
+		channelID = live
+	}
 	if req.WebhookType == webhookTypeOutgoing {
 		live, liveErr := p.loadOutgoingWebhookForRecreate(req.HookID, actingUser.Id)
 		switch {
@@ -839,6 +867,18 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		}
 	}
 
+	// The successor was vetted against the channel the ticket named; a hook
+	// that lives somewhere else now puts the replacement — and its secret —
+	// in a channel nobody checked them for.
+	if channelID != "" && channelID != req.ChannelID {
+		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
+			channelID: channelID, webhookType: req.WebhookType, noun: "webhook",
+		}); err != nil {
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key,
+				errors.Wrap(err, "the new owner can't take the webhook in the channel it lives in now"))
+		}
+	}
+
 	synthetic := &webhookRequest{
 		ID:          req.ID,
 		RequesterID: req.NewOwnerUserID,
@@ -873,7 +913,15 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		dmMsg, newHookID, createErr = p.createWebhookForRequest(synthetic, actingUser.Id)
 	}
 	if createErr != nil {
-		// Old hook is untouched — leave the ticket pending for a retry.
+		if !webhookCreateRefused(createErr) {
+			// A lost response may still have made a hook. Keep the creating
+			// checkpoint so the next attempt names the orphan instead of
+			// leaving one nothing at all points at.
+			return p.pauseCutover(req, actingUser, requester, cards, key,
+				webhookCutover{channelID: channelID, checkpoint: creatingRaw}, createErr)
+		}
+		// The server turned the create down, so no hook exists and the old
+		// one is untouched — leave the ticket plain for a retry.
 		req.clearCutover()
 		return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, p.cutoverRecordBytes(req, creatingRaw), key, createErr)
 	}
@@ -888,7 +936,11 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 			cause := "the new incoming webhook URL could not be DM'd to the new owner; the old hook was left in place"
 			if delErr := p.deleteWebhook(req.WebhookType, newHookID, actingUser.Id); delErr != nil && !webhookDeleteAlreadyGone(delErr) {
 				p.API.LogError("failed to delete undelivered replacement webhook", "error", delErr.Error())
-				cause += ", and the unused replacement hook could not be deleted (a System Admin should remove the extra incoming webhook in this channel before retrying)"
+				cause += ", and the unused replacement hook could not be deleted — a retry removes it before making another"
+				// Keep the only pointer to that live hook: dropping it here
+				// strands an incoming webhook whose URL nobody holds.
+				req.stageCutover(cutoverStageCleanupPending, webhookCutover{newHookID: newHookID, channelID: channelID})
+				return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, p.cutoverRecordBytes(req, creatingRaw), key, errors.New(cause))
 			}
 			req.clearCutover()
 			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, errors.New(cause))
@@ -910,16 +962,47 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	req.stageCutover(cutoverStageReplacementReady, cut)
 	checkpoint, cpErr := p.writeCutoverCheckpoint(req, key)
 	if cpErr != nil {
-		req.clearCutover()
 		msg := "the cutover could not be recorded (" + cpErr.Error() + "), so the replacement was removed and the old webhook left in place"
 		if delErr := p.deleteWebhook(req.WebhookType, newHookID, actingUser.Id); delErr != nil && !webhookDeleteAlreadyGone(delErr) {
 			p.API.LogError("failed to delete replacement webhook after the cutover checkpoint failed", "error", delErr.Error())
-			msg = "the cutover could not be recorded (" + cpErr.Error() + ") and the unused replacement hook could not be deleted either (a System Admin should remove the extra webhook in this channel before retrying)"
+			msg = "the cutover could not be recorded (" + cpErr.Error() + ") and the unused replacement hook could not be deleted either — a retry removes it before making another"
+			req.stageCutover(cutoverStageCleanupPending, cut)
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, p.cutoverRecordBytes(req, creatingRaw), key, errors.New(msg))
 		}
+		req.clearCutover()
 		return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, errors.New(msg))
 	}
 	cut.checkpoint = checkpoint
 	return p.advanceWebhookCutover(req, actingUser, requester, cards, key, cut)
+}
+
+// resolveIncomingRecreateChannel returns the channel an incoming
+// replacement must be built in. Same risk as an outgoing hook that moved:
+// rebuilding it in the approved channel would publish it somewhere the hook
+// has already left.
+func (p *Plugin) resolveIncomingRecreateChannel(req *webhookTransferRequest, adminUserID string) (string, error) {
+	live, err := p.liveIncomingWebhookChannelID(req.HookID, adminUserID)
+	if err != nil {
+		return "", errors.Wrap(err, "could not confirm which channel the incoming webhook posts to; retry Approve")
+	}
+	if live == "" {
+		return req.ChannelID, nil
+	}
+	if req.ChannelID != "" && live != req.ChannelID {
+		return "", errors.New("the incoming webhook now posts to a different channel than this request approved; deny it and submit a new request for the hook's current channel")
+	}
+	return live, nil
+}
+
+// webhookCreateRefused reports a create the server clearly turned down, so
+// no hook can exist. Anything else — a timeout, a 5xx, a dropped
+// connection — may have landed, and the caller has to keep its checkpoint.
+func webhookCreateRefused(err error) bool {
+	var appErr *model.AppError
+	if !errors.As(err, &appErr) || appErr == nil {
+		return false
+	}
+	return appErr.StatusCode >= http.StatusBadRequest && appErr.StatusCode < http.StatusInternalServerError
 }
 
 // advanceWebhookCutover runs every stage left once the replacement hook
@@ -936,6 +1019,9 @@ func (p *Plugin) advanceWebhookCutover(req *webhookTransferRequest, actingUser, 
 	if cut.resumed {
 		if err := p.checkCutoverSuccessor(req, cut); err != nil {
 			return p.pauseCutover(req, actingUser, requester, cards, key, cut, err)
+		}
+		if res, stop := p.confirmResumedReplacement(req, actingUser, requester, cards, key, cut); stop {
+			return res
 		}
 	}
 
@@ -1007,6 +1093,31 @@ func (p *Plugin) advanceWebhookCutover(req *webhookTransferRequest, actingUser, 
 		}
 	}
 	return p.finishWebhookRecreate(req, actingUser, requester, cards, key, cut)
+}
+
+// confirmResumedReplacement makes sure the hook a resumed checkpoint points
+// at is really there before the old one is torn down. A checkpoint that
+// outlived its replacement would otherwise cost the requester both hooks.
+// stop is true when the caller must not go on.
+func (p *Plugin) confirmResumedReplacement(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, key string, cut webhookCutover) (decisionResult, bool) {
+	if req.cutoverOldDeleted() {
+		// Nothing left to tear down, so a missing replacement is for the
+		// finish step to report rather than a reason to stop here.
+		return decisionResult{}, false
+	}
+	exists, err := p.webhookStillExists(req.WebhookType, cut.newHookID, actingUser.Id)
+	switch {
+	case err != nil:
+		return p.pauseCutover(req, actingUser, requester, cards, key, cut,
+			errors.Wrap(err, "whether the replacement webhook still exists could not be checked; the old hook was left in place — retry Approve")), true
+	case !exists:
+		// The old hook is still live and nothing replaced it, so drop the
+		// checkpoint and let a retry build a fresh replacement.
+		req.clearCutover()
+		return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, p.cutoverRecordBytes(req, cut.checkpoint), key,
+			errors.New("the replacement webhook this handover recorded no longer exists; the old hook was left in place — retry Approve to build a new one")), true
+	}
+	return decisionResult{}, false
 }
 
 // checkCutoverSuccessor re-runs the successor checks against the channel

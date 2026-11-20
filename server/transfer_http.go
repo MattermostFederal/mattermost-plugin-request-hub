@@ -10,12 +10,14 @@ import (
 
 // handleSubmitBotTransferWebapp takes the hub tile's bot transfer/retire form.
 func (p *Plugin) handleSubmitBotTransferWebapp(w http.ResponseWriter, r *http.Request) {
-	if !p.getConfiguration().RequestEnabled(requestTypeBotTransfer) {
-		writeJSON(w, map[string]string{"error": botTransferRequestsDisabledMsg})
-		return
-	}
+	// Identity first: an unauthenticated caller must not learn which
+	// request types this instance has turned on.
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if !p.getConfiguration().RequestEnabled(requestTypeBotTransfer) {
+		writeJSON(w, map[string]string{"error": botTransferRequestsDisabledMsg})
 		return
 	}
 	var payload struct {
@@ -49,12 +51,12 @@ func (p *Plugin) handleSubmitBotTransferWebapp(w http.ResponseWriter, r *http.Re
 
 // handleSubmitWebhookTransferWebapp takes the hub tile's webhook transfer form.
 func (p *Plugin) handleSubmitWebhookTransferWebapp(w http.ResponseWriter, r *http.Request) {
-	if !p.getConfiguration().RequestEnabled(requestTypeWebhookTransfer) {
-		writeJSON(w, map[string]string{"error": webhookTransferRequestsDisabledMsg})
-		return
-	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if !p.getConfiguration().RequestEnabled(requestTypeWebhookTransfer) {
+		writeJSON(w, map[string]string{"error": webhookTransferRequestsDisabledMsg})
 		return
 	}
 	var payload struct {

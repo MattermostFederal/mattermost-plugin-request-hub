@@ -14,6 +14,11 @@ const (
 	kvBotTransferRequestPrefix = "bot_transfer_request_"
 
 	botTransferRequestsDisabledMsg = "Bot transfer/retire requests are currently disabled by an administrator."
+
+	// resumeAfterAssignExpiryBlockedMsg is shown when a ticket past the
+	// review window still has handover work outstanding from an approval
+	// that already reached AssignBot.
+	resumeAfterAssignExpiryBlockedMsg = "This request is past the review window, but an earlier approval may already have moved the bot. Click Approve to finish the handover — a System Admin has to put the ownership back by hand if it should be abandoned instead."
 )
 
 // botTransferRequest transfers an RH-managed bot to a new owner, or retires
@@ -371,7 +376,15 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		withSubject(pendingKindBotTransfer, req.RequesterID, actingUser, req, req.Exercise)
 
 	verb := strings.ToLower(transferActionLabel(req.Action))
-	if days := p.getConfiguration().ExpiryDays(); (canSec || canSys) && requestExpired(req.CreatedAt, days, model.GetMillis()) {
+	// Expiring deletes the record, which is the only note that an earlier
+	// approval already called AssignBot. Approve is the way out of that
+	// state, so it is let through however old the ticket is; Deny still has
+	// to be told why it cannot close the ticket.
+	expired := (canSec || canSys) && requestExpired(req.CreatedAt, p.getConfiguration().ExpiryDays(), model.GetMillis())
+	if expired && req.ResumeAfterAssign && !approve {
+		return decisionResult{Reply: resumeAfterAssignExpiryBlockedMsg}
+	}
+	if days := p.getConfiguration().ExpiryDays(); expired && !req.ResumeAfterAssign {
 		return p.expireRequest(cards, expiredRequest{
 			kvKey: key, raw: rawReq, kind: pendingKindBotTransfer, requestID: req.ID, requesterID: req.RequesterID,
 			dmRootID: req.DMRootPostID, dmChannelID: req.DMChannelID, days: days,
@@ -455,17 +468,20 @@ func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) string {
 	indexOwner := botIndexOwner(*index)
 	ownerID, liveErr := p.liveBotOwnerID(req.BotUserID, indexOwner)
 	if liveErr != nil {
-		if req.ResumeAfterAssign {
-			// Ownership may already have moved; what is left to do (index
-			// row, token rotation) does not depend on the previous owner.
-			return ""
+		if !req.ResumeAfterAssign {
+			return "Could not re-check the bot's current owner; try Approve again."
 		}
-		return "Could not re-check the bot's current owner; try Approve again."
+		// A resume still has the index row and the rotation to finish, but
+		// who owns the bot now is unknown — fall back to the index row so
+		// the nominate ACL is re-checked rather than skipped.
+		ownerID = indexOwner
 	}
 	// A retry of an approval that got as far as AssignBot: the bot already
 	// belongs to the successor, so the owner-based checks below would all
-	// refuse the attempt that has to finish the remaining effects.
-	if req.Action == transferActionTransfer && (req.ResumeAfterAssign || ownerID == req.NewOwnerUserID) {
+	// refuse the attempt that has to finish the remaining effects. A resume
+	// whose ownership never moved gets no such pass — it is about to call
+	// AssignBot again.
+	if req.Action == transferActionTransfer && ownerID == req.NewOwnerUserID {
 		return ""
 	}
 	asset := transferAsset{
@@ -622,18 +638,26 @@ type botTokenRotation struct {
 
 // rotateBotTokenForTransfer issues the successor's replacement token and
 // retires the ones the bot already had. A voluntary handover hands the new
-// secret over first: if that DM fails, the previous owner's tokens are
-// left working and only the undelivered replacement is revoked. An
-// offboarding or owner-deactivated handover revokes first, because cutting
-// the previous owner off is the point of the rotation.
+// secret over first: if the replacement cannot be issued or its DM fails,
+// the previous owner's tokens are left working and only the undelivered
+// replacement is revoked. An offboarding or owner-deactivated handover
+// revokes first — and revokes even when no replacement could be issued —
+// because cutting the previous owner off is the point of the rotation.
 func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID string, lease transferLease) botTokenRotation {
 	var out botTokenRotation
 	issued, issueErr := p.issueReplacementBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUserID, req.ID)
 	if issueErr != nil {
-		// Ownership has already moved, so leaving the previous owner's
-		// tokens live would hand them working access to a bot that is no
-		// longer theirs. Cut them off and report that the successor still
-		// needs a token issued by hand.
+		if req.Reason == transferReasonVoluntary {
+			// A voluntary handover never cuts anyone off before the
+			// successor holds a working token, so a bot nobody can reach
+			// is the worse outcome here.
+			out.partialErrors = append(out.partialErrors, "token rotation failed: "+issueErr.Error()+
+				" — the bot's existing tokens were left working; issue a token for the new owner and rotate again")
+			return out
+		}
+		// The handover exists to cut the previous owner off, and ownership
+		// has already moved. Revoke what they hold and report that the
+		// successor still needs a token issued by hand.
 		revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, issued.targets)
 		out.revoked = revoked
 		msg := "token rotation failed: " + issueErr.Error() + " — the previous owner's tokens were revoked, so issue a new token for the new owner manually"

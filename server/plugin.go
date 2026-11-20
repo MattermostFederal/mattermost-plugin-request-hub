@@ -74,6 +74,10 @@ type Plugin struct {
 	// liveWebhookOwnerFn reads a webhook's current Mattermost owner
 	// (nil in production → live REST Get).
 	liveWebhookOwnerFn func(webhookType, hookID, adminUserID string) (string, error)
+	// incomingWebhookChannelFn reads where an incoming hook posts now, so
+	// retire+recreate can refuse a hook that moved channel
+	// (nil in production → live REST Get).
+	incomingWebhookChannelFn func(hookID, adminUserID string) (string, error)
 	// getOutgoingWebhookCallbackFn returns the first callback URL for an
 	// outgoing hook on retire+recreate (nil in production → live REST Get).
 	// Prefer getOutgoingWebhookForRecreateFn when tests need full fidelity.
