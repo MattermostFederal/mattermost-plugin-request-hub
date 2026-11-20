@@ -66,6 +66,11 @@ type webhookTransferRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 
 	twoStepState
+
+	// attemptID names the fulfill attempt that holds the asset claim for
+	// this run. It belongs to the attempt, not the ticket, so it is never
+	// persisted.
+	attemptID string
 }
 
 type webhookTransferInput struct {
@@ -225,14 +230,14 @@ func (p *Plugin) submitWebhookTransferRequest(requesterID string, in webhookTran
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		p.deletePendingRequestKV(kvWebhookTransferRequestPrefix + req.ID)
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		return "", errors.Wrap(snapErr, "failed to snapshot webhook transfer request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postWebhookTransferApprovalRequest(req, requester)
 	if err != nil {
 		p.deletePendingRequestKV(kvWebhookTransferRequestPrefix + req.ID)
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		p.API.LogError("failed to post webhook transfer request", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
@@ -297,7 +302,7 @@ func (p *Plugin) webhookTransferApprovalAttachment(req *webhookTransferRequest, 
 	var text string
 	switch req.Action {
 	case transferActionReassign:
-		text = "Reassign updates the webhook's owner. Mattermost may keep the original creator on some builds; the RH index is updated and the outcome noted."
+		text = "Reassign moves the webhook's owner in Mattermost, and only succeeds if Mattermost confirms the creator changed. On builds that keep the original creator it is refused and nothing is recorded — use Retire & recreate there."
 	case transferActionRetireRecreate:
 		text = "Retire & recreate deletes the old hook and creates a new one owned by the successor. An incoming webhook's new URL is DMed to the new owner only."
 	case transferActionRetireOnly:
@@ -379,7 +384,11 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 	if req == nil {
 		return decisionResult{Reply: alreadyHandledText}
 	}
-	if msg := p.decisionRefusal(clickedPostID, req.ApprovalPostID, req.ID, requestTypeWebhookTransfer, approve); msg != "" {
+	// Turning the request type off stops new work; it must not strand a
+	// handover that is already part-way through, which only Approve can
+	// finish. The card check and the approver pools below still apply.
+	gated := approve && !req.cutoverInProgress()
+	if msg := p.decisionRefusal(clickedPostID, req.ApprovalPostID, req.ID, requestTypeWebhookTransfer, gated); msg != "" {
 		return decisionResult{Reply: msg}
 	}
 
@@ -425,7 +434,7 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		} else if res, ok := p.claimRecord(key, rawReq, cards, "webhook transfer request"); !ok {
 			return res
 		}
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("❌ Denied by @%s. %s webhook **%s**.", actingUser.Username, req.WebhookType, escapeMarkdown(req.DisplayName))
 		p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied the %s request for the %s webhook %s", actingUser.Username, strings.ToLower(label), req.WebhookType, escapeMarkdown(req.DisplayName)), nil)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -461,9 +470,11 @@ func (p *Plugin) decideWebhookTransferRequest(actingUserID, requestID, clickedPo
 		})
 	}
 
-	if res, ok := p.claimTransferForFulfill(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "webhook transfer request"); !ok {
+	res, attemptID, ok := p.claimTransferForFulfill(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "webhook transfer request")
+	if !ok {
 		return res
 	}
+	req.attemptID = attemptID
 	// Keep the pending reservation until fulfill succeeds (released there).
 	return p.fulfillWebhookTransferRequest(req, actingUser, requester, cards, rawReq, key)
 }
@@ -564,7 +575,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key,
 				errors.Wrap(idxErr, "the webhook owner was changed in Mattermost but the Request Hub index still names the previous owner; retry Approve to finish the handover"))
 		}
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** reassigned to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 		cardText := fmt.Sprintf("Fully approved. The %s webhook **%s** now belongs to %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 		p.auditWebhookTransferApproved(cards, req, actingUser, requester, nil)
@@ -582,7 +593,7 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 		if idxErr := p.retireWebhookIndex(req.HookID); idxErr != nil {
 			partialErrors = append(partialErrors, "webhook index could not be marked retired: "+idxErr.Error())
 		}
-		p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** retired.", req.WebhookType, escapeMarkdown(req.DisplayName))
 		cardText := fmt.Sprintf("Fully approved. The %s webhook **%s** has been deleted.", req.WebhookType, escapeMarkdown(req.DisplayName))
 		if len(partialErrors) > 0 {
@@ -608,16 +619,37 @@ func (p *Plugin) fulfillWebhookTransferRequest(req *webhookTransferRequest, acti
 // that record when it claimed the ticket. Each stage is therefore written
 // back to the record before the next irreversible call, never after.
 const (
+	// cutoverStagePreparing: this attempt has cleared whatever the last one
+	// left behind and is getting ready to ask for a replacement. Nothing
+	// exists in Mattermost yet, but the ticket must not read as a plain
+	// pending record — a Deny landing here would delete it and free the
+	// claim while the attempt goes on to create a hook.
+	cutoverStagePreparing = "preparing"
 	// cutoverStageCreating: Mattermost has been asked to make the
 	// replacement hook but its ID is not known yet. A lost response leaves
 	// an orphan that only this stage records.
 	cutoverStageCreating = "creating"
+	// cutoverStageOrphanCheck: an earlier create never reported back and
+	// the ticket has been paused once, naming what to look for. The next
+	// Approve is a System Admin's word that it is safe to build another.
+	cutoverStageOrphanCheck = "orphan_check"
 	// cutoverStageReplacementReady: the replacement exists (an outgoing
 	// hook staged on a temporary trigger); the old hook may still be live.
 	cutoverStageReplacementReady = "replacement_ready"
 	// cutoverStageOldDeleted: the old hook is gone; an outgoing
 	// replacement may still be on its temporary trigger.
 	cutoverStageOldDeleted = "old_deleted"
+	// cutoverStageTriggersRestored: the outgoing replacement carries its
+	// real trigger words. A retry must not put them back a second time and
+	// overwrite edits the new owner has made since.
+	cutoverStageTriggersRestored = "triggers_restored"
+	// cutoverStageCredentialsPending: the successor's secret is about to go
+	// out. A resume from here cannot tell whether it arrived, so the DM it
+	// sends says a copy may already have landed.
+	cutoverStageCredentialsPending = "credentials_pending"
+	// cutoverStageCredentialsDelivered: the successor holds the secret;
+	// only the index row and the ticket close are left.
+	cutoverStageCredentialsDelivered = "credentials_delivered"
 	// cutoverStageCleanupPending: a replacement exists that nobody can use
 	// — its secret never reached the successor — and it could not be taken
 	// back down. The old hook is untouched, so the ticket carries the
@@ -626,27 +658,50 @@ const (
 	cutoverStageCleanupPending = "cleanup_pending"
 )
 
+// cutoverStageOrder ranks the stages a handover passes through, so a resume
+// can tell which steps are already behind it. Stages that sit outside that
+// line (nothing staged yet, or a leftover to clean up) rank zero.
+var cutoverStageOrder = map[string]int{
+	cutoverStageCreating:             1,
+	cutoverStageReplacementReady:     2,
+	cutoverStageOldDeleted:           3,
+	cutoverStageTriggersRestored:     4,
+	cutoverStageCredentialsPending:   5,
+	cutoverStageCredentialsDelivered: 6,
+}
+
+// cutoverReached reports whether the ticket is at or past stage.
+func (req *webhookTransferRequest) cutoverReached(stage string) bool {
+	return cutoverStageOrder[req.CutoverStage] >= cutoverStageOrder[stage]
+}
+
 const cutoverExpiryBlockedMsg = "This request is past the review window, but its replacement webhook already exists. Click Approve to finish the handover — a System Admin has to clean up by hand if it should be abandoned instead."
 
-// cutoverInProgress reports whether a retire+recreate may already have made
-// the replacement hook. The ticket is the only pointer to it, so Expire,
-// Deny and Withdraw are refused in that state — including while the create
-// is still outstanding, when a hook may exist that nothing else records.
+// cutoverInProgress reports whether a retire+recreate is part-way through.
+// The ticket is the only pointer to a replacement hook, so Expire, Deny and
+// Withdraw are refused in that state — including while the create is still
+// outstanding, when a hook may exist that nothing else records, and while
+// an attempt is preparing one, when a closed ticket would leave the hook it
+// is about to make with nothing pointing at it.
 func (req *webhookTransferRequest) cutoverInProgress() bool {
-	return strings.TrimSpace(req.ResumeNewHookID) != "" || req.CutoverStage == cutoverStageCreating
+	switch req.CutoverStage {
+	case cutoverStagePreparing, cutoverStageCreating, cutoverStageOrphanCheck:
+		return true
+	}
+	return strings.TrimSpace(req.ResumeNewHookID) != ""
 }
 
 // cutoverOldDeleted reports whether the hook being replaced is already
 // gone. ResumeOldDeleted covers records written before CutoverStage.
 func (req *webhookTransferRequest) cutoverOldDeleted() bool {
-	return req.CutoverStage == cutoverStageOldDeleted || req.ResumeOldDeleted
+	return req.cutoverReached(cutoverStageOldDeleted) || req.ResumeOldDeleted
 }
 
 // stageCutover records everything a later Approve needs to pick the
 // handover up at stage.
 func (req *webhookTransferRequest) stageCutover(stage string, cut webhookCutover) {
 	req.CutoverStage = stage
-	req.ResumeOldDeleted = stage == cutoverStageOldDeleted
+	req.ResumeOldDeleted = req.cutoverReached(cutoverStageOldDeleted)
 	req.ResumeNewHookID = cut.newHookID
 	req.ResumeChannelID = cut.channelID
 	req.ResumeCallbackURLs = append([]string(nil), cut.callbackURLs...)
@@ -670,7 +725,10 @@ func (req *webhookTransferRequest) clearCutover() {
 // renews before each side effect so a stalled approval cannot run on after
 // the asset was handed to another ticket.
 func (req *webhookTransferRequest) transferLease() transferLease {
-	return transferLease{kind: pendingKindWebhookTransfer, assetKey: req.pendingKey(), requestID: req.ID}
+	return transferLease{
+		kind: pendingKindWebhookTransfer, assetKey: req.pendingKey(),
+		requestID: req.ID, attemptID: req.attemptID,
+	}
 }
 
 // webhookCutover is the in-flight state of a retire+recreate: the
@@ -699,6 +757,25 @@ func (p *Plugin) writeCutoverCheckpoint(req *webhookTransferRequest, key string)
 		return nil, errors.Wrap(err, "failed to store the webhook cutover checkpoint")
 	}
 	return data, nil
+}
+
+// publishCutoverPreparing puts the ticket back as a cutover this attempt is
+// still working on, after it has cleared whatever the last one left behind.
+// Claiming the approval deleted the record, so without this write the only
+// thing standing between a concurrent Deny and a half-made replacement is
+// nothing at all.
+//
+// The bytes returned are the plain ticket, for the failure paths that
+// follow: those end the attempt with nothing staged in Mattermost, so the
+// ticket they put back must be deniable and withdrawable again.
+func (p *Plugin) publishCutoverPreparing(req *webhookTransferRequest, key string, rawReq []byte) ([]byte, error) {
+	req.clearCutover()
+	req.CutoverStage = cutoverStagePreparing
+	if _, err := p.writeCutoverCheckpoint(req, key); err != nil {
+		return rawReq, err
+	}
+	req.clearCutover()
+	return p.cutoverRecordBytes(req, rawReq), nil
 }
 
 // clearCutoverCheckpoint removes exactly the checkpoint bytes this approval
@@ -731,6 +808,11 @@ func (p *Plugin) cutoverDenyBlocker(req *webhookTransferRequest, actingUserID st
 	if req.cutoverOldDeleted() {
 		return cutoverStrandedMsg
 	}
+	if req.CutoverStage == cutoverStagePreparing {
+		// Nothing is staged: the last attempt had removed the leftover it
+		// found and had not asked for a replacement yet.
+		return ""
+	}
 	if strings.TrimSpace(req.ResumeNewHookID) == "" {
 		// The create never reported back, so there is no hook ID to take
 		// down and denying would leave an orphan nothing points at.
@@ -760,9 +842,11 @@ func (p *Plugin) denyStagedCutover(req *webhookTransferRequest, actingUser, requ
 	if msg := p.cutoverDenyBlocker(req, actingID); msg != "" {
 		return decisionResult{Reply: msg}, false
 	}
-	if res, ok := p.claimTransferForFulfill(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "webhook transfer request"); !ok {
+	res, attemptID, ok := p.claimTransferForFulfill(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "webhook transfer request")
+	if !ok {
 		return res, false
 	}
+	req.attemptID = attemptID
 	// The old hook may have gone away between the blocker and the claim,
 	// which would make deleting the replacement strand the webhook entirely.
 	exists, existErr := p.webhookStillExists(req.WebhookType, req.HookID, actingID)
@@ -796,11 +880,10 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 				webhookCutover{newHookID: stale, channelID: req.ResumeChannelID, checkpoint: rawReq},
 				errors.Wrap(delErr, "the unused replacement webhook left by the last attempt could not be removed"))
 		}
-		req.clearCutover()
-		if _, cpErr := p.writeCutoverCheckpoint(req, key); cpErr != nil {
+		var cpErr error
+		if rawReq, cpErr = p.publishCutoverPreparing(req, key, rawReq); cpErr != nil {
 			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, cpErr)
 		}
-		rawReq = p.cutoverRecordBytes(req, rawReq)
 	}
 	// A previous approval already made the replacement; finish that cutover
 	// instead of creating a second hook.
@@ -808,13 +891,24 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 		return p.resumeWebhookRetireRecreate(req, actingUser, requester, cards, rawReq, key)
 	}
 	// A checkpoint stuck at "creating" means the last attempt never learned
-	// the replacement's ID. Nothing can reuse a hook with no ID, so this
-	// attempt creates a fresh one and names the orphan for cleanup.
+	// the replacement's ID, so a hook may exist that nothing points at.
+	// Building another one silently would double it; pause once naming what
+	// to look for, and treat the next Approve as the word that it is dealt
+	// with.
 	var orphanWarning []string
-	if req.CutoverStage == cutoverStageCreating {
-		p.API.LogWarn("resuming a webhook cutover that stopped while the replacement was being created", "request_id", req.ID, "webhook_type", req.WebhookType)
+	switch req.CutoverStage {
+	case cutoverStageCreating:
+		p.API.LogWarn("pausing a webhook cutover that stopped while the replacement was being created", "request_id", req.ID, "webhook_type", req.WebhookType)
+		req.CutoverStage = cutoverStageOrphanCheck
+		return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, p.cutoverRecordBytes(req, rawReq), key,
+			errors.New("the last attempt stopped while the replacement was being created, so "+p.cutoverOrphanWarning(req)+
+				"; deal with it and click Approve again to build a fresh replacement"))
+	case cutoverStageOrphanCheck:
 		orphanWarning = append(orphanWarning, p.cutoverOrphanWarning(req))
-		req.clearCutover()
+		var cpErr error
+		if rawReq, cpErr = p.publishCutoverPreparing(req, key, rawReq); cpErr != nil {
+			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, cpErr)
+		}
 	}
 
 	var outgoingSnap *outgoingWebhookRecreate
@@ -891,6 +985,12 @@ func (p *Plugin) fulfillWebhookRetireRecreate(req *webhookTransferRequest, actin
 	}
 	if outgoingSnap != nil && strings.TrimSpace(outgoingSnap.Description) != "" {
 		synthetic.Description = strings.TrimSpace(outgoingSnap.Description)
+	}
+	// Everything above is read-only, and a slow read can outlast the lease.
+	// Confirm this attempt still owns the asset before it publishes an
+	// intent — or a hook — against someone else's ticket.
+	if leaseErr := p.renewTransferLease(req.transferLease()); leaseErr != nil {
+		return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, rawReq, key, leaseErr)
 	}
 	// Record the intent before Mattermost is asked for the hook: the pending
 	// record went away when the approval was claimed, so a lost create
@@ -1006,22 +1106,23 @@ func webhookCreateRefused(err error) bool {
 }
 
 // advanceWebhookCutover runs every stage left once the replacement hook
-// exists: delete the old hook, move the index rows, put the real triggers
-// back, then hand the hook over. The claim lease is renewed before each
-// REST call, so an approval that lost the asset stops instead of acting on
-// someone else's ticket.
+// exists: delete the old hook, retire the old index row, put the real
+// triggers back, then hand the hook over. The claim lease is renewed before
+// each REST call, so an approval that lost the asset stops instead of
+// acting on someone else's ticket.
 func (p *Plugin) advanceWebhookCutover(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, key string, cut webhookCutover) decisionResult {
 	lease := req.transferLease()
 
-	// A resumed cutover can be days after the approval, so the successor is
-	// re-checked before anything is torn down: an ineligible successor must
-	// not cost the requester the hook that is still live.
+	// A resumed cutover can be days after the approval, so the replacement
+	// and the successor are re-checked before anything is torn down: an
+	// ineligible successor must not cost the requester the hook that is
+	// still live.
 	if cut.resumed {
-		if err := p.checkCutoverSuccessor(req, cut); err != nil {
-			return p.pauseCutover(req, actingUser, requester, cards, key, cut, err)
-		}
 		if res, stop := p.confirmResumedReplacement(req, actingUser, requester, cards, key, cut); stop {
 			return res
+		}
+		if err := p.checkCutoverSuccessor(req, cut, actingUser.Id); err != nil {
+			return p.pauseCutover(req, actingUser, requester, cards, key, cut, err)
 		}
 	}
 
@@ -1079,20 +1180,38 @@ func (p *Plugin) advanceWebhookCutover(req *webhookTransferRequest, actingUser, 
 			cut.partialErrors = append(cut.partialErrors, "old webhook index could not be marked retired: "+idxErr.Error())
 		}
 	}
-	// Index the replacement before the triggers go back, so a hook that
-	// goes on to need another resume is still listed in Transfer/Retire.
-	if idxErr := p.indexReplacementWebhook(req, cut); idxErr != nil {
-		cut.partialErrors = append(cut.partialErrors, "new webhook index could not be written: "+idxErr.Error()+" — the hook exists but may not appear in Transfer/Retire")
-	}
-	if req.WebhookType == webhookTypeOutgoing && req.cutoverOldDeleted() && cut.snap != nil {
+	// The replacement is deliberately not indexed yet: a row in
+	// Transfer/Retire is an invitation for another ticket to retire the
+	// hook while this handover is still half-done. It goes in at the end,
+	// in finishWebhookRecreate.
+	if req.WebhookType == webhookTypeOutgoing && req.cutoverOldDeleted() && cut.snap != nil &&
+		!req.cutoverReached(cutoverStageTriggersRestored) {
 		if leaseErr := p.renewTransferLease(lease); leaseErr != nil {
 			return p.restoreWebhookTransferAfterFailure(req, actingUser, requester, cards, cut.checkpoint, key, leaseErr)
 		}
 		if trigErr := p.restoreOutgoingWebhookTriggers(cut.newHookID, actingUser.Id, cut.snap); trigErr != nil {
 			return p.pauseCutover(req, actingUser, requester, cards, key, cut, trigErr)
 		}
+		// The real triggers are live. Record that before the handover goes
+		// any further: a retry that put them back a second time would wipe
+		// whatever the new owner has changed since.
+		cut.checkpoint = p.checkpointCutoverStage(req, key, cutoverStageTriggersRestored, &cut)
 	}
 	return p.finishWebhookRecreate(req, actingUser, requester, cards, key, cut)
+}
+
+// checkpointCutoverStage records a step that is now behind the handover, so
+// a retry does not run it again. A write that fails is noted and the last
+// checkpoint kept: the step really did happen, and losing the note costs a
+// repeat rather than the hook.
+func (p *Plugin) checkpointCutoverStage(req *webhookTransferRequest, key, stage string, cut *webhookCutover) []byte {
+	req.stageCutover(stage, *cut)
+	raw, err := p.writeCutoverCheckpoint(req, key)
+	if err != nil {
+		cut.partialErrors = append(cut.partialErrors, "the cutover checkpoint could not be updated after "+stage+": "+err.Error())
+		return cut.checkpoint
+	}
+	return raw
 }
 
 // confirmResumedReplacement makes sure the hook a resumed checkpoint points
@@ -1121,12 +1240,21 @@ func (p *Plugin) confirmResumedReplacement(req *webhookTransferRequest, actingUs
 }
 
 // checkCutoverSuccessor re-runs the successor checks against the channel
-// the replacement actually lives in; the old hook's index row is retired by
-// now, so the request's own channel may be all there is to go on.
-func (p *Plugin) checkCutoverSuccessor(req *webhookTransferRequest, cut webhookCutover) error {
-	channelID := cut.channelID
-	if channelID == "" {
-		channelID = req.ChannelID
+// the replacement lives in now. A staged hook can be moved while its
+// cutover sits parked, and the channel the checkpoint recorded is then the
+// wrong one to vet anybody against — the successor would be handed a hook,
+// and its secret, somewhere nobody checked them for.
+func (p *Plugin) checkCutoverSuccessor(req *webhookTransferRequest, cut webhookCutover, adminUserID string) error {
+	approved := cut.channelID
+	if approved == "" {
+		approved = req.ChannelID
+	}
+	channelID, known := p.liveWebhookChannelID(req.WebhookType, cut.newHookID, adminUserID)
+	if !known {
+		return errors.New("could not confirm which channel the replacement webhook posts to; retry Approve")
+	}
+	if channelID != approved {
+		return errors.New("the replacement webhook no longer sits where this handover approved it; a System Admin has to move it back or remove it, then Approve again")
 	}
 	if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
 		channelID: channelID, webhookType: req.WebhookType, noun: "webhook",
@@ -1247,34 +1375,29 @@ func recreateCallbackURLs(callbackURL string, snap *outgoingWebhookRecreate) []s
 	return []string{callbackURL}
 }
 
-// finishWebhookRecreate DMs the successor what they need, clears the
-// cutover checkpoint and closes the ticket. The outgoing hook's token is a
-// secret, so it only ever goes out in an auto-deleting DM — never on the
-// approval card or in the audit trail.
+// finishWebhookRecreate DMs the successor what they need, lists the
+// replacement, clears the cutover checkpoint and closes the ticket. The
+// outgoing hook's token is a secret, so it only ever goes out in an
+// auto-deleting DM — never on the approval card or in the audit trail.
+//
+// Each step is written back before the next, so a close that has to be
+// retried picks up where it stopped instead of re-sending the secret and
+// re-stamping triggers the new owner may have edited since.
 func (p *Plugin) finishWebhookRecreate(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, key string, out webhookCutover) decisionResult {
+	if req.WebhookType == webhookTypeOutgoing && !req.cutoverReached(cutoverStageCredentialsDelivered) {
+		if res, stop := p.deliverRecreatedWebhookToken(req, actingUser, requester, cards, key, &out); stop {
+			return res
+		}
+	}
 	partialErrors := out.partialErrors
-	if req.WebhookType == webhookTypeOutgoing {
-		if out.newHookToken == "" {
-			// A resumed cutover never saw the create response.
-			if token, tokErr := p.outgoingWebhookToken(out.newHookID, actingUser.Id); tokErr != nil {
-				p.API.LogWarn("failed to read recreated outgoing webhook token", "request_id", req.ID, "error", tokErr.Error())
-			} else {
-				out.newHookToken = token
-			}
-		}
-		lines := []string{fmt.Sprintf("Your outgoing webhook **%s** was recreated under your account.\n**Callback URL(s) (unchanged):** %s",
-			escapeMarkdown(req.DisplayName), inlineCode(strings.Join(out.callbackURLs, ", ")))}
-		hasSecret := out.newHookToken != ""
-		if hasSecret {
-			lines = append(lines,
-				fmt.Sprintf("🔑 **New webhook token:** %s", inlineCode(out.newHookToken)),
-				"⚠️ **Save this now.** This message auto-deletes in ~72 hours.")
-		} else {
-			lines = append(lines, "The hook has a new token — find it under **Integrations → Outgoing Webhooks**.")
-		}
-		if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, hasSecret) && hasSecret {
-			partialErrors = append(partialErrors, "the new webhook token could not be DM'd to the new owner — they can read it under Integrations → Outgoing Webhooks")
-		}
+
+	// The replacement only joins Transfer/Retire now the handover is done:
+	// a row that appears earlier lets another ticket retire the hook while
+	// this one is still half-way through. A failed write keeps the ticket,
+	// because a live hook nothing lists is a hook nobody can hand on.
+	if idxErr := p.indexReplacementWebhook(req, out); idxErr != nil {
+		return p.pauseCutover(req, actingUser, requester, cards, key, out,
+			errors.Wrap(idxErr, "the replacement webhook could not be listed in Transfer/Retire; it exists and the handover is otherwise done — retry Approve"))
 	}
 
 	if clearErr := p.clearCutoverCheckpoint(key, out.checkpoint); clearErr != nil {
@@ -1284,7 +1407,7 @@ func (p *Plugin) finishWebhookRecreate(req *webhookTransferRequest, actingUser, 
 		return p.pauseCutover(req, actingUser, requester, cards, key, out, clearErr)
 	}
 	req.clearCutover()
-	p.releaseTransferTicket(pendingKindWebhookTransfer, req.RequesterID, req.ID, req.pendingKey())
+	p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 	outcome := fmt.Sprintf("✅ Fully approved. %s webhook **%s** recreated under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 	cardText := fmt.Sprintf("Fully approved. A new %s webhook **%s** was created under %s.", req.WebhookType, escapeMarkdown(req.DisplayName), p.mentionList([]string{req.NewOwnerUserID}))
 	if len(partialErrors) > 0 {
@@ -1299,6 +1422,53 @@ func (p *Plugin) finishWebhookRecreate(req *webhookTransferRequest, actingUser, 
 		CardTitle: "Webhook Recreated", CardText: cardText,
 		StatusLine: outcome,
 	})
+}
+
+// deliverRecreatedWebhookToken hands the successor the outgoing hook's new
+// token. The intent is written down first, so a retry that cannot tell
+// whether the DM arrived says so rather than quietly sending a second copy,
+// and the delivery is written down after, so a retry past this point does
+// not send one at all. stop is true when the caller must not go on.
+func (p *Plugin) deliverRecreatedWebhookToken(req *webhookTransferRequest, actingUser, requester *model.User, cards decisionCards, key string, out *webhookCutover) (decisionResult, bool) {
+	resend := req.cutoverReached(cutoverStageCredentialsPending)
+	if !resend {
+		req.stageCutover(cutoverStageCredentialsPending, *out)
+		raw, cpErr := p.writeCutoverCheckpoint(req, key)
+		if cpErr != nil {
+			return p.pauseCutover(req, actingUser, requester, cards, key, *out,
+				errors.Wrap(cpErr, "the handover could not be recorded before the new token was sent; nothing was sent — retry Approve")), true
+		}
+		out.checkpoint = raw
+	}
+	if out.newHookToken == "" {
+		// A resumed cutover never saw the create response.
+		if token, tokErr := p.outgoingWebhookToken(out.newHookID, actingUser.Id); tokErr != nil {
+			p.API.LogWarn("failed to read recreated outgoing webhook token", "request_id", req.ID, "error", tokErr.Error())
+		} else {
+			out.newHookToken = token
+		}
+	}
+	lines := []string{fmt.Sprintf("Your outgoing webhook **%s** was recreated under your account.\n**Callback URL(s) (unchanged):** %s",
+		escapeMarkdown(req.DisplayName), inlineCode(strings.Join(out.callbackURLs, ", ")))}
+	hasSecret := out.newHookToken != ""
+	if hasSecret {
+		lines = append(lines,
+			fmt.Sprintf("🔑 **New webhook token:** %s", inlineCode(out.newHookToken)),
+			"⚠️ **Save this now.** This message auto-deletes in ~72 hours.")
+	} else {
+		lines = append(lines, "The hook has a new token — find it under **Integrations → Outgoing Webhooks**.")
+	}
+	if resend {
+		lines = append(lines, "_An earlier attempt may already have sent you this — it is the same hook and the same token._")
+	}
+	if !p.sendTransferSecretsDM(req.NewOwnerUserID, req.ID, lines, hasSecret) {
+		if hasSecret {
+			out.partialErrors = append(out.partialErrors, "the new webhook token could not be DM'd to the new owner — they can read it under Integrations → Outgoing Webhooks")
+		}
+		return decisionResult{}, false
+	}
+	out.checkpoint = p.checkpointCutoverStage(req, key, cutoverStageCredentialsDelivered, out)
+	return decisionResult{}, false
 }
 
 // webhookRecreateDescription prefers the indexed description, then a short
@@ -1506,7 +1676,7 @@ func (p *Plugin) restoreWebhookTransferAfterFailure(req *webhookTransferRequest,
 		approverName = actingUser.Username
 	}
 	p.API.LogError("failed to carry out webhook transfer/retire on approval", "action", req.Action, "error", cause.Error())
-	restored, restoreErr := p.restoreTransferRecord(pendingKindWebhookTransfer, req.pendingKey(), req.ID, key, rawReq)
+	restored, restoreErr := p.restoreTransferRecord(req.transferLease(), key, rawReq)
 	if restoreErr != nil && !restored {
 		p.API.LogError("failed to restore webhook transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindWebhookTransfer, req.RequesterID, approverName,

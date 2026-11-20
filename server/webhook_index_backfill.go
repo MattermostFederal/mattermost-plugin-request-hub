@@ -104,19 +104,21 @@ func (p *Plugin) backfillWebhookIndexKeys(keys []string, adminUserID func() stri
 		if snap.ID == "" {
 			snap.ID = h.RequestID
 		}
-		// The owner may have moved on since the request was approved, and an
-		// index row is what grants transfer rights. Without the live owner
-		// this row would hand them to whoever filed the original request, so
-		// skip it and let a later run pick the hook up.
-		owner, ownerKnown := p.liveWebhookOwnerID(snap.WebhookType, hookID, adminUserID())
-		if !ownerKnown {
-			p.API.LogWarn("webhook index backfill: skipping a hook whose live owner could not be read", "request_id", h.RequestID)
+		// Owner and channel may both have moved on since the request was
+		// approved, and the index row is what grants transfer rights: the
+		// owner decides who may file, the channel decides who may step in
+		// once the hook is orphaned. A historical copy of either would hand
+		// those rights to the wrong people, so skip the hook and let a
+		// later run pick it up.
+		owner, channelID, scopeKnown := p.liveWebhookScope(snap.WebhookType, hookID, adminUserID())
+		if !scopeKnown {
+			p.API.LogWarn("webhook index backfill: skipping a hook whose live owner or channel could not be read", "request_id", h.RequestID)
 			continue
 		}
 		entry := webhookIndexEntry{
 			HookID:      hookID,
 			WebhookType: snap.WebhookType,
-			ChannelID:   snap.ChannelID,
+			ChannelID:   channelID,
 			TeamID:      snap.TeamID,
 			DisplayName: snap.DisplayName,
 			Description: strings.TrimSpace(snap.Description),

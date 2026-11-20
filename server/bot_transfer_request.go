@@ -56,6 +56,11 @@ type botTransferRequest struct {
 	DMChannelID       string `json:"dm_channel_id,omitempty"`
 
 	twoStepState
+
+	// attemptID names the fulfill attempt that holds the asset claim for
+	// this run. It belongs to the attempt, not the ticket, so it is never
+	// persisted.
+	attemptID string
 }
 
 // botTransferInput carries the caller-supplied fields for a new bot
@@ -207,14 +212,14 @@ func (p *Plugin) submitBotTransferRequest(requesterID string, in botTransferInpu
 	rawBefore, snapErr := json.Marshal(req)
 	if snapErr != nil {
 		p.deletePendingRequestKV(kvBotTransferRequestPrefix + req.ID)
-		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		return "", errors.Wrap(snapErr, "failed to snapshot bot transfer request")
 	}
 
 	approvalPostID, approvalChannelID, err := p.postBotTransferApprovalRequest(req, requester)
 	if err != nil {
 		p.deletePendingRequestKV(kvBotTransferRequestPrefix + req.ID)
-		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		p.API.LogError("failed to post bot transfer request", "error", err.Error())
 		return "", errors.New("could not send your request to the approvers; try again or contact a System Admin")
 	}
@@ -403,7 +408,7 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
 			return res
 		}
-		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("❌ Denied by @%s. Bot **@%s** %s.", actingUser.Username, req.BotUsername, verb)
 		p.decisionEvent(cards, eventDenied, fmt.Sprintf("@%s denied the request to %s bot @%s", actingUser.Username, verb, req.BotUsername), nil)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -443,9 +448,11 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 		})
 	}
 
-	if res, ok := p.claimTransferForFulfill(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "bot transfer request"); !ok {
+	res, attemptID, ok := p.claimTransferForFulfill(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq, cards, "bot transfer request")
+	if !ok {
 		return res
 	}
+	req.attemptID = attemptID
 	// Keep the pending reservation until fulfill succeeds so MaxPending and
 	// restore-after-failure stay consistent (release happens in fulfill*).
 	return p.fulfillBotTransferRequest(req, actingUser, requester, cards, rawReq, key)
@@ -540,7 +547,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if idxErr := p.retireBotIndex(req.BotUserID); idxErr != nil {
 			partialErrors = append(partialErrors, "bot index could not be marked retired: "+idxErr.Error())
 		}
-		p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
 		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tokens revoked.", req.BotUsername)
 		if len(partialErrors) > 0 {
@@ -591,7 +598,7 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		partialErrors = append(partialErrors, rotation.partialErrors...)
 	}
 
-	p.releaseTransferTicket(pendingKindBotTransfer, req.RequesterID, req.ID, req.pendingKey())
+	p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 	outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** transferred to %s.",
 		req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
 	cardText := fmt.Sprintf("Fully approved. Bot **@%s** now belongs to %s.", req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
@@ -614,7 +621,10 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 // transferLease names this ticket's per-asset claim, which long side
 // effects renew while they run.
 func (req *botTransferRequest) transferLease() transferLease {
-	return transferLease{kind: pendingKindBotTransfer, assetKey: req.pendingKey(), requestID: req.ID}
+	return transferLease{
+		kind: pendingKindBotTransfer, assetKey: req.pendingKey(),
+		requestID: req.ID, attemptID: req.attemptID,
+	}
 }
 
 // botTransferRecordBytes marshals the ticket as it stands now, falling back
@@ -723,7 +733,7 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 		approverName = actingUser.Username
 	}
 	p.API.LogError("failed to carry out bot transfer/retire on approval", "action", req.Action, "error", cause.Error())
-	restored, restoreErr := p.restoreTransferRecord(pendingKindBotTransfer, req.pendingKey(), req.ID, key, rawReq)
+	restored, restoreErr := p.restoreTransferRecord(req.transferLease(), key, rawReq)
 	if restoreErr != nil && !restored {
 		p.API.LogError("failed to restore bot transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,

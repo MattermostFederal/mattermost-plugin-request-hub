@@ -68,14 +68,24 @@ func TestDecideWithdraw_OnlyRequester(t *testing.T) {
 	res := p.decideWithdraw("admin1", testChannelRequestID, "")
 
 	require.Contains(t, res.Reply, "Only the person who submitted")
+	assertTicketNotClaimed(t, api)
 }
 
 func TestDecideWithdraw_WrongCardRefused(t *testing.T) {
-	_, p, _ := decisionFixture(t, "app1")
+	api, p, _ := decisionFixture(t, "app1")
 
 	res := p.decideWithdraw("u_req", testChannelRequestID, "someone-elses-post")
 
 	require.Equal(t, buttonNotOnCardText, res.Reply)
+	assertTicketNotClaimed(t, api)
+}
+
+// assertTicketNotClaimed checks a refused withdraw never took the ticket's
+// decision claim: taking it and rolling back would still race a real
+// decision running at the same moment.
+func assertTicketNotClaimed(t *testing.T, api *plugintest.API) {
+	t.Helper()
+	api.AssertNotCalled(t, "KVCompareAndDelete", kvRequestPrefix+testChannelRequestID, mock.Anything)
 }
 
 func TestDecideWithdraw_CardClickNeedsADMRoot(t *testing.T) {
@@ -93,6 +103,7 @@ func TestDecideWithdraw_CardClickNeedsADMRoot(t *testing.T) {
 
 	require.Equal(t, buttonNotOnCardText, res.Reply)
 	require.Contains(t, store, kvRequestPrefix+testChannelRequestID, "a refused click leaves the ticket alone")
+	assertTicketNotClaimed(t, api)
 }
 
 func TestDecideWithdraw_LostClaimKeepsTheTicket(t *testing.T) {

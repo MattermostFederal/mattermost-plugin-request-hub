@@ -165,6 +165,48 @@ func (p *Plugin) liveIncomingWebhookChannelID(hookID, adminUserID string) (strin
 	return strings.TrimSpace(hook.ChannelId), nil
 }
 
+// liveWebhookChannelID reads where a hook of either type is scoped now.
+// known is false when the read failed or the seam in use carries no
+// channel at all — an unverifiable scope must never pass for the channel a
+// ticket was approved against.
+func (p *Plugin) liveWebhookChannelID(webhookType, hookID, adminUserID string) (channelID string, known bool) {
+	if strings.TrimSpace(hookID) == "" {
+		return "", false
+	}
+	switch webhookType {
+	case webhookTypeIncoming:
+		live, err := p.liveIncomingWebhookChannelID(hookID, adminUserID)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(live), true
+	case webhookTypeOutgoing:
+		snap, err := p.loadOutgoingWebhookForRecreate(hookID, adminUserID)
+		if err != nil || snap == nil || snap.channelUnknown {
+			return "", false
+		}
+		// An outgoing hook with no channel fires team-wide. That is a real
+		// scope, not a failed read.
+		return strings.TrimSpace(snap.ChannelID), true
+	}
+	return "", false
+}
+
+// liveWebhookScope reads a hook's current owner and channel together, for
+// callers that have to write both down. known is false unless Mattermost
+// supplied them.
+func (p *Plugin) liveWebhookScope(webhookType, hookID, adminUserID string) (owner, channelID string, known bool) {
+	owner, ownerKnown := p.liveWebhookOwnerID(webhookType, hookID, adminUserID)
+	if !ownerKnown {
+		return "", "", false
+	}
+	channelID, channelKnown := p.liveWebhookChannelID(webhookType, hookID, adminUserID)
+	if !channelKnown {
+		return "", "", false
+	}
+	return owner, channelID, true
+}
+
 // webhookOwnerForChecks is the owner the nominate ACL and successor checks
 // run against: the live Mattermost owner when it can be read, otherwise the
 // index row. A live owner that disagrees with the index is written back,

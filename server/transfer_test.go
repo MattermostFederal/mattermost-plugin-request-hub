@@ -146,7 +146,7 @@ func TestClaimTransferAsset_CAS(t *testing.T) {
 	require.NoError(t, p.claimTransferAsset(pendingKindBotTransfer, "bot1", "req-d"))
 	require.Equal(t, "req-d", claim().requestID)
 
-	p.releaseTransferAssetClaim(pendingKindBotTransfer, "bot1", "req-d")
+	p.releaseTransferAssetClaim(pendingKindBotTransfer, "bot1", "req-d", "")
 	_, held := store[claimKey]
 	require.False(t, held)
 }
@@ -172,6 +172,134 @@ func TestRenewTransferLease(t *testing.T) {
 
 	delete(store, claimKey)
 	require.ErrorIs(t, p.renewTransferLease(lease), errTransferClaimLost)
+}
+
+func TestTransferLease_AttemptOwnership(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := fakeKV(api)
+	p := newTestPlugin(api)
+
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+	newer := transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a", attemptID: "att-2"}
+	older := transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a", attemptID: "att-1"}
+	live := func() []byte {
+		return transferClaim{requestID: "req-a", phase: transferPhaseFulfilling, leaseAt: 1, attemptID: "att-2"}.encode()
+	}
+
+	store[claimKey] = live()
+	require.ErrorIs(t, p.renewTransferLease(older), errTransferClaimLost,
+		"an attempt that paused and came back must not keep a newer attempt's lease alive")
+	require.NoError(t, p.renewTransferLease(newer))
+
+	store[claimKey] = live()
+	p.releaseTransferAssetClaim(pendingKindBotTransfer, "bot1", "req-a", "att-1")
+	require.Contains(t, store, claimKey, "the older attempt must not free an asset the newer one is working on")
+
+	held, err := p.transferClaimStillHeld(older)
+	require.NoError(t, err)
+	require.False(t, held)
+	held, err = p.transferClaimStillHeld(newer)
+	require.NoError(t, err)
+	require.True(t, held)
+
+	// A plain pending ticket carries no attempt, so its holder still owns
+	// it however it is addressed.
+	store[claimKey] = transferClaim{requestID: "req-a", phase: transferPhaseHeld, leaseAt: 1}.encode()
+	require.NoError(t, p.renewTransferLease(older))
+	p.releaseTransferAssetClaim(pendingKindBotTransfer, "bot1", "req-a", "att-1")
+	require.NotContains(t, store, claimKey)
+}
+
+func TestBeginTransferFulfill_RechecksTheLeaseOnEveryCASPass(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+
+	// A second approver reads a held claim, then loses the CAS to the
+	// approver that got there first. Before fakeKV so this wins.
+	var store map[string][]byte
+	raced := false
+	api.On("KVCompareAndSet", claimKey, mock.Anything, mock.Anything).
+		Return(func(key string, _, _ []byte) (bool, *model.AppError) {
+			if !raced {
+				raced = true
+				store[key] = transferClaim{
+					requestID: "req-a", phase: transferPhaseFulfilling,
+					leaseAt: model.GetMillis(), attemptID: "att-winner",
+				}.encode()
+				return false, nil
+			}
+			return false, nil
+		}).Maybe()
+	store = fakeKV(api)
+	p := newTestPlugin(api)
+
+	store[claimKey] = transferClaim{requestID: "req-a", phase: transferPhaseHeld, leaseAt: model.GetMillis()}.encode()
+	_, _, err := p.beginTransferFulfill(pendingKindBotTransfer, "bot1", "req-a")
+	require.ErrorIs(t, err, errTransferFulfillInFlight,
+		"the retry has to look at the value it is replacing, not the one it read first")
+	require.Equal(t, "att-winner", parseTransferClaim(store[claimKey]).attemptID)
+}
+
+func TestClaimTransferForFulfill_PutsTheClaimBackWhenTheRecordStays(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := fakeKV(api)
+	p := newTestPlugin(api)
+
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+	key := kvBotTransferRequestPrefix + "req-a"
+	store[claimKey] = transferClaim{requestID: "req-a", phase: transferPhaseHeld, leaseAt: 1}.encode()
+	store[key] = []byte(`{"id":"req-a","two_step":1}`)
+
+	// Stale bytes: another decision re-published the record first, so this
+	// approval never owned the work it just moved the claim for.
+	_, attemptID, ok := p.claimTransferForFulfill(pendingKindBotTransfer, "bot1", "req-a", key,
+		[]byte(`{"id":"req-a"}`), newDecisionCards("req-a", "", ""), "transfer")
+	require.False(t, ok)
+	require.Empty(t, attemptID)
+
+	back := parseTransferClaim(store[claimKey])
+	require.Equal(t, transferPhaseHeld, back.phase, "a claim left fulfilling would refuse Approve for an hour")
+	require.Equal(t, "req-a", back.requestID)
+	require.Empty(t, back.attemptID)
+}
+
+func TestClaimTransferForFulfill_DropsAClaimItInventedAndLost(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := fakeKV(api)
+	p := newTestPlugin(api)
+
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+	key := kvBotTransferRequestPrefix + "req-a"
+
+	// No claim row and no record: an old ticket whose record someone else
+	// already closed. The invented row belongs to nobody.
+	_, _, ok := p.claimTransferForFulfill(pendingKindBotTransfer, "bot1", "req-a", key,
+		[]byte(`{"id":"req-a"}`), newDecisionCards("req-a", "", ""), "transfer")
+	require.False(t, ok)
+	require.NotContains(t, store, claimKey)
+}
+
+func TestClaimTransferForFulfill_HandsBackTheAttemptThatOwnsTheClaim(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := fakeKV(api)
+	p := newTestPlugin(api)
+
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+	key := kvBotTransferRequestPrefix + "req-a"
+	raw := []byte(`{"id":"req-a"}`)
+	store[claimKey] = transferClaim{requestID: "req-a", phase: transferPhaseHeld, leaseAt: 1}.encode()
+	store[key] = raw
+
+	_, attemptID, ok := p.claimTransferForFulfill(pendingKindBotTransfer, "bot1", "req-a", key, raw,
+		newDecisionCards("req-a", "", ""), "transfer")
+	require.True(t, ok)
+	require.NotEmpty(t, attemptID)
+	require.Equal(t, attemptID, parseTransferClaim(store[claimKey]).attemptID)
 }
 
 func TestRevokeBotTokenTargets_StopsWhenTheLeaseIsLost(t *testing.T) {
@@ -205,12 +333,30 @@ func TestRevokeBotTokenTargets_StopsWhenTheLeaseIsLost(t *testing.T) {
 func TestRevokeBotTokenTargets_RenewsPartWayThroughALongWalk(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogLevels(api)
-	store := fakeKV(api)
+	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
+
+	// Registered before fakeKV so this claim-key expectation wins; the walk
+	// is only safe if a renewal lands before the first revoke and again
+	// before the next batch, not just somewhere along the way.
+	var events []string
+	var store map[string][]byte
+	api.On("KVCompareAndSet", claimKey, mock.Anything, mock.Anything).
+		Return(func(key string, oldValue, newValue []byte) (bool, *model.AppError) {
+			if !bytes.Equal(store[key], oldValue) {
+				return false, nil
+			}
+			events = append(events, "renew")
+			store[key] = newValue
+			return true, nil
+		}).Maybe()
+	store = fakeKV(api)
 	p := newTestPlugin(api)
 
-	claimKey := transferAssetClaimKey(pendingKindBotTransfer, "bot1")
 	store[claimKey] = transferClaim{requestID: "req-a", phase: transferPhaseFulfilling, leaseAt: 1}.encode()
-	api.On("RevokeUserAccessToken", mock.Anything).Return(nil).Maybe()
+	api.On("RevokeUserAccessToken", mock.Anything).Return(func(tokenID string) *model.AppError {
+		events = append(events, "revoke "+tokenID)
+		return nil
+	}).Maybe()
 
 	targets := botTokenTargets{tracked: map[string]string{}}
 	for i := range botTokenRevokeRenewEvery + 5 {
@@ -222,6 +368,12 @@ func TestRevokeBotTokenTargets_RenewsPartWayThroughALongWalk(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, botTokenRevokeRenewEvery+5, n)
 	require.Greater(t, parseTransferClaim(store[claimKey]).leaseAt, int64(1), "the lease is renewed as the walk runs")
+
+	require.Equal(t, []string{"renew", "revoke tok-00"}, events[:2],
+		"the lease is fresh before the first token is touched")
+	batch := botTokenRevokeRenewEvery
+	require.Equal(t, []string{"renew", fmt.Sprintf("revoke tok-%02d", batch)}, events[batch+1:batch+3],
+		"and again before the next batch rather than once for the whole walk")
 }
 
 func TestWebhookIndexRoundTrip(t *testing.T) {
@@ -613,16 +765,20 @@ func TestWebhookCutover_DenyClaimsBeforeRemovingTheReplacement(t *testing.T) {
 }
 
 func TestResumeWebhookRetireRecreate_RechecksTheSuccessorBeforeDeleting(t *testing.T) {
-	_, p, store := cutoverFixture(t)
+	// The successor was deactivated while the cutover sat half-finished.
+	// The stub has to go in before the fixture's wildcard GetUser, or
+	// testify's first match would answer with an active user instead.
+	newOwnerID := model.NewId()
+	_, p, store := cutoverFixture(t, func(api *plugintest.API) {
+		api.On("GetUser", newOwnerID).
+			Return(&model.User{Id: newOwnerID, Username: "newowner", DeleteAt: model.GetMillis()}, nil).Maybe()
+	})
 	req, key, _ := stageCutover(t, store, model.NewId())
-	req.NewOwnerUserID = model.NewId()
+	req.NewOwnerUserID = newOwnerID
 	req.stageCutover(cutoverStageReplacementReady, webhookCutover{newHookID: "new-hook", channelID: "ch1"})
 	raw := recordJSON(t, req)
 	store[key] = raw
 
-	// The successor was deactivated while the cutover sat half-finished.
-	p.API.(*plugintest.API).On("GetUser", req.NewOwnerUserID).
-		Return(&model.User{Id: req.NewOwnerUserID, Username: "newowner", DeleteAt: model.GetMillis()}, nil)
 	deleted := false
 	p.deleteWebhookFn = func(string, string) error {
 		deleted = true
@@ -640,7 +796,11 @@ func TestResumeWebhookRetireRecreate_RechecksTheSuccessorBeforeDeleting(t *testi
 	require.Equal(t, "new-hook", stored.ResumeNewHookID, "the parked replacement is still tracked")
 }
 
-func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
+// outgoingRecreateFixture is one retire & recreate subtest's own plugin,
+// mock API and store. Nothing is shared between subtests, so a seam or a
+// stubbed call can only ever answer the subtest that set it.
+func outgoingRecreateFixture(t *testing.T) (*plugintest.API, *Plugin, map[string][]byte) {
+	t.Helper()
 	api := &plugintest.API{}
 	stubLogs(api)
 	store := memKV(api)
@@ -654,52 +814,46 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
 	api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
 	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+	return api, p, store
+}
 
-	// resetRecreateSeams clears the shared seams when a subtest ends, even
-	// when one of its assertions fails first.
-	resetRecreateSeams := func(t *testing.T) {
-		t.Cleanup(func() {
-			p.getOutgoingWebhookForRecreateFn = nil
-			p.getOutgoingWebhookCallbackFn = nil
-			p.createOutgoingWebhookFromRecreateFn = nil
-			p.restoreOutgoingWebhookTriggersFn = nil
-			p.outgoingWebhookTokenFn = nil
-			p.createWebhookFn = nil
-			p.deleteWebhookFn = nil
-		})
-	}
-	okTriggers := func(string, string, *outgoingWebhookRecreate) error { return nil }
-	okCreate := func(*webhookRequest, *outgoingWebhookRecreate, string) (string, string, string, error) {
-		return "Outgoing webhook created.", "new-hook", "tok-new", nil
-	}
-	triggerSnap := func() *outgoingWebhookRecreate {
-		return &outgoingWebhookRecreate{
-			ChannelID:    "ch1",
-			CallbackURLs: []string{"https://hooks.example.com/out"},
-			TriggerWords: []string{"alert", "page"},
-			TriggerWhen:  1,
-			ContentType:  "application/json",
-		}
-	}
-	newReq := func(id string) *webhookTransferRequest {
-		req := &webhookTransferRequest{
-			ID: id, RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
-			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
-			Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
-		}
-		store[transferAssetClaimKey(pendingKindWebhookTransfer, req.pendingKey())] = []byte(req.ID)
-		return req
-	}
-	fulfill := func(req *webhookTransferRequest, raw []byte) decisionResult {
-		return p.fulfillWebhookRetireRecreate(req,
-			&model.User{Id: "admin1", Username: "admin"},
-			&model.User{Id: "u_req", Username: "req"},
-			newDecisionCards(req.ID, "", ""), raw, kvWebhookTransferRequestPrefix+req.ID)
-	}
+func okRecreateTriggers(string, string, *outgoingWebhookRecreate) error { return nil }
 
+func okRecreateCreate(*webhookRequest, *outgoingWebhookRecreate, string) (string, string, string, error) {
+	return "Outgoing webhook created.", "new-hook", "tok-new", nil
+}
+
+func outgoingTriggerSnap() *outgoingWebhookRecreate {
+	return &outgoingWebhookRecreate{
+		ChannelID:    "ch1",
+		CallbackURLs: []string{"https://hooks.example.com/out"},
+		TriggerWords: []string{"alert", "page"},
+		TriggerWhen:  1,
+		ContentType:  "application/json",
+	}
+}
+
+func newOutgoingRecreate(store map[string][]byte, id string) *webhookTransferRequest {
+	req := &webhookTransferRequest{
+		ID: id, RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+		DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+		Action: transferActionRetireRecreate, NewOwnerUserID: "u_new",
+	}
+	store[transferAssetClaimKey(pendingKindWebhookTransfer, req.pendingKey())] = []byte(req.ID)
+	return req
+}
+
+func fulfillRecreate(p *Plugin, req *webhookTransferRequest, raw []byte) decisionResult {
+	return p.fulfillWebhookRetireRecreate(req,
+		&model.User{Id: "admin1", Username: "admin"},
+		&model.User{Id: "u_req", Username: "req"},
+		newDecisionCards(req.ID, "", ""), raw, kvWebhookTransferRequestPrefix+req.ID)
+}
+
+func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	t.Run("refuses when live fetch fails even if snapshot has a callback", func(t *testing.T) {
 		// Snapshot alone cannot prove triggers / extra callbacks were absent.
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		deleted, created := false, false
 		p.deleteWebhookFn = func(string, string) error {
 			deleted = true
@@ -712,16 +866,16 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			created = true
 			return "", "", "", nil
 		}
-		req := newReq("t1")
+		req := newOutgoingRecreate(store, "t1")
 		req.CallbackURL = "https://hooks.example.com/from-index"
-		res := fulfill(req, []byte(`{"id":"t1"}`))
+		res := fulfillRecreate(p, req, []byte(`{"id":"t1"}`))
 		require.False(t, deleted, "must not delete when live fields cannot be confirmed")
 		require.False(t, created)
 		require.True(t, res.audited)
 	})
 
 	t.Run("prefers live callback over stale snapshot", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		var gotCallback string
 		createBeforeDelete, deleted := false, false
 		p.getOutgoingWebhookCallbackFn = func(hookID, _ string) (string, error) {
@@ -740,17 +894,17 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			deleted = true
 			return nil
 		}
-		p.restoreOutgoingWebhookTriggersFn = okTriggers
-		req := newReq("t2")
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
+		req := newOutgoingRecreate(store, "t2")
 		req.CallbackURL = "https://hooks.example.com/stale"
-		res := fulfill(req, nil)
+		res := fulfillRecreate(p, req, nil)
 		require.Equal(t, "https://hooks.example.com/live", gotCallback)
 		require.True(t, createBeforeDelete && deleted)
 		require.Contains(t, res.Outcome, "recreated")
 	})
 
 	t.Run("create failure leaves old hook intact", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		deleted := false
 		p.deleteWebhookFn = func(string, string) error {
 			deleted = true
@@ -762,16 +916,16 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 		p.createOutgoingWebhookFromRecreateFn = func(*webhookRequest, *outgoingWebhookRecreate, string) (string, string, string, error) {
 			return "", "", "", errors.New("create failed")
 		}
-		res := fulfill(newReq("t-fail"), []byte(`{"id":"t-fail"}`))
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-fail"), []byte(`{"id":"t-fail"}`))
 		require.False(t, deleted)
 		require.True(t, res.audited)
 	})
 
 	t.Run("refuses when the hook is no longer scoped to the approved channel", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		created := false
 		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
-			snap := triggerSnap()
+			snap := outgoingTriggerSnap()
 			snap.ChannelID = "" // fires team-wide now
 			return snap, nil
 		}
@@ -780,16 +934,16 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			return "", "", "", nil
 		}
 		p.deleteWebhookFn = func(string, string) error { return nil }
-		res := fulfill(newReq("t-teamwide"), []byte(`{"id":"t-teamwide"}`))
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-teamwide"), []byte(`{"id":"t-teamwide"}`))
 		require.False(t, created, "recreating a team-wide hook in one channel changes its scope")
 		require.True(t, res.audited)
 	})
 
 	t.Run("refuses when the hook moved to another channel", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		created := false
 		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
-			snap := triggerSnap()
+			snap := outgoingTriggerSnap()
 			snap.ChannelID = "ch-moved"
 			return snap, nil
 		}
@@ -798,13 +952,13 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			return "", "", "", nil
 		}
 		p.deleteWebhookFn = func(string, string) error { return nil }
-		res := fulfill(newReq("t-moved"), []byte(`{"id":"t-moved"}`))
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-moved"), []byte(`{"id":"t-moved"}`))
 		require.False(t, created, "must not recreate the hook in a channel the reviewers never saw")
 		require.True(t, res.audited)
 	})
 
 	t.Run("preserves form-urlencoded content type via recreate seam", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		var gotSnap *outgoingWebhookRecreate
 		p.getOutgoingWebhookForRecreateFn = func(hookID, _ string) (*outgoingWebhookRecreate, error) {
 			require.Equal(t, "old-hook", hookID)
@@ -818,20 +972,20 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			gotSnap = snap
 			return "Outgoing webhook created.", "new-hook", "tok-new", nil
 		}
-		p.restoreOutgoingWebhookTriggersFn = okTriggers
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
 		p.deleteWebhookFn = func(string, string) error { return nil }
-		res := fulfill(newReq("t-form"), nil)
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-form"), nil)
 		require.NotNil(t, gotSnap)
 		require.Equal(t, "application/x-www-form-urlencoded", gotSnap.ContentType)
 		require.Contains(t, res.Outcome, "recreated")
 	})
 
 	t.Run("restores trigger words after the old hook is deleted", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		var gotSnap, restoredSnap *outgoingWebhookRecreate
 		var restoredHook string
 		deleted := false
-		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return triggerSnap(), nil }
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return outgoingTriggerSnap(), nil }
 		p.createOutgoingWebhookFromRecreateFn = func(_ *webhookRequest, snap *outgoingWebhookRecreate, _ string) (string, string, string, error) {
 			gotSnap = snap
 			return "Outgoing webhook created.", "new-hook", "tok-new", nil
@@ -845,7 +999,7 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			restoredHook, restoredSnap = hookID, snap
 			return nil
 		}
-		res := fulfill(newReq("t-trig"), nil)
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-trig"), nil)
 		require.NotNil(t, gotSnap)
 		require.Equal(t, []string{"alert", "page"}, gotSnap.TriggerWords)
 		require.Equal(t, "new-hook", restoredHook)
@@ -856,16 +1010,16 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	})
 
 	t.Run("a failed trigger restore keeps the ticket and records resume state", func(t *testing.T) {
-		resetRecreateSeams(t)
-		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return triggerSnap(), nil }
-		p.createOutgoingWebhookFromRecreateFn = okCreate
+		_, p, store := outgoingRecreateFixture(t)
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return outgoingTriggerSnap(), nil }
+		p.createOutgoingWebhookFromRecreateFn = okRecreateCreate
 		p.deleteWebhookFn = func(string, string) error { return nil }
 		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error {
 			return errors.New("update refused")
 		}
-		req := newReq("t-trig-fail")
+		req := newOutgoingRecreate(store, "t-trig-fail")
 		key := kvWebhookTransferRequestPrefix + req.ID
-		res := fulfill(req, []byte(`{"id":"t-trig-fail"}`))
+		res := fulfillRecreate(p, req, []byte(`{"id":"t-trig-fail"}`))
 		require.NotContains(t, res.Outcome, "with issues", "the handover is not finished, so the ticket stays open")
 		require.True(t, res.audited)
 
@@ -878,9 +1032,9 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	})
 
 	t.Run("old hook still present rolls the replacement back", func(t *testing.T) {
-		resetRecreateSeams(t)
-		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return triggerSnap(), nil }
-		p.createOutgoingWebhookFromRecreateFn = okCreate
+		_, p, store := outgoingRecreateFixture(t)
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return outgoingTriggerSnap(), nil }
+		p.createOutgoingWebhookFromRecreateFn = okRecreateCreate
 		restored := false
 		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error {
 			restored = true
@@ -894,24 +1048,24 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			}
 			return nil
 		}
-		res := fulfill(newReq("t-olddel"), []byte(`{"id":"t-olddel"}`))
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-olddel"), []byte(`{"id":"t-olddel"}`))
 		require.Equal(t, []string{"old-hook", "new-hook"}, deleted)
 		require.False(t, restored, "triggers must not be restored on a hook that was taken down")
 		require.NotContains(t, res.Outcome, "recreated")
 	})
 
 	t.Run("old hook already gone carries the cutover through", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		lookups := 0
 		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
 			lookups++
 			if lookups == 1 {
-				return triggerSnap(), nil
+				return outgoingTriggerSnap(), nil
 			}
 			return nil, errors.New("not found")
 		}
-		p.createOutgoingWebhookFromRecreateFn = okCreate
-		p.restoreOutgoingWebhookTriggersFn = okTriggers
+		p.createOutgoingWebhookFromRecreateFn = okRecreateCreate
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
 		var deleted []string
 		p.deleteWebhookFn = func(_, hookID string) error {
 			deleted = append(deleted, hookID)
@@ -920,23 +1074,23 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			}
 			return nil
 		}
-		res := fulfill(newReq("t-oldgone"), []byte(`{"id":"t-oldgone"}`))
+		res := fulfillRecreate(p, newOutgoingRecreate(store, "t-oldgone"), []byte(`{"id":"t-oldgone"}`))
 		require.Equal(t, []string{"old-hook"}, deleted, "the replacement must survive a delete whose response was lost")
 		require.Contains(t, res.Outcome, "recreated")
 	})
 
 	t.Run("ambiguous old hook lookup parks the ticket and keeps the replacement", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		lookups := 0
 		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
 			lookups++
 			if lookups == 1 {
-				return triggerSnap(), nil
+				return outgoingTriggerSnap(), nil
 			}
 			return nil, errors.New("server unavailable")
 		}
-		p.createOutgoingWebhookFromRecreateFn = okCreate
-		p.restoreOutgoingWebhookTriggersFn = okTriggers
+		p.createOutgoingWebhookFromRecreateFn = okRecreateCreate
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
 		var deleted []string
 		p.deleteWebhookFn = func(_, hookID string) error {
 			deleted = append(deleted, hookID)
@@ -945,9 +1099,9 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			}
 			return nil
 		}
-		req := newReq("t-ambiguous")
+		req := newOutgoingRecreate(store, "t-ambiguous")
 		key := kvWebhookTransferRequestPrefix + req.ID
-		res := fulfill(req, []byte(`{"id":"t-ambiguous"}`))
+		res := fulfillRecreate(p, req, []byte(`{"id":"t-ambiguous"}`))
 		require.Equal(t, []string{"old-hook"}, deleted, "an unknown old-hook state must not delete the replacement")
 		require.NotContains(t, res.Outcome, "recreated")
 
@@ -958,11 +1112,11 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	})
 
 	t.Run("checkpoints the replacement before deleting the old hook", func(t *testing.T) {
-		resetRecreateSeams(t)
-		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return triggerSnap(), nil }
-		p.createOutgoingWebhookFromRecreateFn = okCreate
-		p.restoreOutgoingWebhookTriggersFn = okTriggers
-		req := newReq("t-checkpoint")
+		_, p, store := outgoingRecreateFixture(t)
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) { return outgoingTriggerSnap(), nil }
+		p.createOutgoingWebhookFromRecreateFn = okRecreateCreate
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
+		req := newOutgoingRecreate(store, "t-checkpoint")
 		key := kvWebhookTransferRequestPrefix + req.ID
 
 		var atDelete webhookTransferRequest
@@ -973,7 +1127,7 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 			require.NoError(t, json.Unmarshal(store[key], &atDelete))
 			return nil
 		}
-		res := fulfill(req, []byte(`{"id":"t-checkpoint"}`))
+		res := fulfillRecreate(p, req, []byte(`{"id":"t-checkpoint"}`))
 		require.Equal(t, "new-hook", atDelete.ResumeNewHookID)
 		require.Equal(t, cutoverStageReplacementReady, atDelete.CutoverStage)
 		require.Equal(t, "ch1", atDelete.ResumeChannelID)
@@ -985,7 +1139,7 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 	})
 
 	t.Run("blocks delete when callback cannot be resolved", func(t *testing.T) {
-		resetRecreateSeams(t)
+		_, p, store := outgoingRecreateFixture(t)
 		deleted := false
 		p.deleteWebhookFn = func(string, string) error {
 			deleted = true
@@ -994,9 +1148,9 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 		p.getOutgoingWebhookCallbackFn = func(string, string) (string, error) {
 			return "", errors.New("hook gone")
 		}
-		req := newReq("t3")
+		req := newOutgoingRecreate(store, "t3")
 		req.ChannelID = ""
-		res := fulfill(req, []byte(`{"id":"t3"}`))
+		res := fulfillRecreate(p, req, []byte(`{"id":"t3"}`))
 		require.False(t, deleted, "must not delete before callback is known")
 		require.True(t, res.audited)
 		require.True(t, strings.Contains(res.Reply, "Couldn't") || strings.Contains(res.Reply, "hook gone") || res.Banner != nil)
@@ -1006,9 +1160,12 @@ func TestFulfillWebhookRetireRecreate_Outgoing(t *testing.T) {
 func TestResumeWebhookRetireRecreate_FinishesCutover(t *testing.T) {
 	newOwnerID := model.NewId()
 
-	setup := func(t *testing.T) (*Plugin, *plugintest.API, map[string][]byte) {
+	setup := func(t *testing.T, preKV ...func(*plugintest.API)) (*Plugin, *plugintest.API, map[string][]byte) {
 		api := &plugintest.API{}
 		stubLogs(api)
+		for _, pre := range preKV {
+			pre(api)
+		}
 		store := memKV(api)
 		stubSiteURL(api, "http://localhost:8065")
 		p := newTestPlugin(api)
@@ -1023,6 +1180,12 @@ func TestResumeWebhookRetireRecreate_FinishesCutover(t *testing.T) {
 		api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
 		api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
 		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		// The replacement is vetted against the channel it lives in now,
+		// not the one the checkpoint recorded.
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+			return &outgoingWebhookRecreate{ChannelID: "ch1", CallbackURLs: []string{"https://hooks.example.com/out"}}, nil
+		}
+		t.Cleanup(func() { p.getOutgoingWebhookForRecreateFn = nil })
 		return p, api, store
 	}
 	newReq := func(store map[string][]byte) *webhookTransferRequest {
@@ -1104,6 +1267,10 @@ func TestResumeWebhookRetireRecreate_FinishesCutover(t *testing.T) {
 		api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
 		api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
 		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+			return &outgoingWebhookRecreate{ChannelID: "ch1", CallbackURLs: []string{"https://hooks.example.com/out"}}, nil
+		}
+		t.Cleanup(func() { p.getOutgoingWebhookForRecreateFn = nil })
 
 		restored, dmd := false, false
 		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error {
@@ -1125,6 +1292,93 @@ func TestResumeWebhookRetireRecreate_FinishesCutover(t *testing.T) {
 		var stored webhookTransferRequest
 		require.NoError(t, json.Unmarshal(store[key], &stored))
 		require.Equal(t, "new-hook", stored.ResumeNewHookID, "the ticket keeps its cutover state for another retry")
+	})
+
+	t.Run("keeps the handover open until the replacement is listed", func(t *testing.T) {
+		listable := false
+		p, _, store := setup(t, func(api *plugintest.API) {
+			api.On("KVCompareAndSet", webhookIndexKey("new-hook"), mock.Anything, mock.Anything).
+				Return(func(string, []byte, []byte) (bool, *model.AppError) {
+					if listable {
+						return true, nil
+					}
+					return false, testAppErr("kv down")
+				})
+		})
+
+		tokens, restores := 0, 0
+		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error {
+			restores++
+			return nil
+		}
+		p.outgoingWebhookTokenFn = func(string, string) (string, error) {
+			tokens++
+			return "tok-resumed", nil
+		}
+
+		req := newReq(store)
+		key := kvWebhookTransferRequestPrefix + req.ID
+		res := resume(p, req)
+
+		require.NotContains(t, res.Outcome, "recreated")
+		var paused webhookTransferRequest
+		require.NoError(t, json.Unmarshal(store[key], &paused))
+		require.Equal(t, "new-hook", paused.ResumeNewHookID,
+			"a live replacement nothing lists is a hook nobody can hand on")
+		require.True(t, paused.cutoverReached(cutoverStageCredentialsDelivered),
+			"the work already done is written down so the retry skips it")
+
+		listable = true
+		res = resume(p, &paused)
+
+		require.Contains(t, res.Outcome, "recreated")
+		require.Equal(t, 1, tokens, "the successor is not DM'd the same token twice")
+		require.Equal(t, 1, restores, "triggers the new owner may have edited are not re-stamped")
+		_, stillOpen := store[key]
+		require.False(t, stillOpen)
+	})
+
+	t.Run("pauses when the replacement no longer lives in the approved channel", func(t *testing.T) {
+		p, _, store := setup(t)
+		// The replacement was moved out of the channel the approvers
+		// vetted, so the successor's rights there no longer mean anything.
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+			return &outgoingWebhookRecreate{ChannelID: "ch-elsewhere", CallbackURLs: []string{"https://hooks.example.com/out"}}, nil
+		}
+		restored, dmd := false, false
+		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error {
+			restored = true
+			return nil
+		}
+		p.outgoingWebhookTokenFn = func(string, string) (string, error) {
+			dmd = true
+			return "tok-resumed", nil
+		}
+
+		req := newReq(store)
+		res := resume(p, req)
+
+		require.False(t, restored)
+		require.False(t, dmd, "no token goes out for a hook nobody approved in that channel")
+		require.NotContains(t, res.Outcome, "recreated")
+		var paused webhookTransferRequest
+		require.NoError(t, json.Unmarshal(store[kvWebhookTransferRequestPrefix+req.ID], &paused))
+		require.Equal(t, "new-hook", paused.ResumeNewHookID)
+	})
+
+	t.Run("closes a handover whose replacement is already listed", func(t *testing.T) {
+		p, _, store := setup(t)
+		p.restoreOutgoingWebhookTriggersFn = okRecreateTriggers
+		p.outgoingWebhookTokenFn = func(string, string) (string, error) { return "tok-resumed", nil }
+
+		req := newReq(store)
+		// A previous attempt listed the hook and then failed to close.
+		require.NoError(t, p.indexReplacementWebhook(req, webhookCutover{newHookID: "new-hook", channelID: "ch1"}))
+
+		res := resume(p, req)
+		require.Contains(t, res.Outcome, "recreated", "a row that is already there is not a reason to retry")
+		_, stillOpen := store[kvWebhookTransferRequestPrefix+req.ID]
+		require.False(t, stillOpen)
 	})
 }
 
@@ -1230,6 +1484,9 @@ func TestWebhookTransferCutover_ApproveFinishesAnExpiredHandover(t *testing.T) {
 	api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
 	p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error { return nil }
 	p.outgoingWebhookTokenFn = func(string, string) (string, error) { return "tok-resumed", nil }
+	p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+		return &outgoingWebhookRecreate{ChannelID: "ch1", CallbackURLs: []string{"https://hooks.example.com/out"}}, nil
+	}
 
 	req := &webhookTransferRequest{
 		ID: "t-expired", RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
@@ -1250,6 +1507,83 @@ func TestWebhookTransferCutover_ApproveFinishesAnExpiredHandover(t *testing.T) {
 	require.Contains(t, res.Outcome, "recreated")
 	_, stillOpen := store[kvWebhookTransferRequestPrefix+req.ID]
 	require.False(t, stillOpen, "the finished handover closes the ticket")
+}
+
+func TestWebhookTransferCutover_ApproveFinishesAHandoverAfterTheTypeIsTurnedOff(t *testing.T) {
+	newOwnerID := model.NewId()
+	setup := func(t *testing.T) (*Plugin, map[string][]byte) {
+		api := &plugintest.API{}
+		stubLogs(api)
+		store := memKV(api)
+		p := newTestPlugin(api)
+		config := *p.getConfiguration()
+		config.TwoStepApproverMode = twoStepModeSystemAdmin
+		// The request type is off: no new webhook handovers may start.
+		config.AllowWebhookTransferRequests = false
+		p.setConfiguration(&config)
+		p.auditSink = func(auditEntry, auditEventSpec) {}
+
+		api.On("GetUser", testSysAdminID).Return(systemAdminUser(), nil).Maybe()
+		api.On("GetUser", newOwnerID).Return(&model.User{Id: newOwnerID, Username: "newowner", Roles: "system_user"}, nil).Maybe()
+		api.On("GetUser", mock.Anything).Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
+		api.On("GetChannelMember", "ch1", newOwnerID).Return(&model.ChannelMember{}, nil).Maybe()
+		api.On("GetChannel", "ch1").Return(&model.Channel{Id: "ch1", Type: model.ChannelTypeOpen}, nil).Maybe()
+		api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm1"}, nil).Maybe()
+		api.On("CreatePost", mock.Anything).Return(&model.Post{Id: "p1"}, nil).Maybe()
+		api.On("GetPost", mock.Anything).Return(nil, testAppErr("none")).Maybe()
+		api.On("UpdatePost", mock.Anything).Return(&model.Post{}, nil).Maybe()
+		p.restoreOutgoingWebhookTriggersFn = func(string, string, *outgoingWebhookRecreate) error { return nil }
+		p.outgoingWebhookTokenFn = func(string, string) (string, error) { return "tok-resumed", nil }
+		p.getOutgoingWebhookForRecreateFn = func(string, string) (*outgoingWebhookRecreate, error) {
+			return &outgoingWebhookRecreate{ChannelID: "ch1", CallbackURLs: []string{"https://hooks.example.com/out"}}, nil
+		}
+		return p, store
+	}
+	newReq := func(store map[string][]byte, id string) *webhookTransferRequest {
+		req := &webhookTransferRequest{
+			ID: id, RequesterID: "u_req", HookID: "old-hook", WebhookType: webhookTypeOutgoing,
+			DisplayName: "Relay", ChannelID: "ch1", TeamID: "t1",
+			Action: transferActionRetireRecreate, NewOwnerUserID: newOwnerID,
+			CallbackURL: "https://hooks.example.com/out", CreatedAt: model.GetMillis(),
+		}
+		store[kvWebhookTransferRequestPrefix+req.ID] = recordJSON(t, req)
+		claim := transferClaim{requestID: req.ID, leaseAt: model.GetMillis()}
+		store[transferAssetClaimKey(pendingKindWebhookTransfer, req.pendingKey())] = claim.encode()
+		return req
+	}
+
+	t.Run("a handover already under way is finished", func(t *testing.T) {
+		p, store := setup(t)
+		req := newReq(store, "t-off-staged")
+		req.CutoverStage = cutoverStageOldDeleted
+		req.ResumeNewHookID = "new-hook"
+		req.ResumeOldDeleted = true
+		req.ResumeChannelID = "ch1"
+		store[kvWebhookTransferRequestPrefix+req.ID] = recordJSON(t, req)
+
+		res := p.decideWebhookTransferRequest(testSysAdminID, req.ID, "", true)
+
+		// The old hook is already gone and only Approve can finish the
+		// handover, so the gate would strand a user with no webhook.
+		require.NotEqual(t, requestTypeOffText, res.Reply)
+		require.Contains(t, res.Outcome, "recreated")
+	})
+
+	t.Run("a handover that has not started is still refused", func(t *testing.T) {
+		p, store := setup(t)
+		req := newReq(store, "t-off-fresh")
+		deleted := false
+		p.deleteWebhookFn = func(string, string) error {
+			deleted = true
+			return nil
+		}
+
+		res := p.decideWebhookTransferRequest(testSysAdminID, req.ID, "", true)
+
+		require.Equal(t, requestTypeOffText, res.Reply)
+		require.False(t, deleted)
+		require.NotEmpty(t, store[kvWebhookTransferRequestPrefix+req.ID])
+	})
 }
 
 func TestWebhookTransferApprovalBlocker_RetireOnlyAcceptsAMissingHook(t *testing.T) {
@@ -1626,7 +1960,7 @@ func TestRestoreTransferRecord(t *testing.T) {
 	raw := []byte(`{"id":"req-a"}`)
 
 	store[claimKey] = []byte("req-a")
-	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	restored, err := p.restoreTransferRecord(transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a"}, key, raw)
 	require.NoError(t, err)
 	require.True(t, restored)
 	require.Equal(t, raw, store[key])
@@ -1635,7 +1969,7 @@ func TestRestoreTransferRecord(t *testing.T) {
 	// record must not come back, or the asset would have two open tickets.
 	delete(store, key)
 	store[claimKey] = []byte("req-b")
-	restored, err = p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	restored, err = p.restoreTransferRecord(transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a"}, key, raw)
 	require.NoError(t, err)
 	require.False(t, restored)
 	_, present := store[key]
@@ -1670,7 +2004,7 @@ func TestRestoreTransferRecord_ClaimCheckErrorPublishesNothing(t *testing.T) {
 	key := kvBotTransferRequestPrefix + "req-a"
 	raw := []byte(`{"id":"req-a"}`)
 
-	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	restored, err := p.restoreTransferRecord(transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a"}, key, raw)
 	require.Error(t, err)
 	require.False(t, restored)
 	// Ownership could not be confirmed. Publishing anyway is how one asset
@@ -1794,6 +2128,53 @@ func TestEnsureIncomingTransferHandle_StaleCopyKeepsRetire(t *testing.T) {
 	require.Equal(t, handle, got.TransferHandle)
 	// stubLogLevels answers handle-map writes itself, so check the call.
 	api.AssertCalled(t, "KVSet", kvWebhookTransferHandlePrefix+handle, []byte("hook1"))
+}
+
+func TestHandleTransferableAssets_UsesTheSameWebhookOwnerAsSubmit(t *testing.T) {
+	api := &plugintest.API{}
+	stubLogLevels(api)
+	store := memKV(api)
+	p := newTestPlugin(api)
+
+	// The hook was reassigned to u_new; the index row still names u_old.
+	store[webhookIndexKey("hook-out")] = recordJSON(t, webhookIndexEntry{
+		HookID: "hook-out", WebhookType: webhookTypeOutgoing, DisplayName: "Relay",
+		ChannelID: "ch1", TeamID: "t1", RequesterID: "u_req", OwnerUserID: "u_old",
+	})
+	store[webhookIndexKey("hook-in")] = recordJSON(t, webhookIndexEntry{
+		HookID: "hook-in", WebhookType: webhookTypeIncoming, DisplayName: "Alerts",
+		ChannelID: "ch1", TeamID: "t1", RequesterID: "u_req", OwnerUserID: "u_new",
+	})
+	p.liveWebhookOwnerFn = func(string, string, string) (string, error) { return "u_new", nil }
+	api.On("GetUser", "u_new").Return(&model.User{Id: "u_new", Username: "newowner"}, nil).Maybe()
+	api.On("GetUser", mock.Anything).Return(&model.User{Id: "u_old", Username: "oldowner"}, nil).Maybe()
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/transferable-assets", nil)
+	r.Header.Set("Mattermost-User-Id", "u_new")
+	w := httptest.NewRecorder()
+	p.handleTransferableAssets(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var out map[string][]transferableAsset
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+
+	byName := map[string]transferableAsset{}
+	for _, a := range out["webhooks"] {
+		byName[a.DisplayName] = a
+	}
+	// Submit resolves the live owner too, so a hook the picker hides here
+	// is one a user would be told they own but cannot act on.
+	require.Contains(t, byName, "Relay")
+	require.Equal(t, "u_new", byName["Relay"].OwnerID)
+	require.Equal(t, "hook-out", byName["Relay"].AssetID)
+
+	// An incoming hook's ID is its secret URL: the picker hands back the
+	// opaque handle instead.
+	require.Contains(t, byName, "Alerts")
+	require.NotEmpty(t, byName["Alerts"].AssetID)
+	require.NotEqual(t, "hook-in", byName["Alerts"].AssetID)
+	// stubLogLevels answers handle-map writes itself, so check the call.
+	api.AssertCalled(t, "KVSet", kvWebhookTransferHandlePrefix+byName["Alerts"].AssetID, []byte("hook-in"))
 }
 
 func TestRotateBotToken_CreatesBeforeRevoking(t *testing.T) {
@@ -2018,7 +2399,7 @@ func TestRestoreTransferRecord_BumpsClaimGenerationBeforePublishing(t *testing.T
 	raw := []byte(`{"id":"req-a"}`)
 	store[claimKey] = []byte("req-a|3")
 
-	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	restored, err := p.restoreTransferRecord(transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a"}, key, raw)
 	require.NoError(t, err)
 	require.True(t, restored)
 	require.Equal(t, raw, store[key])
@@ -2066,7 +2447,7 @@ func TestRestoreTransferRecord_HoldsTheRestoringPhaseWhilePublishing(t *testing.
 	}).Maybe()
 	p = newTestPlugin(api)
 
-	restored, err := p.restoreTransferRecord(pendingKindBotTransfer, "bot1", "req-a", key, raw)
+	restored, err := p.restoreTransferRecord(transferLease{kind: pendingKindBotTransfer, assetKey: "bot1", requestID: "req-a"}, key, raw)
 	require.NoError(t, err)
 	require.True(t, restored)
 	require.Error(t, duringRestore)
@@ -2093,7 +2474,7 @@ func TestReleaseTransferAssetClaim_NeverLogsTheKey(t *testing.T) {
 
 	assetKey := webhookTypeIncoming + "/secret-hook-id"
 	store[transferAssetClaimKey(pendingKindWebhookTransfer, assetKey)] = transferClaim{requestID: "req-a"}.encode()
-	p.releaseTransferAssetClaim(pendingKindWebhookTransfer, assetKey, "req-a")
+	p.releaseTransferAssetClaim(pendingKindWebhookTransfer, assetKey, "req-a", "")
 
 	require.NotEmpty(t, logged)
 	require.NotContains(t, fmt.Sprintf("%v", logged), "secret-hook-id")
@@ -2118,7 +2499,7 @@ func TestBeginTransferFulfill_RefusesASecondApprovalUnderALiveLease(t *testing.T
 	_, _, err = p.beginTransferFulfill(pendingKindBotTransfer, "bot1", "req-a")
 	require.ErrorIs(t, err, errTransferFulfillInFlight)
 
-	res, ok := p.claimTransferForFulfill(pendingKindBotTransfer, "bot1", "req-a",
+	res, _, ok := p.claimTransferForFulfill(pendingKindBotTransfer, "bot1", "req-a",
 		kvBotTransferRequestPrefix+"req-a", nil, newDecisionCards("req-a", "", ""), "bot transfer request")
 	require.False(t, ok)
 	require.Contains(t, res.Reply, "already being carried out")
@@ -2272,12 +2653,15 @@ func TestFulfillWebhookRetireRecreate_IncomingRefusesAHookThatMovedChannel(t *te
 func TestFulfillWebhookRetireRecreate_RemovesACleanupPendingReplacementFirst(t *testing.T) {
 	_, p, store := incomingRecreateFixture(t)
 	p.incomingWebhookChannelFn = func(string, string) (string, error) { return "ch1", nil }
-	var deleted []string
+	// One ordered list of every hook this attempt touched, so "cleaned up
+	// first" is a fact about the sequence rather than two separate counts.
+	var events []string
 	p.deleteWebhookFn = func(_, hookID string) error {
-		deleted = append(deleted, hookID)
+		events = append(events, "delete "+hookID)
 		return nil
 	}
 	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+		events = append(events, "create new-hook-2")
 		return "Incoming webhook URL: http://localhost:8065/hooks/new-hook-2", "new-hook-2", nil
 	}
 
@@ -2290,9 +2674,72 @@ func TestFulfillWebhookRetireRecreate_RemovesACleanupPendingReplacementFirst(t *
 	res := p.fulfillWebhookRetireRecreate(req, &model.User{Id: "admin1", Username: "admin"},
 		&model.User{Id: "u_req", Username: "req"}, newDecisionCards(req.ID, "", ""), raw, key)
 
-	require.Equal(t, []string{"stale-hook", "old-hook"}, deleted,
+	require.Equal(t, []string{"delete stale-hook", "create new-hook-2", "delete old-hook"}, events,
 		"the unusable leftover goes before another replacement is made")
 	require.Contains(t, res.Outcome, "recreated")
+}
+
+func TestFulfillWebhookRetireRecreate_CleanupKeepsTheTicketOutOfReachUntilTheCreate(t *testing.T) {
+	_, p, store := incomingRecreateFixture(t)
+	p.incomingWebhookChannelFn = func(string, string) (string, error) { return "ch1", nil }
+	p.deleteWebhookFn = func(string, string) error { return nil }
+
+	req := newIncomingRecreate(store, "t-in-window")
+	req.stageCutover(cutoverStageCleanupPending, webhookCutover{newHookID: "stale-hook", channelID: "ch1"})
+	key := kvWebhookTransferRequestPrefix + req.ID
+	raw := recordJSON(t, req)
+	store[key] = raw
+
+	var atCreate webhookTransferRequest
+	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+		require.NoError(t, json.Unmarshal(store[key], &atCreate))
+		return "Incoming webhook URL: http://localhost:8065/hooks/new-hook-2", "new-hook-2", nil
+	}
+
+	p.fulfillWebhookRetireRecreate(req, &model.User{Id: "admin1", Username: "admin"},
+		&model.User{Id: "u_req", Username: "req"}, newDecisionCards(req.ID, "", ""), raw, key)
+
+	// A plain pending record here would let a Deny close the ticket and
+	// free the claim while this attempt is still making a hook.
+	require.True(t, atCreate.cutoverInProgress())
+	require.Equal(t, cutoverStageCreating, atCreate.CutoverStage)
+}
+
+func TestFulfillWebhookRetireRecreate_PausesOnceBeforeReplacingAnUnknownCreate(t *testing.T) {
+	_, p, store := incomingRecreateFixture(t)
+	p.incomingWebhookChannelFn = func(string, string) (string, error) { return "ch1", nil }
+	p.deleteWebhookFn = func(string, string) error { return nil }
+	creates := 0
+	p.createWebhookFn = func(*webhookRequest, string) (string, string, error) {
+		creates++
+		return "Incoming webhook URL: http://localhost:8065/hooks/new-hook-2", "new-hook-2", nil
+	}
+
+	req := newIncomingRecreate(store, "t-in-orphan")
+	req.CutoverStage = cutoverStageCreating
+	key := kvWebhookTransferRequestPrefix + req.ID
+	raw := recordJSON(t, req)
+	store[key] = raw
+
+	res := p.fulfillWebhookRetireRecreate(req, &model.User{Id: "admin1", Username: "admin"},
+		&model.User{Id: "u_req", Username: "req"}, newDecisionCards(req.ID, "", ""), raw, key)
+
+	require.Zero(t, creates, "a create whose outcome was never known must not be silently doubled")
+	require.True(t, res.audited)
+	var paused webhookTransferRequest
+	require.NoError(t, json.Unmarshal(store[key], &paused))
+	require.Equal(t, cutoverStageOrphanCheck, paused.CutoverStage)
+
+	// The admin has been told what to look for; the next Approve is their
+	// word that it is dealt with.
+	raw = recordJSON(t, &paused)
+	store[key] = raw
+	res = p.fulfillWebhookRetireRecreate(&paused, &model.User{Id: "admin1", Username: "admin"},
+		&model.User{Id: "u_req", Username: "req"}, newDecisionCards(paused.ID, "", ""), raw, key)
+
+	require.Equal(t, 1, creates)
+	require.Contains(t, res.Outcome, "recreated")
+	require.Contains(t, res.Outcome, "with issues", "the possible orphan is still reported")
 }
 
 func TestBotTransferResumeAfterAssign_SurvivesTheReviewWindow(t *testing.T) {

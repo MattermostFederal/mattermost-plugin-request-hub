@@ -166,13 +166,16 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		if e.RetiredAt != 0 {
 			continue
 		}
-		owner := webhookIndexOwner(e)
+		entry := e
+		// Same owner resolution submit and approval use, so the picker
+		// never offers a hook the submit check will turn down — or hide one
+		// whose index row has fallen behind a reassign.
+		owner := p.webhookOwnerForChecks(&entry, userID)
 		asset := transferAsset{assetType: "webhook", assetID: e.HookID, ownerUserID: owner, requesterID: e.RequesterID, channelID: e.ChannelID}
 		if p.canNominateTransfer(userID, asset) != nil {
 			continue
 		}
 		active := p.userActive(owner)
-		entry := e
 		assetID := p.ensureIncomingTransferHandle(&entry)
 		if e.WebhookType == webhookTypeIncoming && assetID == "" {
 			continue
