@@ -29,14 +29,17 @@ func newTestPlugin(api *plugintest.API) *Plugin {
 	p.botUserID = "bot-user-id"
 	p.auditSink = decisionCardsOnly(p)
 	p.setConfiguration(&configuration{
-		AllowChannelRequests:      true,
-		AllowChannelAdminRequests: true,
-		AllowTeamRequests:         true,
-		AllowTeamAdminRequests:    true,
-		AllowTeamMemberRequests:   true,
-		AllowTeamGuestRequests:    true,
-		AllowBotTokenRequests:     true,
-		AllowWebhookRequests:      true,
+		AllowChannelRequests:         true,
+		AllowChannelAdminRequests:    true,
+		AllowTeamRequests:            true,
+		AllowTeamAdminRequests:       true,
+		AllowTeamMemberRequests:      true,
+		AllowTeamGuestRequests:       true,
+		AllowBotTokenRequests:        true,
+		AllowWebhookRequests:         true,
+		AllowBugReportRequests:       true,
+		AllowBotTransferRequests:     true,
+		AllowWebhookTransferRequests: true,
 		// Most handler tests act as a System Admin. system_admin mode lets
 		// that actor cover both two-step stamps; attribute/usergroup suites
 		// set their mode explicitly.
@@ -63,6 +66,14 @@ func stubLogs(api *plugintest.API) {
 	stubLogsWithStripKV(api)
 }
 
+// stubNoOpenRequests answers the KV scan behind listRequestKeys with an
+// empty store. Needed by tests that seed Team Admins: that path sweeps the
+// audit channel for bug report cards first. Register it after any KVList
+// expectation the test cares about — testify takes the first match.
+func stubNoOpenRequests(api *plugintest.API) {
+	api.On("KVList", mock.Anything, mock.Anything).Return([]string{}, nil).Maybe()
+}
+
 // stubLogsWithStripKV is stubLogs plus a handle on the in-memory adopt-strip
 // marker store.
 func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
@@ -82,7 +93,7 @@ func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	api.On("KVDelete", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvApprovalCardsPrefix)
 	})).Return(nil).Maybe()
-	// Open-request / token-expiry indexes updated on store/claim (best-effort).
+	// Open-request / token-expiry / bot+webhook index key lists (best-effort).
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
@@ -91,6 +102,17 @@ func stubLogsWithStripKV(api *plugintest.API) *fakeAdoptStripKV {
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
 	api.On("KVDelete", kvTokenExpiryIndex).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvBotIndexKeys).Return(nil).Maybe()
+	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVDelete", kvWebhookIndexKeys).Return(nil).Maybe()
+	api.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvWebhookTransferHandlePrefix)
+	}), mock.Anything).Return(nil).Maybe()
 	// TA visibility seed set — mark/clear during AddChannelMember / eviction.
 	api.On("KVGet", mock.MatchedBy(func(key string) bool {
 		return strings.HasPrefix(key, kvTAVisibilitySeededPrefix)
@@ -176,6 +198,7 @@ func stubBotExtras(api *plugintest.API) {
 				return &model.UserAccessToken{Id: "tok-id", Token: "secret-token", UserId: tok.UserId, ExpiresAt: tok.ExpiresAt}, nil
 			}).Maybe(),
 	)
+	stubBotIndexWrite(api)
 }
 
 // stubNamesFree answers the submit-time checks that a requested channel,
@@ -206,12 +229,24 @@ func stubLogLevels(api *plugintest.API) {
 		}
 	}
 	api.On("LogAuditRec", mock.Anything).Maybe()
+	// Transfer paths ask the server version to decide whether Reassign can
+	// move a webhook's creator. Tests that care register their own first.
+	api.On("GetServerVersion").Return("9.11.0").Maybe()
 	api.On("KVGet", kvOpenRequestIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvOpenRequestIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvOpenRequestIndex, mock.Anything).Return(nil).Maybe()
 	api.On("KVGet", kvTokenExpiryIndex).Return(nil, nil).Maybe()
 	api.On("KVCompareAndSet", kvTokenExpiryIndex, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", kvTokenExpiryIndex, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvBotIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvBotIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvBotIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVGet", kvWebhookIndexKeys).Return(nil, nil).Maybe()
+	api.On("KVCompareAndSet", kvWebhookIndexKeys, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	api.On("KVSet", kvWebhookIndexKeys, mock.Anything).Return(nil).Maybe()
+	api.On("KVSet", mock.MatchedBy(func(key string) bool {
+		return strings.HasPrefix(key, kvWebhookTransferHandlePrefix)
+	}), mock.Anything).Return(nil).Maybe()
 }
 
 // stubApprovalTeamRecord lets approvalTeam read and write its record of the
@@ -259,6 +294,7 @@ func TestCreateChannelForRequest_AddsMembersAndPromotesAdmins(t *testing.T) {
 			c.Purpose == "Coordination" &&
 			c.CreatorId == "u_req"
 	})).Return(created, nil)
+	stubActiveTeamMember(api, "team1", "bot-user-id")
 	api.On("AddChannelMember", "ch1", mock.Anything).Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "u_a1", channelAdminRoles).Return(&model.ChannelMember{}, nil)
 
@@ -278,8 +314,10 @@ func TestCreateChannelForRequest_AddsMembersAndPromotesAdmins(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ch1", channel.Id)
 
-	// Requester + two members + one admin, each added exactly once.
-	api.AssertNumberOfCalls(t, "AddChannelMember", 4)
+	// The plugin bot, then requester + two members + one admin, each added
+	// exactly once.
+	api.AssertNumberOfCalls(t, "AddChannelMember", 5)
+	api.AssertCalled(t, "AddChannelMember", "ch1", "bot-user-id")
 	api.AssertCalled(t, "AddChannelMember", "ch1", "u_req")
 	api.AssertCalled(t, "AddChannelMember", "ch1", "u_m1")
 	api.AssertCalled(t, "AddChannelMember", "ch1", "u_m2")
@@ -297,6 +335,7 @@ func TestCreateChannelForRequest_DeduplicatesUsers(t *testing.T) {
 	p := newTestPlugin(api)
 
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", mock.Anything).Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "u_dup", channelAdminRoles).Return(&model.ChannelMember{}, nil)
 
@@ -315,7 +354,7 @@ func TestCreateChannelForRequest_DeduplicatesUsers(t *testing.T) {
 
 	require.NoError(t, err)
 	// Unique users only: u_req, u_dup.
-	api.AssertNumberOfCalls(t, "AddChannelMember", 2)
+	api.AssertNumberOfCalls(t, "AddChannelMember", 3) // plugin bot + two users
 	// u_dup is an admin -> promoted exactly once despite appearing twice.
 	api.AssertNumberOfCalls(t, "UpdateChannelMemberRoles", 1)
 	api.AssertCalled(t, "UpdateChannelMemberRoles", "ch1", "u_dup", channelAdminRoles)
@@ -328,6 +367,7 @@ func TestCreateChannelForRequest_SkipsEmptyIDs(t *testing.T) {
 	p := newTestPlugin(api)
 
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", mock.Anything).Return(&model.ChannelMember{}, nil)
 
 	req := &channelRequest{
@@ -343,7 +383,7 @@ func TestCreateChannelForRequest_SkipsEmptyIDs(t *testing.T) {
 
 	require.NoError(t, err)
 	// Empty IDs are skipped: only u_req and u_m1 are added.
-	api.AssertNumberOfCalls(t, "AddChannelMember", 2)
+	api.AssertNumberOfCalls(t, "AddChannelMember", 3) // plugin bot + two users
 	// The empty admin entry must not trigger any promotion.
 	api.AssertNotCalled(t, "UpdateChannelMemberRoles", mock.Anything, mock.Anything, mock.Anything)
 }
@@ -379,6 +419,7 @@ func TestCreateChannelForRequest_AddMemberFailureIsNonFatalAndSkipsPromotion(t *
 	p := newTestPlugin(api)
 
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	// u_bad can't be added; register it before the catch-all so testify
 	// matches the specific expectation first.
 	api.On("AddChannelMember", "ch1", "u_bad").Return(nil, testAppErr("cannot add"))
@@ -413,6 +454,7 @@ func TestCreateChannelForRequest_TrimsListsToActualAdds(t *testing.T) {
 	p := newTestPlugin(api)
 
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	// u_bad can't be added; register before the catch-all so testify
 	// matches the specific expectation first.
 	api.On("AddChannelMember", "ch1", "u_bad").Return(nil, testAppErr("cannot add"))
@@ -1324,6 +1366,7 @@ func TestCreateChannelForRequest_PromotionFailureIsNonFatal(t *testing.T) {
 	p := newTestPlugin(api)
 
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	api.On("AddChannelMember", "ch1", "u_adm").Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "u_adm", channelAdminRoles).Return(nil, testAppErr("denied"))

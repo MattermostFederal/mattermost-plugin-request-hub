@@ -39,6 +39,15 @@ const (
 	// of the audit history. It has no toggle: who may ask is set by the
 	// security approver pool.
 	requestTypeAuditExport = "audit_export"
+	// requestTypeBugReport is a user report about Request Hub (bug or
+	// feedback) posted to the audit channel for System Admin acknowledge.
+	requestTypeBugReport = "bug_report"
+	// requestTypeBotTransfer transfers or retires an RH-managed bot. It
+	// needs the same two-step (security + system) approval as a bot request.
+	requestTypeBotTransfer = "bot_transfer"
+	// requestTypeWebhookTransfer reassigns or retires a standalone webhook,
+	// through the same two-step approval as a webhook request.
+	requestTypeWebhookTransfer = "webhook_transfer"
 )
 
 // channelPrefix is one entry in the admin-configured list of allowed
@@ -99,6 +108,11 @@ type configuration struct {
 	// fallback.
 	ChannelNamePrefixes string
 
+	// ChannelPrefixDefaults is a JSON object keyed by prefix holding the
+	// channel defaults for that prefix (see prefixDefaults): visibility,
+	// purpose, header and default members.
+	ChannelPrefixDefaults string
+
 	// --- 3. Approver policy ---
 	AllowTeamAdminApprovers bool
 	// AllowApprovalTeamAdminsForTeamRequests lets Team Admins of the approval
@@ -121,6 +135,15 @@ type configuration struct {
 	BotComplianceEnabled   bool
 	BotComplianceStatement string
 	AllowWebhookRequests   bool
+	// AllowBugReportRequests lets any user file a bug/feedback report about
+	// Request Hub into the audit channel.
+	AllowBugReportRequests bool
+	// AllowBotTransferRequests lets an owner (or anyone eligible under the
+	// transfer ACL) ask to transfer or retire an RH-managed bot.
+	AllowBotTransferRequests bool
+	// AllowWebhookTransferRequests lets the same reassign or retire a
+	// standalone RH-managed webhook.
+	AllowWebhookTransferRequests bool
 
 	// --- 5. Multi-step approver pools (bot / webhook two-step) ---
 	// TwoStepApproverMode selects how the security reviewer is identified:
@@ -181,6 +204,7 @@ type configuration struct {
 
 	// --- Parsed / computed (unexported) ---
 	prefixes            []channelPrefix
+	prefixDefaults      map[string]prefixDefaults
 	maxPending          int
 	expiryDays          int
 	tokenLifetimeMonths int
@@ -246,12 +270,7 @@ func (c *configuration) AuditChannelLevel() int {
 // that prefix's suffix rule. The longest matching prefix is used, as in
 // resolvePrefixedName.
 func (c *configuration) allowsChannelName(name string) bool {
-	var entry *channelPrefix
-	for i := range c.prefixes {
-		if strings.HasPrefix(name, c.prefixes[i].Prefix) && (entry == nil || len(c.prefixes[i].Prefix) > len(entry.Prefix)) {
-			entry = &c.prefixes[i]
-		}
-	}
+	entry := c.matchPrefix(name)
 	if entry == nil {
 		return false
 	}
@@ -304,6 +323,12 @@ func (c *configuration) RequestEnabled(requestType string) bool {
 		return c.AllowWebhookRequests
 	case requestTypeBot:
 		return c.AllowBotTokenRequests
+	case requestTypeBugReport:
+		return c.AllowBugReportRequests
+	case requestTypeBotTransfer:
+		return c.AllowBotTransferRequests
+	case requestTypeWebhookTransfer:
+		return c.AllowWebhookTransferRequests
 	case requestTypeAuditExport:
 		return true
 	default:
@@ -374,6 +399,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	// entries are logged and skipped rather than failing the whole
 	// activation — a typo in one line should not wedge the plugin.
 	configuration.prefixes = parsePrefixList(configuration.ChannelNamePrefixes, p.API.LogError)
+	configuration.prefixDefaults = parsePrefixDefaults(configuration.ChannelPrefixDefaults, configuration.prefixes, p.API.LogError)
 	configuration.maxPending = parseNonNegativeInt(configuration.MaxPendingRequestsPerUser, defaultMaxPendingRequests, maxPendingRequestsLimit, "MaxPendingRequestsPerUser", p.API.LogWarn)
 	configuration.expiryDays = parseNonNegativeInt(configuration.RequestExpiryDays, defaultRequestExpiryDays, maxRequestExpiryDays, "RequestExpiryDays", p.API.LogWarn)
 	configuration.tokenLifetimeMonths = parseTokenLifetimeMonths(configuration.BotTokenLifetimeMonths, p.API.LogWarn)
@@ -425,8 +451,23 @@ func (p *Plugin) OnConfigurationChange() error {
 			if prevTeam != "" {
 				p.evictStalePrimaryVisibilityForNamedTeam(prevTeam)
 			}
+			if newTeam != "" && p.botUserID != "" {
+				// Set the new Approval team up now rather than on the first
+				// request or the next restart: all five shared channels,
+				// System Admins in each, and the security pool in bot and
+				// webhook channels, whatever the Team Admin toggles say.
+				for _, ch := range p.primaryTicketChannels() {
+					p.addSystemAdminsToChannel(ch.Id)
+				}
+				p.syncTwoStepApproverChannels()
+			}
 			if newTeam != "" {
 				p.syncPrimaryTeamAdminVisibility()
+			}
+			// The old Approval team's root channel is now a per-team one, and
+			// the new team's per-team channel is now the root one.
+			if p.botUserID != "" {
+				p.syncApprovalChannelDisplayNames()
 			}
 		}()
 	} else if taVisibilityTogglesChanged && strings.TrimSpace(configuration.ApprovalTeam) != "" {

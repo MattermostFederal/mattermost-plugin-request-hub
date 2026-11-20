@@ -115,6 +115,14 @@ export const RequestChannelModal = () => {
 
     const usingPrefixList = prefixes.length > 0;
 
+    // The chosen prefix's defaults: a forced visibility locks the select,
+    // and a default purpose shows as the placeholder (the server fills it
+    // in when the field is left blank).
+    const prefixEntry = prefixes.find((p) => p.prefix === selectedPrefix);
+    const forcedType = prefixEntry?.channel_type === 'O' || prefixEntry?.channel_type === 'P' ? prefixEntry.channel_type : '';
+    const effectiveType = forcedType || channelType;
+    const defaultPurpose = prefixEntry?.default_purpose ?? '';
+
     // Live preview of the final channel URL: prefix + slugified suffix
     // (or slugified display name when the suffix field is blank).
     const previewURL = useMemo(() => {
@@ -174,7 +182,7 @@ export const RequestChannelModal = () => {
                 name: urlName.trim(),
                 prefix: selectedPrefix,
                 purpose: purpose.trim(),
-                channel_type: channelType,
+                channel_type: effectiveType,
                 members,
                 admin_members: adminMembers,
                 category: selectedCategory || undefined,
@@ -354,6 +362,7 @@ export const RequestChannelModal = () => {
                                     value={purpose}
                                     maxLength={250}
                                     rows={2}
+                                    placeholder={defaultPurpose ? `Leave blank to use: ${defaultPurpose}` : undefined}
                                     onChange={(e) => setPurpose(e.target.value)}
                                 />
                             </div>
@@ -363,12 +372,18 @@ export const RequestChannelModal = () => {
                                 <select
                                     id='cr-type'
                                     className='form-control'
-                                    value={channelType}
+                                    value={effectiveType}
+                                    disabled={Boolean(forcedType)}
                                     onChange={(e) => setChannelType(e.target.value)}
                                 >
                                     <option value='O'>{'Public'}</option>
                                     <option value='P'>{'Private'}</option>
                                 </select>
+                                {forcedType ? (
+                                    <small style={{opacity: 0.6}}>
+                                        {`Channels under ${selectedPrefix} are always ${forcedType === 'P' ? 'private' : 'public'}.`}
+                                    </small>
+                                ) : null}
                             </div>
 
                             {(() => {

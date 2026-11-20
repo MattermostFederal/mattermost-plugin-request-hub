@@ -163,6 +163,7 @@ func (p *Plugin) sendAdminTicketCreatedDM(req *adminRequest, requester *model.Us
 		req.RequesterID,
 		p.adminApprovalAttachment(req, requester, channel),
 		ticketSubmittedIntro("Channel Admin request"),
+		req.ID,
 	)
 }
 

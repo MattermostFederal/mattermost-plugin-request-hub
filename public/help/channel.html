@@ -78,7 +78,7 @@
                 <tr><td>Domain prefix</td><td>Required. Category for the URL (<code>prefix</code> + <code>suffix</code>).</td></tr>
                 <tr><td>Channel name</td><td>Display name (required).</td></tr>
                 <tr><td>URL suffix</td><td>Optional; live Preview shows the final URL.</td></tr>
-                <tr><td>Purpose / Visibility</td><td>Optional description; Public or Private.</td></tr>
+                <tr><td>Purpose / Visibility</td><td>Optional description; Public or Private. A prefix can have a default purpose (used when you leave it blank) and can always create public or private channels, which locks the choice.</td></tr>
                 <tr><td>Members / Channel Admins</td><td>Who to add on approval (a user is in one list only).</td></tr>
                 <tr><td>Sidebar category</td><td>Optional; pick existing or type a new name (created on approval).</td></tr>
             </tbody>
@@ -110,6 +110,11 @@
 
         <h2 id="on-approve">On approve</h2>
         <p>Approval card → Approve creates the channel and posts a welcome message.</p>
+        <ul>
+            <li>The plugin bot joins the new channel.</li>
+            <li>If the admin set channel defaults for the prefix, Approve also sets the channel header and adds the default members. The approval card shows a <strong>Prefix defaults</strong> line when it will.</li>
+            <li>A default member who isn't an active member of the channel's team is skipped and named in the welcome message, for example <em>Default members not added: @bob (not on this team)</em>. It never blocks the approval.</li>
+        </ul>
         <p>
             Approve checks the request again first. If the team has been archived, the requester's account is
             no longer active, they've left the team, or the channel name no longer matches the configured

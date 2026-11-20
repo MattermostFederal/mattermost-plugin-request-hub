@@ -83,9 +83,10 @@ func (p *Plugin) notifyTicketProgress(tp ticketProgress) {
 }
 
 // postTicketCreatedDM opens the bot↔requester DM and posts the pending card as
-// the ticket thread root (no Approve/Deny buttons). Returns empty IDs on
-// failure — callers treat that as non-fatal.
-func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAttachment, intro string) (dmRootPostID, dmChannelID string) {
+// the ticket thread root. Approve/Deny stay on the approval channel; the DM
+// gets a Withdraw button when requestID is set. Returns empty IDs on failure —
+// callers treat that as non-fatal.
+func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAttachment, intro, requestID string) (dmRootPostID, dmChannelID string) {
 	if requesterID == "" || card == nil {
 		return "", ""
 	}
@@ -97,10 +98,19 @@ func (p *Plugin) postTicketCreatedDM(requesterID string, card *model.MessageAtta
 
 	attachment := *card
 	attachment.Actions = nil
+	withdrawable := false
+	if action := p.withdrawAction(requestID); action != nil {
+		attachment.Actions = []*model.PostAction{action}
+		withdrawable = true
+	}
 	attachment.Color = colorPending
 
 	if intro == "" {
 		intro = "Your request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers."
+	}
+	// Only mention the button when the card actually carries it.
+	if withdrawable {
+		intro += " " + withdrawIntroSentence
 	}
 
 	post := &model.Post{
@@ -135,7 +145,17 @@ type ticketClose struct {
 
 	// Expired closes the ticket without a decision (request expired before
 	// review). ThreadReply then replaces the Approved/Denied thread line.
-	Expired     bool
+	Expired bool
+	// Withdrawn is a requester cancel before final decision. ThreadReply is
+	// required (same as Expired).
+	Withdrawn bool
+	// Acknowledged is a SysAdmin ack of a bug/feedback report (not approve).
+	// ThreadReply is required (same as Withdrawn).
+	Acknowledged bool
+	// Reconciled closes a part-finished handover a System Admin has put
+	// right by hand, which is neither an approval nor a refusal of what
+	// was asked for. ThreadReply is required (same as Withdrawn).
+	Reconciled  bool
 	ThreadReply string
 }
 
@@ -144,9 +164,11 @@ type ticketClose struct {
 func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 	color := colorDenied
 	switch {
-	case c.Expired:
+	case c.Expired, c.Reconciled:
 		color = colorExpired
-	case c.Approved:
+	case c.Withdrawn:
+		color = colorWithdrawn
+	case c.Acknowledged, c.Approved:
 		color = colorApproved
 	}
 	p.notifyRequesterInThreadCard(c.RequesterID, c.DMRootPostID, c.DMChannelID, &model.MessageAttachment{
@@ -154,9 +176,10 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 		Title: c.CardTitle,
 		Text:  c.CardText,
 	})
-	if c.Expired {
+	switch {
+	case c.Expired, c.Withdrawn, c.Acknowledged, c.Reconciled:
 		p.postTicketThreadReply(c.DMChannelID, c.DMRootPostID, c.ThreadReply)
-	} else {
+	default:
 		p.postOutcomeThreadReply(c.DMChannelID, c.DMRootPostID, c.Approved, c.ApproverUsername)
 	}
 	p.deleteApprovalCards(c.RequestID)
@@ -164,12 +187,29 @@ func (p *Plugin) closeTicket(c ticketClose) *model.Post {
 }
 
 // ticketSubmittedIntro builds the default DM root message for a named request kind.
+// withdrawIntroSentence is appended to a ticket-created DM only when the
+// card carries the Withdraw button, so the DM never names a button that
+// isn't there (the helper leaves it off for requests that can't be pulled).
+const withdrawIntroSentence = "Use Withdraw if you no longer need this request."
+
 func ticketSubmittedIntro(kindLabel string) string {
 	if kindLabel == "" {
 		kindLabel = "request"
 	}
 	return fmt.Sprintf(
 		"Your %s has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers.",
+		kindLabel,
+	)
+}
+
+// ticketAcknowledgedIntro introduces a ticket that is acknowledged rather
+// than approved or denied, so the DM does not promise a decision.
+func ticketAcknowledgedIntro(kindLabel string) string {
+	if kindLabel == "" {
+		kindLabel = "report"
+	}
+	return fmt.Sprintf(
+		"Your %s is with the System Admins to acknowledge — there's nothing to approve or deny. Reply to this thread to add context; your reply will be forwarded to them.",
 		kindLabel,
 	)
 }

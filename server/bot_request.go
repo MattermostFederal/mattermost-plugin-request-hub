@@ -273,6 +273,7 @@ func (p *Plugin) sendBotTicketCreatedDM(req *botRequest, requester *model.User) 
 		req.RequesterID,
 		p.botApprovalAttachment(req, requester),
 		ticketSubmittedIntro("bot account request"),
+		req.ID,
 	)
 }
 
@@ -321,6 +322,25 @@ func (p *Plugin) botApprovalHeader(exercise bool) string {
 // botRetryHeader is the bot card's header after a failed final approval.
 func botRetryHeader(exercise bool) string {
 	return cardMention(exercise) + "a bot account request needs review (a previous approval attempt failed)."
+}
+
+// botWebhookOwnerLabel is the ownership chain for webhooks created with a
+// bot request: the new bot owns the hook; a human owns the bot.
+func (p *Plugin) botWebhookOwnerLabel(req *botRequest) string {
+	ownerID := strings.TrimSpace(req.OwnerUserID)
+	if ownerID == "" {
+		ownerID = strings.TrimSpace(req.RequesterID)
+	}
+	owner := p.mentionList([]string{ownerID})
+	switch {
+	case owner != "":
+		// already @username
+	case ownerID != "":
+		owner = "user " + ownerID
+	default:
+		owner = "unknown"
+	}
+	return fmt.Sprintf("@%s (bot owned by %s)", req.Username, owner)
 }
 
 func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *model.MessageAttachment {
@@ -380,6 +400,9 @@ func (p *Plugin) botApprovalAttachment(req *botRequest, requester *model.User) *
 			name = "outgoing webhook"
 		}
 		details = append(details, fmt.Sprintf("**Outgoing webhook:** %s → %s (callback: %s)", escapeMarkdown(name), p.channelDisplayRef(req.OutgoingWebhookChannelID), escapeMarkdown(req.OutgoingWebhookCallbackURL)))
+	}
+	if req.IncomingWebhookChannelID != "" || req.OutgoingWebhookChannelID != "" {
+		details = append(details, fmt.Sprintf("**Webhook owner:** %s", p.botWebhookOwnerLabel(req)))
 	}
 
 	fields = append(fields, &model.MessageAttachmentField{

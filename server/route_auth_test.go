@@ -209,6 +209,7 @@ func TestHandleAction_ClickContextOnlySelectsTheRequest(t *testing.T) {
 	api.On("KVGet", kvRequestPrefix+"req1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvRequestPrefix+"req1", raw).Return(true, nil)
 	api.On("CreateChannel", mock.Anything).Return(&model.Channel{Id: "ch1", Name: "team-x"}, nil)
+	stubBotJoinsCreatedChannel(api, "team1", "ch1")
 	api.On("AddChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil)
 	api.On("UpdateChannelMemberRoles", "ch1", "u_req", channelAdminRoleString).Return(&model.ChannelMember{}, nil)
 	api.On("GetDirectChannel", "u_req", "bot-user-id").Return(&model.Channel{Id: "dm1"}, nil)
@@ -260,6 +261,10 @@ func TestSubmitRoutes_TurnedOffTypeRefusesBeforeReadingTheBody(t *testing.T) {
 		routeSubmitBotWebapp:             botRequestsDisabledMsg,
 		routeSubmitIncomingWebhookWebapp: webhookRequestsDisabledMsg,
 		routeSubmitOutgoingWebhookWebapp: webhookRequestsDisabledMsg,
+		routeSubmitBugReportWebapp:       bugReportRequestsDisabledMsg,
+		routeBugReportDialog:             bugReportRequestsDisabledMsg,
+		routeSubmitBotTransferWebapp:     botTransferRequestsDisabledMsg,
+		routeSubmitWebhookTransferWebapp: webhookTransferRequestsDisabledMsg,
 	}
 	require.Len(t, disabled, len(submitRoutes))
 	for _, route := range submitRoutes {

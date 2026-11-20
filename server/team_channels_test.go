@@ -514,6 +514,7 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 		api.On("KVCompareAndSet", taVisibilitySeededKey(id), mock.Anything, mock.Anything).Return(true, nil).Maybe()
 		api.On("GetChannelMembers", id, 0, 100).Return(model.ChannelMembers{}, nil).Maybe()
 	}
+	stubNoOpenRequests(api)
 
 	p.syncPrimaryTeamAdminVisibility()
 
@@ -789,6 +790,7 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 		}},
 	}, nil).Maybe()
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()
+	stubNoOpenRequests(api)
 
 	p.UserHasJoinedTeam(&plugin.Context{}, &model.TeamMember{
 		TeamId: "team-hq", UserId: "u_ta", SchemeAdmin: true,

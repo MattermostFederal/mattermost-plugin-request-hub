@@ -21,10 +21,11 @@ const (
 	// colorPending is the sidebar color for the initial "ticket submitted" DM card.
 	// colorApproved and colorDenied are used when the root DM card is updated on outcome.
 	// colorExpired marks requests closed unreviewed after the expiry period.
-	colorPending  = "#E8A838"
-	colorApproved = "#2DB887"
-	colorDenied   = "#D9534F"
-	colorExpired  = "#8B8F97"
+	colorPending   = "#E8A838"
+	colorWithdrawn = "#6C757D"
+	colorApproved  = "#2DB887"
+	colorDenied    = "#D9534F"
+	colorExpired   = "#8B8F97"
 )
 
 // threadAnchor holds all four post IDs needed to relay messages between a
@@ -257,7 +258,7 @@ func (p *Plugin) canRelayApprovalThreadReply(user *model.User, anchor threadAnch
 		return p.canApproveAdminRequest(user, anchor.ScopeID)
 	case requestTypeTeam, requestTypeTeamAdmin, requestTypeTeamMember, requestTypeTeamGuest:
 		return user.IsSystemAdmin()
-	case requestTypeBot, requestTypeWebhook:
+	case requestTypeBot, requestTypeWebhook, requestTypeBotTransfer, requestTypeWebhookTransfer:
 		// System Admins can always ask clarifying questions in the thread,
 		// even when they aren't in the security-attribute pool (they still
 		// can't fake a security Approve click — that's gated separately).

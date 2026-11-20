@@ -18,6 +18,7 @@ const (
 	routeCreate           = "/api/v1/create"
 	routeApprove          = "/api/v1/approve"
 	routeDeny             = "/api/v1/deny"
+	routeWithdraw         = "/api/v1/withdraw"
 	routeRequestAdmin     = "/api/v1/request_admin" // request Channel Admin promotion on an existing channel
 	routeApproveAdmin     = "/api/v1/approve_admin"
 	routeDenyAdmin        = "/api/v1/deny_admin"
@@ -67,7 +68,19 @@ const (
 	routeSubmitAuditExportWebapp     = "/api/v1/submit_audit_export_request"
 	routeApproveAuditExport          = "/api/v1/approve_audit_export"
 	routeDenyAuditExport             = "/api/v1/deny_audit_export"
+	routeSubmitBugReportWebapp       = "/api/v1/submit_bug_report_request"
+	routeBugReportDialog             = "/api/v1/bug_report_dialog"
+	routeAcknowledgeBugReport        = "/api/v1/acknowledge_bug_report"
+	routeMyRequests                  = "/api/v1/my_requests"
 
+	// Owner transfer / retire for bots and standalone webhooks (hub tiles).
+	routeSubmitBotTransferWebapp     = "/api/v1/submit_bot_transfer_request"
+	routeSubmitWebhookTransferWebapp = "/api/v1/submit_webhook_transfer_request"
+	routeApproveBotTransfer          = "/api/v1/approve_bot_transfer"
+	routeDenyBotTransfer             = "/api/v1/deny_bot_transfer"
+	routeApproveWebhookTransfer      = "/api/v1/approve_webhook_transfer"
+	routeDenyWebhookTransfer         = "/api/v1/deny_webhook_transfer"
+	routeTransferableAssets          = "/api/v1/transferable_assets" // bots + hooks the caller may transfer/retire
 	// fieldPrefix is the dialog element name for the domain-prefix
 	// dropdown. Kept alongside the other field* constants in request.go.
 	fieldPrefix = "prefix"
@@ -129,6 +142,14 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleDecisionClick(w, r, true, p.deciderFor(pendingKindAuditExport))
 	case routeDenyAuditExport:
 		p.handleDecisionClick(w, r, false, p.deciderFor(pendingKindAuditExport))
+	case routeSubmitBugReportWebapp:
+		p.handleSubmitBugReportWebapp(w, r)
+	case routeBugReportDialog:
+		p.handleBugReportDialogSubmit(w, r)
+	case routeAcknowledgeBugReport:
+		p.handleAcknowledgeBugReport(w, r)
+	case routeMyRequests:
+		p.handleMyRequests(w, r)
 	case routeDialog:
 		p.handleDialogSubmit(w, r)
 	case routeCreate:
@@ -137,6 +158,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleAction(w, r, true)
 	case routeDeny:
 		p.handleAction(w, r, false)
+	case routeWithdraw:
+		p.handleWithdraw(w, r)
 	case routeRequestAdmin:
 		p.handleRequestAdmin(w, r)
 	case routeApproveAdmin:
@@ -205,6 +228,20 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleSubmitIncomingWebhookWebapp(w, r)
 	case routeSubmitOutgoingWebhookWebapp:
 		p.handleSubmitOutgoingWebhookWebapp(w, r)
+	case routeSubmitBotTransferWebapp:
+		p.handleSubmitBotTransferWebapp(w, r)
+	case routeSubmitWebhookTransferWebapp:
+		p.handleSubmitWebhookTransferWebapp(w, r)
+	case routeApproveBotTransfer:
+		p.handleApproveBotTransfer(w, r)
+	case routeDenyBotTransfer:
+		p.handleDenyBotTransfer(w, r)
+	case routeApproveWebhookTransfer:
+		p.handleApproveWebhookTransfer(w, r)
+	case routeDenyWebhookTransfer:
+		p.handleDenyWebhookTransfer(w, r)
+	case routeTransferableAssets:
+		p.handleTransferableAssets(w, r)
 	case routeConfig:
 		p.handleConfig(w, r)
 	case routeBotForm:
@@ -249,7 +286,7 @@ func requireActionUserID(w http.ResponseWriter, r *http.Request) (string, bool) 
 // Mattermost invokes via DoPostAction — those must always respond with JSON.
 func isPostActionPath(path string) bool {
 	switch path {
-	case routeApprove, routeDeny,
+	case routeApprove, routeDeny, routeWithdraw,
 		routeApproveAdmin, routeDenyAdmin,
 		routeApproveTeam, routeDenyTeam,
 		routeApproveTeamAdmin, routeDenyTeamAdmin,
@@ -257,7 +294,10 @@ func isPostActionPath(path string) bool {
 		routeApproveTeamGuest, routeDenyTeamGuest,
 		routeApproveBot, routeDenyBot,
 		routeApproveWebhook, routeDenyWebhook,
-		routeApproveAuditExport, routeDenyAuditExport:
+		routeApproveBotTransfer, routeDenyBotTransfer,
+		routeApproveWebhookTransfer, routeDenyWebhookTransfer,
+		routeApproveAuditExport, routeDenyAuditExport,
+		routeAcknowledgeBugReport:
 		return true
 	default:
 		return false
@@ -486,13 +526,20 @@ func (p *Plugin) handlePrefixes(w http.ResponseWriter, r *http.Request) {
 		Prefix      string `json:"prefix"`
 		Description string `json:"description"`
 		SuffixRegex string `json:"suffix_regex"`
+		// ChannelType is "O" or "P" when the prefix forces the visibility.
+		ChannelType string `json:"channel_type,omitempty"`
+		// DefaultPurpose fills the purpose when the requester leaves it blank.
+		DefaultPurpose string `json:"default_purpose,omitempty"`
 	}
 	out := make([]prefixDTO, 0, len(config.prefixes))
 	for _, p := range config.prefixes {
+		d, _ := config.defaultsForPrefix(p.Prefix)
 		out = append(out, prefixDTO{
-			Prefix:      p.Prefix,
-			Description: p.Description,
-			SuffixRegex: p.SuffixPatternRaw,
+			Prefix:         p.Prefix,
+			Description:    p.Description,
+			SuffixRegex:    p.SuffixPatternRaw,
+			ChannelType:    d.ChannelType,
+			DefaultPurpose: d.Purpose,
 		})
 	}
 	writeJSON(w, out)
@@ -549,6 +596,7 @@ func (p *Plugin) openRequestDialog(triggerID, teamID string) error {
 			Name:        fieldType,
 			Type:        "radio",
 			Default:     channelTypeOpen,
+			HelpText:    "Some prefixes always create public or private channels; the approval card shows the final visibility.",
 			Options: []*model.PostActionOptions{
 				{Text: "Public", Value: channelTypeOpen},
 				{Text: "Private", Value: channelTypePrivate},
@@ -794,6 +842,25 @@ func (p *Plugin) handleDecisionClick(w http.ResponseWriter, r *http.Request, app
 // handleAction handles Approve/Deny clicks on a channel request card.
 func (p *Plugin) handleAction(w http.ResponseWriter, r *http.Request, approve bool) {
 	p.handleDecisionClick(w, r, approve, p.deciderFor(pendingKindChannel))
+}
+
+// handleWithdraw handles the Withdraw button on the requester's ticket DM.
+func (p *Plugin) handleWithdraw(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireActionUserID(w, r)
+	if !ok {
+		return
+	}
+	var request model.PostActionIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: "Invalid action request. Please try again."})
+		return
+	}
+	if request.PostId == "" {
+		writeJSON(w, model.PostActionIntegrationResponse{EphemeralText: buttonNotOnCardText})
+		return
+	}
+	requestID, _ := request.Context[actionContextRequestID].(string)
+	writeDecision(w, p.decideWithdraw(userID, requestID, request.PostId))
 }
 
 // handleAdminAction handles Approve/Deny clicks on a Channel Admin request
@@ -1230,14 +1297,17 @@ func (p *Plugin) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	config := p.getConfiguration()
 	writeJSON(w, map[string]bool{
-		requestTypeChannel:      config.RequestEnabled(requestTypeChannel),
-		requestTypeChannelAdmin: config.RequestEnabled(requestTypeChannelAdmin),
-		requestTypeTeam:         config.RequestEnabled(requestTypeTeam),
-		requestTypeTeamAdmin:    config.RequestEnabled(requestTypeTeamAdmin),
-		requestTypeTeamMember:   config.RequestEnabled(requestTypeTeamMember),
-		requestTypeTeamGuest:    config.RequestEnabled(requestTypeTeamGuest),
-		requestTypeWebhook:      config.RequestEnabled(requestTypeWebhook),
-		requestTypeBot:          config.RequestEnabled(requestTypeBot),
+		requestTypeChannel:         config.RequestEnabled(requestTypeChannel),
+		requestTypeChannelAdmin:    config.RequestEnabled(requestTypeChannelAdmin),
+		requestTypeTeam:            config.RequestEnabled(requestTypeTeam),
+		requestTypeTeamAdmin:       config.RequestEnabled(requestTypeTeamAdmin),
+		requestTypeTeamMember:      config.RequestEnabled(requestTypeTeamMember),
+		requestTypeTeamGuest:       config.RequestEnabled(requestTypeTeamGuest),
+		requestTypeWebhook:         config.RequestEnabled(requestTypeWebhook),
+		requestTypeBot:             config.RequestEnabled(requestTypeBot),
+		requestTypeBugReport:       config.RequestEnabled(requestTypeBugReport),
+		requestTypeBotTransfer:     config.RequestEnabled(requestTypeBotTransfer),
+		requestTypeWebhookTransfer: config.RequestEnabled(requestTypeWebhookTransfer),
 	})
 }
 
@@ -1409,8 +1479,8 @@ func (p *Plugin) resolvedPost(postID, status string) *model.Post {
 	if postID == "" {
 		return &model.Post{Message: status}
 	}
-	post, appErr := p.API.GetPost(postID)
-	if appErr != nil || post == nil || post.UserId != p.botUserID {
+	post := p.loadApprovalCardPost(postID)
+	if post == nil {
 		return &model.Post{Message: status}
 	}
 	return p.resolvedCard(post, status)

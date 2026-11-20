@@ -11,9 +11,11 @@ import {fetchEnabledRequestTypes} from './client';
 import {HeaderIcon} from './HeaderIcon';
 import {installIntegrationsPageOverride} from './integrationsPageOverride';
 import {installMembersPanelButton} from './membersPanelButton';
+import {PrefixDefaultsEditor} from './PrefixDefaultsEditor';
 import {PrefixEditor} from './PrefixEditor';
 import {RequestAuditExportModal} from './RequestAuditExportModal';
 import {RequestBotModal} from './RequestBotModal';
+import {RequestBugReportModal} from './RequestBugReportModal';
 import {RequestChannelAdminModal} from './RequestChannelAdminModal';
 import {RequestChannelModal} from './RequestChannelModal';
 import {RequestHubModal} from './RequestHubModal';
@@ -23,6 +25,7 @@ import {RequestTeamAdminModal} from './RequestTeamAdminModal';
 import {RequestTeamGuestModal} from './RequestTeamGuestModal';
 import {RequestTeamMemberModal} from './RequestTeamMemberModal';
 import {RequestTeamModal} from './RequestTeamModal';
+import {BotTransferModal, WebhookTransferModal} from './RequestTransferModal';
 import reducer, {
     getCurrentTeamId,
     getChannelType,
@@ -65,6 +68,9 @@ export default class Plugin {
         registry.registerRootComponent(RequestOutgoingWebhookModal);
         registry.registerRootComponent(AuditHistoryModal);
         registry.registerRootComponent(RequestAuditExportModal);
+        registry.registerRootComponent(RequestBugReportModal);
+        registry.registerRootComponent(BotTransferModal);
+        registry.registerRootComponent(WebhookTransferModal);
 
         // Each feature is installed independently and defensively: a throw in
         // one (e.g. a DOM hack that trips over unexpected markup) must not abort
@@ -289,6 +295,11 @@ export default class Plugin {
             registry.registerAdminConsoleCustomSetting(
                 'ChannelNamePrefixes',
                 PrefixEditor,
+                {showTitle: true},
+            );
+            registry.registerAdminConsoleCustomSetting(
+                'ChannelPrefixDefaults',
+                PrefixDefaultsEditor,
                 {showTitle: true},
             );
         }

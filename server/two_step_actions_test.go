@@ -434,6 +434,7 @@ func finalBot(t *testing.T, api *plugintest.API, req *botRequest) {
 func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	api := &plugintest.API{}
 	stubBotExtras(api)
+	stubBotIndexWrite(api)
 	stubPendingLists(api)
 	stubLogs(api)
 	p := newTestPlugin(api)
@@ -449,7 +450,7 @@ func TestHandleBotAction_ExtrasSkippedWithoutSessionOrSiteURL(t *testing.T) {
 	resp := runAsAdmin(t, p, botActionHandler, true)
 
 	require.NotNil(t, resp.Update)
-	require.Contains(t, resp.Update.Message, "Fully approved (security + system) for @reqer. Bot **@svcbot** created.")
+	require.Contains(t, resp.Update.Message, "Fully approved with issues for @reqer. Bot **@svcbot** created")
 	all := strings.Join(*replies, "\n")
 	require.Contains(t, all, "webhook extras were skipped because an admin session could not be created")
 	require.Contains(t, all, "webhook extras were skipped because SiteURL is not configured")
@@ -485,7 +486,7 @@ func TestHandleBotAction_ExtrasFailuresAreReported(t *testing.T) {
 	resp := runAsAdmin(t, p, botActionHandler, true)
 
 	require.NotNil(t, resp.Update)
-	require.Contains(t, resp.Update.Message, "Bot **@svcbot** created.")
+	require.Contains(t, resp.Update.Message, "Bot **@svcbot** created")
 	all := strings.Join(*replies, "\n")
 	require.Contains(t, all, "token generation failed")
 	require.Contains(t, all, "incoming webhook creation failed: create incoming webhook")
@@ -592,7 +593,7 @@ func TestHandleBotAction_UndeliverableIncomingWebhookIsRemoved(t *testing.T) {
 			resp := runAsAdmin(t, p, botActionHandler, true)
 
 			require.NotNil(t, resp.Update)
-			require.Contains(t, resp.Update.Message, "Bot **@svcbot** created.")
+			require.Contains(t, resp.Update.Message, "Bot **@svcbot** created")
 			all := strings.Join(notes, "\n")
 			require.Contains(t, all, tc.want)
 			require.NotContains(t, all, "Incoming webhook URL:")
@@ -617,6 +618,8 @@ func finalWebhook(t *testing.T, api *plugintest.API, req *webhookRequest) []byte
 	stubSystemAdmin(api)
 	api.On("KVGet", kvWebhookRequestPrefix+"r1").Return(raw, nil)
 	api.On("KVCompareAndDelete", kvWebhookRequestPrefix+"r1", raw).Return(true, nil).Once()
+	// A successful create indexes the standalone hook for transfer/retire.
+	stubWebhookIndexWrite(api)
 	// The requester is still in the target channel at approve time.
 	api.On("GetChannelMember", "ch1", "u_req").Return(&model.ChannelMember{}, nil).Maybe()
 	return raw

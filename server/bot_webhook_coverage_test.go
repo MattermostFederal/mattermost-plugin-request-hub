@@ -219,6 +219,7 @@ func TestBotApprovalAttachment_OwnerAndDefaultWebhookNames(t *testing.T) {
 	require.Contains(t, att.Text, "**Owner:** @owner")
 	require.Contains(t, att.Text, "**Incoming webhook:** incoming webhook → in-ch")
 	require.Contains(t, att.Text, "**Outgoing webhook:** outgoing webhook → out-ch")
+	require.Contains(t, att.Text, "**Webhook owner:** @ci-bot (bot owned by @owner)")
 }
 
 func TestBotApprovalAttachmentWithNotice_PrependsNotice(t *testing.T) {

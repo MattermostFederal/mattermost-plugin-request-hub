@@ -58,6 +58,7 @@ Earlier versions had a system approver attribute and group. They are no longer r
 | Setting | Purpose |
 |---------|---------|
 | **Channel domain prefixes** | **Required** for channel requests. At least one prefix must be configured. An empty list rejects every channel-creation request. Requesters pick a prefix from a dropdown; the final URL is `<prefix><suffix>`. |
+| **Channel defaults per prefix** | Optional. For each prefix: **Visibility** (requester chooses, always public, or always private), a **Purpose** used when the requester leaves it blank, a **Channel header**, and **Default members** added on approval. See [Channel defaults per prefix](CHANNEL_CREATION_GUIDE.md#channel-defaults-per-prefix). |
 
 ### Optional settings
 
@@ -108,7 +109,7 @@ Team Admins can promote their own team's members in Mattermost directly, without
 
 ## Approval channels
 
-The plugin creates and manages five dedicated private channels in the configured approval team. System Admins who are members of the approval team are added to these channels when each channel is created and again whenever the plugin activates. The plugin doesn't add anyone to the approval team itself, except two-step approvers (see [Who sees and approves what](#who-sees-and-approves-what)).
+The plugin creates and manages five dedicated private channels in the configured approval team. They're created when the plugin activates and again as soon as **Approval team** is set or changed, so they're ready before the first request. System Admins who are members of the approval team are added to these channels when each channel is created and again whenever the plugin activates or the approval team changes; the security pool is added to the bot and webhook channels at the same time. The plugin doesn't add anyone to the approval team itself, except two-step approvers (see [Who sees and approves what](#who-sees-and-approves-what)).
 
 | Channel | What routes here |
 |---------|-----------------|
@@ -131,6 +132,7 @@ If one of these channels is archived, the plugin doesn't recreate it: the archiv
 - **Approval team channels** (root `mattermost-channel-requests`, `mattermost-team-requests`, `mattermost-bot-requests`, `mattermost-webhook-requests`, `mattermost-audit-requests`): private channels created by the plugin's bot. System Admins on the approval team are added when a channel is created and on every activation.
 - **Two-step approvers:** in User Attributes or User Groups mode, members of the security pool are added to the approval team and to the bot and webhook channels. This is kept in step on activation, when the pool settings change, at login and every few minutes. Someone who leaves a pool is removed from those two channels, unless they are a System Admin or a Team Admin of the approval team. Pool listing for channel seeding is capped at **75** members so a misconfigured LDAP sync cannot expand into a runaway scan. Members past that cap can still approve (authz still checks the pool), but are not pre-seeded into bot/webhook from the pool listing. They are added when they interact with Request Hub (login, DM, or slash command).
 - **Per-team channels** (`mattermost-channel-requests` in other teams, when **Per-team approval channels** is on): created in each team that has a Team Admin or a System Admin member, and seeded with those people. A user who joins the team later as an admin is added when they join; someone promoted to Team Admin in Mattermost itself (not through a Request Hub request) is added the next time they join the team. Existing per-team channels aren't reseeded on activation. In the approval team, the per-team channel and the root channel are the same channel.
+- **Channel names:** the root channel is **Mattermost: Channel Requests**. Each per-team channel adds its team's display name, for example **Mattermost: Channel Requests (Engineering)**, so someone on several teams can tell them apart (a long team name is shortened to fit Mattermost's 64-character limit). The plugin updates the names when it activates and when **Approval team** changes, which swaps which channel is the root one. A channel you rename by hand keeps your name. Mattermost doesn't tell plugins about team renames, so a renamed team's channel picks up the new name at the next plugin restart.
 
 People who aren't members of a channel can't see its cards. The requester gets their own copy of the card, without buttons, as the root of a DM thread with the bot.
 

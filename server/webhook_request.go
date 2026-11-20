@@ -197,6 +197,7 @@ func (p *Plugin) sendWebhookTicketCreatedDM(req *webhookRequest, requester *mode
 		req.RequesterID,
 		p.webhookApprovalAttachment(req, requester, channel),
 		ticketSubmittedIntro("webhook request"),
+		req.ID,
 	)
 }
 
@@ -320,14 +321,91 @@ func (p *Plugin) deleteWebhook(webhookType, hookID, adminUserID string) error {
 	switch webhookType {
 	case webhookTypeIncoming:
 		if _, err := client.DeleteIncomingWebhook(ctx, hookID); err != nil {
+			if webhookDeleteAlreadyGone(err) {
+				return err // callers may treat as success via webhookDeleteAlreadyGone
+			}
 			return errors.Wrap(err, "failed to delete incoming webhook")
 		}
 	case webhookTypeOutgoing:
 		if _, err := client.DeleteOutgoingWebhook(ctx, hookID); err != nil {
+			if webhookDeleteAlreadyGone(err) {
+				return err
+			}
 			return errors.Wrap(err, "failed to delete outgoing webhook")
 		}
 	}
 	return nil
+}
+
+// webhookDeleteAlreadyGone reports a delete that failed because the hook is
+// already gone (404). Callers treat that as success for retire paths.
+func webhookDeleteAlreadyGone(err error) bool {
+	return isNotFoundErr(err)
+}
+
+// webhookStillExists reports whether the hook is still present in Mattermost.
+func (p *Plugin) webhookStillExists(webhookType, hookID, adminUserID string) (bool, error) {
+	if strings.TrimSpace(hookID) == "" {
+		return false, nil
+	}
+	if p.getOutgoingWebhookForRecreateFn != nil && webhookType == webhookTypeOutgoing {
+		_, err := p.getOutgoingWebhookForRecreateFn(hookID, adminUserID)
+		if err != nil {
+			if isNotFoundErr(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	if p.getOutgoingWebhookCallbackFn != nil && webhookType == webhookTypeOutgoing {
+		_, err := p.getOutgoingWebhookCallbackFn(hookID, adminUserID)
+		if err != nil {
+			if isNotFoundErr(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	if p.incomingWebhookChannelFn != nil && webhookType == webhookTypeIncoming {
+		_, err := p.incomingWebhookChannelFn(hookID, adminUserID)
+		if err != nil {
+			if isNotFoundErr(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	client, cleanup, err := p.transferClient(adminUserID)
+	if err != nil {
+		return false, err
+	}
+	defer cleanup()
+	ctx := context.Background()
+	switch webhookType {
+	case webhookTypeIncoming:
+		_, _, apiErr := client.GetIncomingWebhook(ctx, hookID, "")
+		if apiErr != nil {
+			if isNotFoundErr(apiErr) {
+				return false, nil
+			}
+			return false, apiErr
+		}
+		return true, nil
+	case webhookTypeOutgoing:
+		_, _, apiErr := client.GetOutgoingWebhook(ctx, hookID)
+		if apiErr != nil {
+			if isNotFoundErr(apiErr) {
+				return false, nil
+			}
+			return false, apiErr
+		}
+		return true, nil
+	default:
+		return false, errors.Errorf("unknown webhook type %q", webhookType)
+	}
 }
 
 // siteURL returns the Mattermost instance's public site URL, used for
@@ -406,6 +484,7 @@ func (p *Plugin) webhookApprovalAttachment(req *webhookRequest, requester *model
 
 	fields := []*model.MessageAttachmentField{
 		{Title: "Requested by", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
+		{Title: "Webhook owner", Value: fmt.Sprintf("@%s", requester.Username), Short: true},
 		{Title: "Type", Value: typeLabel, Short: true},
 		{Title: "Target channel", Value: fmt.Sprintf("~%s", channel.Name), Short: true},
 		{Title: "Display name", Value: escapeMarkdown(req.DisplayName), Short: true},

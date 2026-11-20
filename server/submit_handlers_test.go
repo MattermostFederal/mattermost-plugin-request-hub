@@ -552,14 +552,17 @@ func TestHandleConfig_ReportsEachRequestType(t *testing.T) {
 	var out map[string]bool
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
 	require.Equal(t, map[string]bool{
-		requestTypeChannel:      true,
-		requestTypeChannelAdmin: false,
-		requestTypeTeam:         false,
-		requestTypeTeamAdmin:    false,
-		requestTypeTeamMember:   false,
-		requestTypeTeamGuest:    false,
-		requestTypeWebhook:      true,
-		requestTypeBot:          true,
+		requestTypeChannel:         true,
+		requestTypeChannelAdmin:    false,
+		requestTypeTeam:            false,
+		requestTypeTeamAdmin:       false,
+		requestTypeTeamMember:      false,
+		requestTypeTeamGuest:       false,
+		requestTypeWebhook:         true,
+		requestTypeBot:             true,
+		requestTypeBugReport:       false,
+		requestTypeBotTransfer:     false,
+		requestTypeWebhookTransfer: false,
 	}, out)
 }
 
