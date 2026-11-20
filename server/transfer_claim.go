@@ -50,6 +50,10 @@ const (
 	transferFulfillWindow = 60 * time.Minute
 
 	transferClaimCASRetries = 5
+
+	// transferRecordPutRetries bounds how many times a restore re-tries the
+	// write that puts a claimed ticket back.
+	transferRecordPutRetries = 3
 )
 
 // errTransferClaimLost reports that another ticket owns the asset claim.
@@ -293,10 +297,18 @@ func (p *Plugin) beginTransferFulfill(kind, assetKey, requestID string) (created
 		// Checked against the exact value being replaced rather than a
 		// value read earlier: two approvers can both read the same held
 		// claim, and the second must not overwrite the attempt the first
-		// one already started. A held claim or an attempt whose lease has
-		// aged out is free to take.
-		if c.phase == transferPhaseFulfilling && !c.leaseExpired(model.GetMillis()) {
-			return errTransferFulfillInFlight
+		// one already started. A held claim, or an attempt whose lease has
+		// aged out, is free to take.
+		//
+		// A live restoring claim is just as off-limits: that holder is
+		// between "I own this" and the KV write that puts its record back,
+		// and a takeover there is exactly how one asset ends up with two
+		// open tickets.
+		switch c.phase {
+		case transferPhaseFulfilling, transferPhaseRestoring:
+			if !c.leaseExpired(model.GetMillis()) {
+				return errTransferFulfillInFlight
+			}
 		}
 		c.phase = transferPhaseFulfilling
 		c.leaseAt = model.GetMillis()
@@ -477,6 +489,11 @@ func (p *Plugin) transferClaimStillHeld(lease transferLease) (held bool, err err
 // back without confirmed ownership is how one asset ends up with two open
 // tickets. restored is false with a nil err when another ticket holds the
 // claim.
+//
+// A write that still fails after its retries leaves the claim alone. The
+// side effects may already have moved the asset, so freeing it would let a
+// second ticket act on a half-finished handover; the lease ages out
+// instead.
 func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []byte) (restored bool, err error) {
 	kind, assetKey, requestID := lease.kind, lease.assetKey, lease.requestID
 	held, holdErr := p.transferClaimStillHeld(lease)
@@ -497,9 +514,12 @@ func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []by
 		}
 		return false, phaseErr
 	}
-	if putErr := p.putPendingRequestKV(key, raw); putErr != nil {
-		// Free the asset so a stuck fulfill does not block it forever.
-		p.releaseTransferAssetClaim(kind, assetKey, requestID, lease.attemptID)
+	if putErr := p.publishRestoredRecord(key, raw); putErr != nil {
+		// The record could not be put back, so nothing names the handover
+		// any more. The claim is deliberately left in place: a bot whose
+		// ownership already moved must not have its asset handed to a
+		// second ticket, and the lease ages out on its own if nobody picks
+		// this one up.
 		return false, putErr
 	}
 	if phaseErr := p.updateTransferClaim(kind, assetKey, requestID, lease.attemptID, func(c *transferClaim) error {
@@ -511,9 +531,13 @@ func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []by
 	}); phaseErr != nil {
 		if errors.Is(phaseErr, errTransferClaimLost) {
 			// The claim went away under a restore that should have been
-			// protected. Take back exactly the bytes just written so the
-			// asset is not left with two open tickets.
-			p.deleteTransferRecordIfUnchanged(key, raw)
+			// protected. Only another ticket owning the asset makes this
+			// record a second open ticket: a newer attempt on this same
+			// ticket legitimately republished it, and withdrawing the
+			// bytes then would throw the ticket away.
+			if p.transferClaimHeldByOtherRequest(kind, assetKey, requestID) {
+				p.deleteTransferRecordIfUnchanged(key, raw)
+			}
 			return false, nil
 		}
 		// The record is published and this request still owns the claim;
@@ -521,6 +545,32 @@ func (p *Plugin) restoreTransferRecord(lease transferLease, key string, raw []by
 		return true, phaseErr
 	}
 	return true, nil
+}
+
+// publishRestoredRecord writes a claimed ticket back, retrying a failed
+// write while the claim is still held in the restoring phase. The record is
+// what a later Approve loads to pick a part-finished handover up, so a
+// single flaky write must not be what decides the ticket is gone for good.
+func (p *Plugin) publishRestoredRecord(key string, raw []byte) error {
+	var err error
+	for range transferRecordPutRetries {
+		if err = p.putPendingRequestKV(key, raw); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// transferClaimHeldByOtherRequest reports whether the asset claim now names
+// a different ticket. A claim that cannot be read answers false: a record
+// is only withdrawn on confirmed evidence that someone else owns the asset.
+func (p *Plugin) transferClaimHeldByOtherRequest(kind, assetKey, requestID string) bool {
+	raw, appErr := p.API.KVGet(transferAssetClaimKey(kind, assetKey))
+	if appErr != nil || raw == nil {
+		return false
+	}
+	holder := parseTransferClaim(raw).requestID
+	return holder != "" && holder != requestID
 }
 
 // deleteTransferRecordIfUnchanged removes a record only when it still holds

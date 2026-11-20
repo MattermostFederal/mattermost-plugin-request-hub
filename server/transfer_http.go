@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -101,6 +102,11 @@ func (p *Plugin) resolveOwnerID(userID, username string) string {
 	return user.Id
 }
 
+// transferPickerBudget caps the live Mattermost reads handleTransferableAssets
+// makes across the whole inventory. Past it the picker answers from the
+// index alone rather than holding the caller's request open.
+const transferPickerBudget = 15 * time.Second
+
 // transferableAsset is one RH-managed asset the caller may nominate.
 type transferableAsset struct {
 	AssetType   string `json:"asset_type"`
@@ -121,6 +127,11 @@ type transferableAsset struct {
 func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	caller, appErr := p.API.GetUser(userID)
+	if appErr != nil || caller == nil {
+		http.Error(w, "failed to list transferable assets", http.StatusInternalServerError)
 		return
 	}
 	out := map[string][]transferableAsset{"bots": {}, "webhooks": {}}
@@ -161,6 +172,11 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to list transferable assets", http.StatusInternalServerError)
 		return
 	}
+	// One admin session and one deadline for every live hook read below:
+	// the list is as long as the inventory, and the caller's context ends
+	// the batch if they give up on the request.
+	reads := p.newTransferReads(r.Context(), userID, transferPickerBudget)
+	defer reads.close()
 	noReassign := p.webhookReassignUnsupported()
 	for _, e := range hooks {
 		if e.RetiredAt != 0 {
@@ -170,7 +186,15 @@ func (p *Plugin) handleTransferableAssets(w http.ResponseWriter, r *http.Request
 		// Same owner resolution submit and approval use, so the picker
 		// never offers a hook the submit check will turn down — or hide one
 		// whose index row has fallen behind a reassign.
-		owner := p.webhookOwnerForChecks(&entry, userID)
+		owner, liveKnown := p.webhookOwnerForChecksWith(&entry, reads)
+		if !liveKnown && userID != owner && !caller.IsSystemAdmin() {
+			// The index row is the last thing Request Hub was told, not
+			// who owns the hook now. A stale "owner deactivated" widens
+			// canNominateTransfer to everyone who can see the channel, so
+			// an unverified row must not be what hands a hook — and an
+			// incoming hook's handle — to a channel member.
+			continue
+		}
 		asset := transferAsset{assetType: "webhook", assetID: e.HookID, ownerUserID: owner, requesterID: e.RequesterID, channelID: e.ChannelID}
 		if p.canNominateTransfer(userID, asset) != nil {
 			continue

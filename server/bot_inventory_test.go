@@ -63,8 +63,8 @@ func TestBuildBotInventory_LiveOwnerOverridesIndex(t *testing.T) {
 	})
 	api.ExpectedCalls = nil
 	stubLogLevels(api)
-	api.On("KVList", 0, 200).Return([]string{kvBotIndexPrefix + "b1"}, nil).Maybe()
-	api.On("KVList", 1, 200).Return(nil, nil).Maybe()
+	api.On("KVList", 0, botIndexPageSize).Return([]string{kvBotIndexPrefix + "b1"}, nil).Maybe()
+	api.On("KVList", 1, botIndexPageSize).Return(nil, nil).Maybe()
 	api.On("KVGet", kvBotIndexPrefix+"b1").Return(store[kvBotIndexPrefix+"b1"], nil).Maybe()
 	api.On("GetBot", "b1", true).Return(&model.Bot{UserId: "b1", Username: "alpha", OwnerId: "u_other"}, nil)
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
@@ -148,7 +148,7 @@ func TestBuildBotInventory_IndexUnreadable(t *testing.T) {
 	api := &plugintest.API{}
 	stubLogs(api)
 	p := newTestPlugin(api)
-	api.On("KVList", 0, 200).Return(nil, testAppErr("kv down"))
+	api.On("KVList", 0, botIndexPageSize).Return(nil, testAppErr("kv down"))
 
 	_, err := p.buildAuditExport(auditExportFilter{Type: exportBotInventory, Format: "pdf"})
 

@@ -187,8 +187,16 @@ func (p *Plugin) submitBugReportRequest(requesterID, category, aboutKind, aboutO
 
 	mention := p.systemAdminMentions()
 	msg := mention + " — @" + requester.Username + " filed a Request Hub " + strings.ToLower(bugReportCategoryLabel(req.Category)) + " report."
+	// The card carries the reporter's own words. Team Admins are seeded
+	// into the audit channel whenever either approver toggle is on, so the
+	// card goes out as System Admin DMs instead of into a channel whose
+	// membership reaches past the audience the reporter was promised.
+	var auditChannel *model.Channel
+	if !p.auditChannelMayIncludeTeamAdmins() {
+		auditChannel = p.ensureAuditChannel()
+	}
 	approvalPostID, approvalChannelID, err := p.postApprovalAttachment(req.ID, p.bugReportAttachment(req, requester),
-		msg, p.ensureAuditChannel())
+		msg, auditChannel)
 	if err != nil {
 		p.deletePendingRequestKV(kvBugReportRequestPrefix + req.ID)
 		p.releasePending(pendingKindBugReport, req.RequesterID, req.ID)

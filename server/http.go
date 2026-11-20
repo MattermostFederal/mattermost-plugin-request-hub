@@ -1479,8 +1479,8 @@ func (p *Plugin) resolvedPost(postID, status string) *model.Post {
 	if postID == "" {
 		return &model.Post{Message: status}
 	}
-	post, appErr := p.API.GetPost(postID)
-	if appErr != nil || post == nil || post.UserId != p.botUserID {
+	post := p.loadApprovalCardPost(postID)
+	if post == nil {
 		return &model.Post{Message: status}
 	}
 	return p.resolvedCard(post, status)

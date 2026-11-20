@@ -96,6 +96,75 @@ func (p *Plugin) liveBotOwnerID(botUserID, indexOwner string) (string, error) {
 	return indexOwner, nil
 }
 
+// transferReads bounds a batch of live Mattermost reads: one admin session
+// for the whole batch, and one deadline covering all of it. The transfer
+// picker reads once per indexed asset, so a session (and an unbounded
+// context) per asset turns a long inventory into a request that keeps
+// working long after its caller has gone.
+type transferReads struct {
+	p        *Plugin
+	ctx      context.Context
+	cancel   context.CancelFunc
+	adminID  string
+	client   *model.Client4
+	release  func()
+	failed   bool
+	outgoing map[string]outgoingSnapshotResult
+}
+
+// outgoingSnapshotResult remembers one outgoing-hook read, failures
+// included: a read that could not be made stays unknown for the batch
+// instead of being retried against a session that is already in trouble.
+type outgoingSnapshotResult struct {
+	snap *outgoingWebhookRecreate
+	err  error
+}
+
+// newTransferReads opens a read batch run as adminUserID. parent is the
+// caller's context — an HTTP request's, so a client that walks away stops
+// the reads — and budget caps the batch however long the caller waits.
+func (p *Plugin) newTransferReads(parent context.Context, adminUserID string, budget time.Duration) *transferReads {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
+	return &transferReads{p: p, ctx: ctx, cancel: cancel, adminID: strings.TrimSpace(adminUserID)}
+}
+
+// oneShotReads is a read batch for a single lookup off the request path.
+func (p *Plugin) oneShotReads(adminUserID string) *transferReads {
+	return p.newTransferReads(context.Background(), adminUserID, transferRESTTimeout)
+}
+
+func (t *transferReads) close() {
+	if t == nil {
+		return
+	}
+	t.cancel()
+	if t.release != nil {
+		t.release()
+		t.release = nil
+	}
+}
+
+// live hands out the shared client. ok is false once the batch has no
+// admin to act as, has run out of time, or could not open a session —
+// callers then report the read as unknown rather than waiting longer.
+func (t *transferReads) live() (*model.Client4, context.Context, bool) {
+	if t == nil || t.failed || t.adminID == "" || t.ctx.Err() != nil {
+		return nil, nil, false
+	}
+	if t.client == nil {
+		client, cleanup, err := t.p.transferClient(t.adminID)
+		if err != nil {
+			t.failed = true
+			return nil, nil, false
+		}
+		t.client, t.release = client, cleanup
+	}
+	return t.client, t.ctx, true
+}
+
 // liveWebhookOwnerID reads a webhook's current Mattermost owner. The RH
 // index falls behind whenever a reassign changed the hook but could not
 // write the index row, so ownership checks must prefer the live value.
@@ -104,58 +173,68 @@ func (p *Plugin) liveBotOwnerID(botUserID, indexOwner string) (string, error) {
 // else's hook needs Manage*Webhooks, which a plain requester does not have
 // — and callers fall back to the index owner rather than refusing them.
 func (p *Plugin) liveWebhookOwnerID(webhookType, hookID, adminUserID string) (owner string, known bool) {
+	reads := p.oneShotReads(adminUserID)
+	defer reads.close()
+	return reads.webhookOwnerID(webhookType, hookID)
+}
+
+func (t *transferReads) webhookOwnerID(webhookType, hookID string) (owner string, known bool) {
 	hookID = strings.TrimSpace(hookID)
-	if hookID == "" || strings.TrimSpace(adminUserID) == "" {
+	if t == nil || hookID == "" || t.adminID == "" {
 		return "", false
 	}
-	if p.liveWebhookOwnerFn != nil {
-		live, err := p.liveWebhookOwnerFn(webhookType, hookID, adminUserID)
+	if t.p.liveWebhookOwnerFn != nil {
+		live, err := t.p.liveWebhookOwnerFn(webhookType, hookID, t.adminID)
 		if err != nil {
 			return "", false
 		}
 		return strings.TrimSpace(live), strings.TrimSpace(live) != ""
 	}
-	if webhookType == webhookTypeOutgoing {
+	switch webhookType {
+	case webhookTypeOutgoing:
 		// Reuse the recreate read so an outgoing hook is fetched one way.
-		snap, snapErr := p.loadOutgoingWebhookForRecreate(hookID, adminUserID)
+		snap, snapErr := t.outgoingSnapshot(hookID)
 		if snapErr != nil || snap == nil {
 			return "", false
 		}
 		creator := strings.TrimSpace(snap.CreatorID)
 		return creator, creator != ""
+	case webhookTypeIncoming:
+		client, ctx, ok := t.live()
+		if !ok {
+			return "", false
+		}
+		hook, _, apiErr := client.GetIncomingWebhook(ctx, hookID, "")
+		if apiErr != nil || hook == nil || strings.TrimSpace(hook.UserId) == "" {
+			return "", false
+		}
+		return strings.TrimSpace(hook.UserId), true
 	}
-	if webhookType != webhookTypeIncoming {
-		return "", false
-	}
-	client, cleanup, err := p.transferClient(adminUserID)
-	if err != nil {
-		return "", false
-	}
-	defer cleanup()
-	hook, _, apiErr := client.GetIncomingWebhook(context.Background(), hookID, "")
-	if apiErr != nil || hook == nil || strings.TrimSpace(hook.UserId) == "" {
-		return "", false
-	}
-	return strings.TrimSpace(hook.UserId), true
+	return "", false
 }
 
 // liveIncomingWebhookChannelID reads where an incoming hook posts now. A
 // retire+recreate rebuilds the hook from the ticket, so a hook that has
 // been moved since must not be rebuilt in the channel the reviewers saw.
 func (p *Plugin) liveIncomingWebhookChannelID(hookID, adminUserID string) (string, error) {
+	reads := p.oneShotReads(adminUserID)
+	defer reads.close()
+	return reads.incomingWebhookChannelID(hookID)
+}
+
+func (t *transferReads) incomingWebhookChannelID(hookID string) (string, error) {
 	hookID = strings.TrimSpace(hookID)
 	if hookID == "" {
 		return "", errors.New("the webhook's ID is unknown")
 	}
-	if p.incomingWebhookChannelFn != nil {
-		return p.incomingWebhookChannelFn(hookID, adminUserID)
+	if t.p.incomingWebhookChannelFn != nil {
+		return t.p.incomingWebhookChannelFn(hookID, t.adminID)
 	}
-	client, cleanup, err := p.transferClient(adminUserID)
-	if err != nil {
-		return "", err
+	client, ctx, ok := t.live()
+	if !ok {
+		return "", errors.New("the incoming webhook could not be read")
 	}
-	defer cleanup()
-	hook, _, apiErr := client.GetIncomingWebhook(context.Background(), hookID, "")
+	hook, _, apiErr := client.GetIncomingWebhook(ctx, hookID, "")
 	if apiErr != nil {
 		return "", errors.Wrap(apiErr, "failed to load incoming webhook")
 	}
@@ -170,18 +249,24 @@ func (p *Plugin) liveIncomingWebhookChannelID(hookID, adminUserID string) (strin
 // channel at all — an unverifiable scope must never pass for the channel a
 // ticket was approved against.
 func (p *Plugin) liveWebhookChannelID(webhookType, hookID, adminUserID string) (channelID string, known bool) {
+	reads := p.oneShotReads(adminUserID)
+	defer reads.close()
+	return reads.webhookChannelID(webhookType, hookID)
+}
+
+func (t *transferReads) webhookChannelID(webhookType, hookID string) (channelID string, known bool) {
 	if strings.TrimSpace(hookID) == "" {
 		return "", false
 	}
 	switch webhookType {
 	case webhookTypeIncoming:
-		live, err := p.liveIncomingWebhookChannelID(hookID, adminUserID)
+		live, err := t.incomingWebhookChannelID(hookID)
 		if err != nil {
 			return "", false
 		}
 		return strings.TrimSpace(live), true
 	case webhookTypeOutgoing:
-		snap, err := p.loadOutgoingWebhookForRecreate(hookID, adminUserID)
+		snap, err := t.outgoingSnapshot(hookID)
 		if err != nil || snap == nil || snap.channelUnknown {
 			return "", false
 		}
@@ -190,6 +275,36 @@ func (p *Plugin) liveWebhookChannelID(webhookType, hookID, adminUserID string) (
 		return strings.TrimSpace(snap.ChannelID), true
 	}
 	return "", false
+}
+
+// outgoingSnapshot reads the live outgoing hook through the shared session.
+// The result is held for the life of the batch, so a caller that wants the
+// owner and the channel costs one read rather than two.
+func (t *transferReads) outgoingSnapshot(hookID string) (*outgoingWebhookRecreate, error) {
+	if hit, ok := t.outgoing[hookID]; ok {
+		return hit.snap, hit.err
+	}
+	snap, err := t.readOutgoing(hookID)
+	if t.outgoing == nil {
+		t.outgoing = map[string]outgoingSnapshotResult{}
+	}
+	t.outgoing[hookID] = outgoingSnapshotResult{snap: snap, err: err}
+	return snap, err
+}
+
+func (t *transferReads) readOutgoing(hookID string) (*outgoingWebhookRecreate, error) {
+	if t.p.getOutgoingWebhookCallbackFn != nil || t.p.getOutgoingWebhookForRecreateFn != nil {
+		return t.p.loadOutgoingWebhookForRecreate(hookID, t.adminID)
+	}
+	client, ctx, ok := t.live()
+	if !ok {
+		return nil, errors.New("the outgoing webhook could not be read")
+	}
+	hook, _, apiErr := client.GetOutgoingWebhook(ctx, hookID)
+	if apiErr != nil {
+		return nil, errors.Wrap(apiErr, "failed to load outgoing webhook for recreate")
+	}
+	return outgoingRecreateFromHook(hook)
 }
 
 // liveWebhookScope reads a hook's current owner and channel together, for
@@ -213,18 +328,31 @@ func (p *Plugin) liveWebhookScope(webhookType, hookID, adminUserID string) (owne
 // so a reassign whose index write failed stops handing transfer rights to
 // the previous owner.
 func (p *Plugin) webhookOwnerForChecks(index *webhookIndexEntry, adminUserID string) string {
+	reads := p.oneShotReads(adminUserID)
+	defer reads.close()
+	owner, _ := p.webhookOwnerForChecksWith(index, reads)
+	return owner
+}
+
+// webhookOwnerForChecksWith is webhookOwnerForChecks over a shared read
+// batch. liveKnown is false when Mattermost could not be asked, so callers
+// that list assets can tell a verified owner from the index's last word.
+func (p *Plugin) webhookOwnerForChecksWith(index *webhookIndexEntry, reads *transferReads) (owner string, liveKnown bool) {
 	if index == nil {
-		return ""
+		return "", false
 	}
 	indexOwner := webhookIndexOwner(*index)
-	live, known := p.liveWebhookOwnerID(index.WebhookType, index.HookID, adminUserID)
-	if !known || live == indexOwner {
-		return indexOwner
+	live, known := reads.webhookOwnerID(index.WebhookType, index.HookID)
+	if !known {
+		return indexOwner, false
+	}
+	if live == indexOwner {
+		return indexOwner, true
 	}
 	if err := p.updateWebhookIndexOwner(index.HookID, live); err != nil {
 		p.API.LogWarn("failed to repair a stale webhook index owner", "request_id", index.RequestID, "error", err.Error())
 	}
-	return live
+	return live, true
 }
 
 // rotateDefaultOn reports whether token rotation defaults on for a reason:
@@ -402,6 +530,12 @@ func (p *Plugin) transferClient(adminUserID string) (*model.Client4, func(), err
 // page/offset token API has no ORDER BY, so rows can shift between pages and
 // a single walk can miss one. Two full walks must agree on the token-ID set;
 // anything else fails closed so revoke-all never pretends to have finished.
+//
+// Two agreeing walks are a guard against a shifting window, not proof the
+// list is complete: on a replica-backed server both walks can be served by
+// the same lagging replica, so a token created (or one this process has not
+// seen) is absent from both. Completeness is only ever established by
+// confirmBotTokensRevoked reading an empty set after the revokes.
 func (p *Plugin) listBotAccessTokens(botUserID, adminUserID string) ([]*model.UserAccessToken, error) {
 	if p.listBotAccessTokensFn != nil {
 		return p.listBotAccessTokensFn(botUserID, adminUserID)
@@ -563,12 +697,15 @@ type botTokenTargets struct {
 	tracked     map[string]string // RH-tracked token ID → expiry KV key
 	trackedIDs  []string          // tracked IDs in listing order
 	listFailure []string
+	// adminUserID is who the capture ran as, so the confirmation read
+	// after the revokes can use the same session rights.
+	adminUserID string
 }
 
 // collectBotTokens captures the bot's current tokens without revoking any of
 // them: the live API list plus RH's tracked expiry rows.
 func (p *Plugin) collectBotTokens(botUserID, adminUserID string) botTokenTargets {
-	targets := botTokenTargets{tracked: map[string]string{}}
+	targets := botTokenTargets{tracked: map[string]string{}, adminUserID: strings.TrimSpace(adminUserID)}
 	if adminUserID != "" {
 		tokens, listErr := p.listBotAccessTokens(botUserID, adminUserID)
 		if listErr != nil {
@@ -647,7 +784,12 @@ func (f *tokenRevokeFailures) messages() []string {
 // revoke and renewed as the loop runs; losing it stops the walk before the
 // next revoke, so an approval that no longer owns the asset never touches a
 // token.
-func (p *Plugin) revokeBotTokenTargets(botUserID string, lease transferLease, targets botTokenTargets) (int, error) {
+//
+// keep names tokens that are allowed to survive — a replacement issued
+// before the revoke. Everything else has to be gone by the time this
+// returns nil: the captured set is only what two reads happened to show,
+// so a clean run is confirmed against a fresh read rather than assumed.
+func (p *Plugin) revokeBotTokenTargets(botUserID string, lease transferLease, targets botTokenTargets, keep ...string) (int, error) {
 	revoked := 0
 	seen := map[string]struct{}{}
 	fails := tokenRevokeFailures{general: append([]string(nil), targets.listFailure...)}
@@ -709,7 +851,51 @@ func (p *Plugin) revokeBotTokenTargets(botUserID string, lease transferLease, ta
 		revoked++
 		p.deleteBotTokenExpiry(key)
 	}
-	return revoked, report()
+	if err := report(); err != nil {
+		return revoked, err
+	}
+	return revoked, p.confirmBotTokensRevoked(botUserID, targets.adminUserID, keep)
+}
+
+// confirmBotTokensRevoked re-reads the bot's tokens and fails closed unless
+// the only ones left are in keep.
+//
+// The captured target set comes from two agreeing walks of a paged list
+// with no stable order. On a replica-backed server both walks can be
+// answered by the same lagging replica, so "the list looked the same
+// twice" says nothing about tokens the replica has not caught up on, and
+// the plugin API has no revoke-every-token-for-this-user call to lean on
+// instead. A read after the revokes that comes back empty is the only
+// evidence available that the bot has nothing live left; anything else is
+// reported as incomplete so no approval ever claims the tokens are gone.
+func (p *Plugin) confirmBotTokensRevoked(botUserID, adminUserID string, keep []string) error {
+	if strings.TrimSpace(adminUserID) == "" {
+		return errors.New("whether the bot has any tokens left could not be checked without an admin session; revoke anything remaining under Integrations → Bot Accounts")
+	}
+	tokens, err := p.listBotAccessTokens(botUserID, adminUserID)
+	if err != nil {
+		return errors.Wrap(err, "the bot's tokens could not be re-read to confirm the revoke finished, so some may still be live; retry Approve")
+	}
+	allowed := make(map[string]struct{}, len(keep))
+	for _, id := range keep {
+		if id = strings.TrimSpace(id); id != "" {
+			allowed[id] = struct{}{}
+		}
+	}
+	left := 0
+	for _, tok := range tokens {
+		if tok == nil || tok.Id == "" {
+			continue
+		}
+		if _, ok := allowed[tok.Id]; ok {
+			continue
+		}
+		left++
+	}
+	if left > 0 {
+		return errors.Errorf("%d token(s) are still live on the bot after the revoke; revoke them under Integrations → Bot Accounts and try again", left)
+	}
+	return nil
 }
 
 // revokeBotTokens revokes every access token on the bot (including ones the
@@ -789,7 +975,7 @@ func (p *Plugin) rotateBotToken(botUserID, botUsername, newOwnerID, adminUserID 
 	if issueErr != nil {
 		return 0, "", "", 0, issueErr
 	}
-	revoked, revokeErr := p.revokeBotTokenTargets(botUserID, lease, issued.targets)
+	revoked, revokeErr := p.revokeBotTokenTargets(botUserID, lease, issued.targets, issued.tokenID)
 	return revoked, issued.tokenID, issued.token, issued.expiresAt, revokeErr
 }
 

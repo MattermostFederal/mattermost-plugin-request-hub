@@ -508,7 +508,7 @@ func (p *Plugin) resolveApprovalCards(requestID, outcome, skipPostID string) {
 			p.API.LogWarn("failed to load approval card", "request_id", requestID, "post_id", postID, "error", appErr.Error())
 			continue
 		}
-		if post == nil || post.UserId != p.botUserID {
+		if !p.isApprovalCard(post) {
 			continue
 		}
 		if _, appErr := p.API.UpdatePost(p.resolvedCard(post, outcome)); appErr != nil {

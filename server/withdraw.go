@@ -56,10 +56,18 @@ func (p *Plugin) decideWithdraw(actingUserID, requestID, clickedPostID string) d
 	if requesterID != actingUserID {
 		return decisionResult{Reply: "Only the person who submitted this request can withdraw it."}
 	}
-	// The ticket is the only pointer to a replacement hook that already
-	// exists, so withdrawing it would strand the hook.
-	if wt, ok := rec.(*webhookTransferRequest); ok && wt.cutoverInProgress() {
-		return decisionResult{Reply: "The replacement webhook for this request already exists, so it can't be withdrawn — an approver has to finish the handover."}
+	// The ticket is the only pointer to a handover Mattermost has already
+	// started: a replacement hook that exists, or a bot whose ownership may
+	// have moved. Withdrawing it would strand either one.
+	switch r := rec.(type) {
+	case *webhookTransferRequest:
+		if r.cutoverInProgress() {
+			return decisionResult{Reply: "The replacement webhook for this request already exists, so it can't be withdrawn — an approver has to finish the handover."}
+		}
+	case *botTransferRequest:
+		if r.ResumeAfterAssign {
+			return decisionResult{Reply: resumeAfterAssignWithdrawBlockedMsg}
+		}
 	}
 	var posts ticketPostIDs
 	_ = json.Unmarshal(raw, &posts)

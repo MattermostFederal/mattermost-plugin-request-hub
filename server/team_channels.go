@@ -907,12 +907,21 @@ func (p *Plugin) primaryTAVisibilityChannels() []*model.Channel {
 			out = append(out, ch)
 		}
 	}
-	if cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests {
+	if p.auditChannelMayIncludeTeamAdmins() {
 		if ch := p.ensureAuditChannel(); ch != nil {
 			out = append(out, ch)
 		}
 	}
 	return out
+}
+
+// auditChannelMayIncludeTeamAdmins reports whether the audit channel's
+// seeded membership can reach past System Admins under the current
+// settings. Kept in step with keepSeededTeamAdminOnChannel, which is what
+// decides who stays in that channel.
+func (p *Plugin) auditChannelMayIncludeTeamAdmins() bool {
+	cfg := p.getConfiguration()
+	return cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests
 }
 
 // ensureTeamCreationApprovalChannelForVisibility ensures the team-requests
@@ -1183,7 +1192,7 @@ func (p *Plugin) keepSeededTeamAdminOnChannel(ch *model.Channel, approvalTeamID 
 	case "mattermost-team-requests":
 		return cfg.AllowApprovalTeamAdminsForTeamRequests
 	case "mattermost-audit-requests":
-		return cfg.AllowTeamAdminApprovers || cfg.AllowApprovalTeamAdminsForTeamRequests
+		return p.auditChannelMayIncludeTeamAdmins()
 	case "mattermost-channel-requests":
 		if approvalTeamID != "" && ch.TeamId == approvalTeamID {
 			if cfg.PerTeamApprovalChannels {

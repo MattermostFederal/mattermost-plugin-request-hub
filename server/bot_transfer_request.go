@@ -15,10 +15,15 @@ const (
 
 	botTransferRequestsDisabledMsg = "Bot transfer/retire requests are currently disabled by an administrator."
 
-	// resumeAfterAssignExpiryBlockedMsg is shown when a ticket past the
-	// review window still has handover work outstanding from an approval
-	// that already reached AssignBot.
-	resumeAfterAssignExpiryBlockedMsg = "This request is past the review window, but an earlier approval may already have moved the bot. Click Approve to finish the handover — a System Admin has to put the ownership back by hand if it should be abandoned instead."
+	// resumeAfterAssignBlockedMsg is shown when something tries to close a
+	// ticket whose approval already reached AssignBot. The record is the
+	// only note that the bot may have moved, so Approve is the only way
+	// out of that state however old the ticket is.
+	resumeAfterAssignBlockedMsg = "An earlier approval may already have moved this bot, so the request can't be closed — click Approve to finish the handover. If it should be abandoned instead, a System Admin has to put the ownership and the tokens back by hand first."
+
+	// resumeAfterAssignWithdrawBlockedMsg is the same refusal for the
+	// requester's Withdraw button, which has no Approve to offer.
+	resumeAfterAssignWithdrawBlockedMsg = "An earlier approval may already have moved this bot, so this request can't be withdrawn — an approver has to finish the handover."
 )
 
 // botTransferRequest transfers an RH-managed bot to a new owner, or retires
@@ -383,12 +388,9 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 	verb := strings.ToLower(transferActionLabel(req.Action))
 	// Expiring deletes the record, which is the only note that an earlier
 	// approval already called AssignBot. Approve is the way out of that
-	// state, so it is let through however old the ticket is; Deny still has
-	// to be told why it cannot close the ticket.
+	// state, so it is let through however old the ticket is; Deny is
+	// refused below, whatever the ticket's age.
 	expired := (canSec || canSys) && requestExpired(req.CreatedAt, p.getConfiguration().ExpiryDays(), model.GetMillis())
-	if expired && req.ResumeAfterAssign && !approve {
-		return decisionResult{Reply: resumeAfterAssignExpiryBlockedMsg}
-	}
 	if days := p.getConfiguration().ExpiryDays(); expired && !req.ResumeAfterAssign {
 		return p.expireRequest(cards, expiredRequest{
 			kvKey: key, raw: rawReq, kind: pendingKindBotTransfer, requestID: req.ID, requesterID: req.RequesterID,
@@ -404,6 +406,12 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 	if !approve {
 		if !canSec && !canSys {
 			return decisionResult{Reply: "You don't have permission to deny this request."}
+		}
+		// The ticket is the only record that an approval already reached
+		// AssignBot, so denying it at any age loses track of a bot that may
+		// already belong to the successor.
+		if req.ResumeAfterAssign {
+			return decisionResult{Reply: resumeAfterAssignBlockedMsg}
 		}
 		if res, ok := p.claimRecord(key, rawReq, cards, "bot transfer request"); !ok {
 			return res
@@ -461,65 +469,85 @@ func (p *Plugin) decideBotTransferRequest(actingUserID, requestID, clickedPostID
 // botTransferApprovalBlocker re-checks before final approval that a transfer
 // still has a valid new owner, that the bot still exists, and that the
 // nominator ACL still holds against the live index owner.
-func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) string {
+//
+// recovery is true when this approval is finishing a handover whose
+// AssignBot already landed. Owner-based checks are skipped then — every one
+// of them would refuse the attempt that has to finish the index row and the
+// token rotation.
+func (p *Plugin) botTransferApprovalBlocker(req *botTransferRequest) (msg string, recovery bool) {
 	if _, appErr := p.API.GetBot(req.BotUserID, true); appErr != nil {
-		return fmt.Sprintf("Bot @%s no longer exists. Deny this request instead.", req.BotUsername)
+		return fmt.Sprintf("Bot @%s no longer exists. Deny this request instead.", req.BotUsername), false
 	}
 	index, indexErr := p.loadBotIndex(req.BotUserID)
 	if indexErr != nil {
-		return "Could not re-check bot ownership; try Approve again."
+		return "Could not re-check bot ownership; try Approve again.", false
 	}
 	if index == nil || index.RetiredAt != 0 {
-		return fmt.Sprintf("Bot @%s is no longer managed (or was retired). Deny this request instead.", req.BotUsername)
+		return fmt.Sprintf("Bot @%s is no longer managed (or was retired). Deny this request instead.", req.BotUsername), false
 	}
 	indexOwner := botIndexOwner(*index)
 	ownerID, liveErr := p.liveBotOwnerID(req.BotUserID, indexOwner)
 	if liveErr != nil {
 		if !req.ResumeAfterAssign {
-			return "Could not re-check the bot's current owner; try Approve again."
+			return "Could not re-check the bot's current owner; try Approve again.", false
 		}
 		// A resume still has the index row and the rotation to finish, but
 		// who owns the bot now is unknown — fall back to the index row so
 		// the nominate ACL is re-checked rather than skipped.
 		ownerID = indexOwner
 	}
-	// A retry of an approval that got as far as AssignBot: the bot already
-	// belongs to the successor, so the owner-based checks below would all
-	// refuse the attempt that has to finish the remaining effects. A resume
-	// whose ownership never moved gets no such pass — it is about to call
-	// AssignBot again.
-	if req.Action == transferActionTransfer && ownerID == req.NewOwnerUserID {
-		return ""
+	if req.Action == transferActionTransfer && ownerID != "" && ownerID == req.NewOwnerUserID {
+		// A retry of an approval that got as far as AssignBot: the bot
+		// already belongs to the successor, so finish the rest.
+		if req.ResumeAfterAssign {
+			return "", true
+		}
+		// No approval of this ticket ever reached AssignBot, so the bot was
+		// handed over outside Request Hub. Waving the ACL through here
+		// would let a ticket nobody re-checked rotate the bot's tokens.
+		return fmt.Sprintf("Bot @%s already belongs to the new owner, and this request never started the handover. Deny it, and submit a new request if the bot still needs changing.", req.BotUsername), false
 	}
 	asset := transferAsset{
 		assetType: "bot", assetID: req.BotUserID,
 		ownerUserID: ownerID, requesterID: index.RequesterID, channelID: index.HomeChannelID,
 	}
 	if err := p.canNominateTransfer(req.RequesterID, asset); err != nil {
-		return "The requester can no longer transfer or retire this bot (" + err.Error() + "). Deny this request instead."
+		return "The requester can no longer transfer or retire this bot (" + err.Error() + "). Deny this request instead.", false
 	}
 	if req.Action == transferActionTransfer {
 		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
 			currentOwnerID: ownerID, actingUserID: "", noun: "bot",
 		}); err != nil {
-			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
+			return err.Error() + " Deny this request, or ask for a new one with a valid owner.", false
 		}
 	}
-	return ""
+	return "", false
 }
 
 // botTransferApprovalBlockerFor adds approve-time checks that need the actor
 // (e.g. cannot approve a transfer that names yourself as the new owner).
 func (p *Plugin) botTransferApprovalBlockerFor(req *botTransferRequest, actingUserID string) string {
-	if msg := p.botTransferApprovalBlocker(req); msg != "" {
+	msg, recovery := p.botTransferApprovalBlocker(req)
+	if msg != "" {
 		return msg
 	}
-	if req.Action == transferActionTransfer {
-		if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
-			currentOwnerID: "", actingUserID: actingUserID, noun: "bot",
-		}); err != nil {
-			return err.Error() + " Deny this request, or ask for a new one with a valid owner."
+	if req.Action != transferActionTransfer {
+		return ""
+	}
+	if recovery {
+		// The bot is already the successor's. Refusing now because they
+		// have been deactivated since would leave the previous owner's
+		// tokens live on a bot they no longer own, so this approval goes
+		// through and the rotation declines to issue a new secret instead.
+		if req.NewOwnerUserID == actingUserID {
+			return "You can't approve a transfer that names you as the new owner — ask another approver."
 		}
+		return ""
+	}
+	if err := p.checkTransferNewOwner(req.NewOwnerUserID, transferNewOwnerOpts{
+		currentOwnerID: "", actingUserID: actingUserID, noun: "bot",
+	}); err != nil {
+		return err.Error() + " Deny this request, or ask for a new one with a valid owner."
 	}
 	return ""
 }
@@ -539,20 +567,24 @@ func (p *Plugin) fulfillBotTransferRequest(req *botTransferRequest, actingUser, 
 		if revErr != nil {
 			partialErrors = append(partialErrors, "revoking bot tokens failed: "+revErr.Error())
 		}
+		// A retired bot that owned webhooks needs a look afterwards, but
+		// that is a follow-up rather than something that went wrong: as a
+		// partial error it turned every clean retire into "with issues".
+		followUp := ""
 		if index, loadErr := p.loadBotIndex(req.BotUserID); loadErr != nil {
 			partialErrors = append(partialErrors, "bot index could not be loaded after retire: "+loadErr.Error()+" — bot-owned webhooks may need manual cleanup")
 		} else if index != nil && (index.HasIncomingWebhook || index.HasOutgoingWebhook) {
-			partialErrors = append(partialErrors, "any bot-owned webhooks may need manual cleanup (their hook IDs aren't recorded in the bot index)")
+			followUp = " Any webhooks this bot owned have to be deleted by hand — their hook IDs aren't recorded in the bot index."
 		}
 		if idxErr := p.retireBotIndex(req.BotUserID); idxErr != nil {
 			partialErrors = append(partialErrors, "bot index could not be marked retired: "+idxErr.Error())
 		}
 		p.releaseTransferTicketLease(req.transferLease(), req.RequesterID)
 		outcome := fmt.Sprintf("✅ Fully approved (security + system). Bot **@%s** retired.", req.BotUsername)
-		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tokens revoked.", req.BotUsername)
+		cardText := fmt.Sprintf("Fully approved. Bot **@%s** has been disabled and its tokens revoked.", req.BotUsername) + followUp
 		if len(partialErrors) > 0 {
 			outcome = fmt.Sprintf("⚠️ Fully approved with issues. Bot **@%s** retired.", req.BotUsername)
-			cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** was disabled, but: %s.", req.BotUsername, escapeMarkdown(strings.Join(partialErrors, "; ")))
+			cardText = fmt.Sprintf("Fully approved with issues. Bot **@%s** was disabled, but: %s.", req.BotUsername, escapeMarkdown(strings.Join(partialErrors, "; "))) + followUp
 		}
 		p.auditTransferApproved(cards, req, actingUser, requester, revoked, 0, false, partialErrors)
 		return p.finish(cards, "", outcome, ticketClose{
@@ -655,6 +687,13 @@ type botTokenRotation struct {
 // because cutting the previous owner off is the point of the rotation.
 func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID string, lease transferLease) botTokenRotation {
 	var out botTokenRotation
+	// A recovery approval runs after the bot has already moved, and the
+	// successor may have been deactivated in between. Cutting the previous
+	// owner off is still right; handing a live secret to a disabled account
+	// is not.
+	if active, known := p.userActiveStatus(req.NewOwnerUserID); known && !active {
+		return p.revokeWithoutReplacement(req, actingUserID, lease)
+	}
 	issued, issueErr := p.issueReplacementBotToken(req.BotUserID, req.BotUsername, req.NewOwnerUserID, actingUserID, req.ID)
 	if issueErr != nil {
 		if req.Reason == transferReasonVoluntary {
@@ -686,7 +725,7 @@ func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID
 		return out
 	}
 
-	revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, issued.targets)
+	revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, issued.targets, issued.tokenID)
 	out.revoked = revoked
 	if revokeErr != nil {
 		out.partialErrors = append(out.partialErrors, "a new token was issued, but not every old token could be revoked: "+revokeErr.Error()+" — revoke the remaining tokens manually")
@@ -697,6 +736,22 @@ func (p *Plugin) rotateBotTokenForTransfer(req *botTransferRequest, actingUserID
 	}
 	out.rotated = true
 	out.expiresAt = issued.expiresAt
+	return out
+}
+
+// revokeWithoutReplacement retires the bot's existing tokens and issues
+// nothing in their place, for a handover whose successor can no longer hold
+// a secret.
+func (p *Plugin) revokeWithoutReplacement(req *botTransferRequest, actingUserID string, lease transferLease) botTokenRotation {
+	var out botTokenRotation
+	revoked, revokeErr := p.revokeBotTokenTargets(req.BotUserID, lease, p.collectBotTokens(req.BotUserID, actingUserID))
+	out.revoked = revoked
+	msg := "the new owner's account is deactivated, so no replacement token was issued — the bot's existing tokens were revoked; issue a token once an active owner holds the bot"
+	if revokeErr != nil {
+		msg = "the new owner's account is deactivated, so no replacement token was issued, and not every existing token could be revoked: " + revokeErr.Error() +
+			" — revoke the remaining tokens manually"
+	}
+	out.partialErrors = append(out.partialErrors, msg)
 	return out
 }
 
@@ -737,7 +792,8 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 	if restoreErr != nil && !restored {
 		p.API.LogError("failed to restore bot transfer request after failure", "error", restoreErr.Error())
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
-			fmt.Sprintf("Could not %s the bot (%s), and the request could not be saved — ask the requester to resubmit.", verb, cause.Error()))
+			fmt.Sprintf("Could not %s the bot (%s), and the request could not be saved (%s). %s",
+				verb, cause.Error(), restoreErr.Error(), p.botTransferReconcileAdvice(req)))
 	}
 	if !restored {
 		return p.lostRequest(cards, pendingKindBotTransfer, req.RequesterID, approverName,
@@ -757,6 +813,17 @@ func (p *Plugin) restoreBotTransferAfterFailure(req *botTransferRequest, actingU
 		p.botTransferApprovalAttachmentWithTitledNotice(req, requesterOrPlaceholder(requester, req.RequesterID), "⚠️ Action needed", notice(true)))
 	result.audited = true
 	return result
+}
+
+// botTransferReconcileAdvice names the next step for a ticket that could
+// not be kept. A handover that may already have moved the bot is not
+// something the requester can put right by filing the same request again.
+func (p *Plugin) botTransferReconcileAdvice(req *botTransferRequest) string {
+	if req.Action == transferActionTransfer && req.ResumeAfterAssign {
+		return fmt.Sprintf("Bot @%s may already belong to %s: a System Admin has to check its owner and its tokens, then finish or undo the handover by hand.",
+			req.BotUsername, p.mentionList([]string{req.NewOwnerUserID}))
+	}
+	return "Nothing on the bot was changed — ask the requester to submit it again."
 }
 
 func (p *Plugin) auditTransferApproved(cards decisionCards, req *botTransferRequest, actingUser, requester *model.User, tokensRevoked int, tokenExpiresAt int64, rotated bool, partialErrors []string) {

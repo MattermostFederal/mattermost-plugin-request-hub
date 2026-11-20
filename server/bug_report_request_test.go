@@ -81,6 +81,41 @@ func TestSubmitBugReportRequest_PostsToAuditChannel(t *testing.T) {
 	require.Equal(t, historyPending, h.Status)
 }
 
+// The reporter writes for System Admins. Team Admins are seeded into the
+// audit channel whenever either approver toggle is on, so the card has to
+// leave that channel alone and go out as DMs instead.
+func TestSubmitBugReportRequest_KeepsTheReportOutOfAChannelTeamAdminsCanRead(t *testing.T) {
+	for name, apply := range map[string]func(*configuration){
+		"team admin approvers":     func(c *configuration) { c.AllowTeamAdminApprovers = true },
+		"team admins on team reqs": func(c *configuration) { c.AllowApprovalTeamAdminsForTeamRequests = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, api, _ := bugReportPlugin(t)
+			cfg := *p.getConfiguration()
+			cfg.ApprovalTeam = "appteam"
+			apply(&cfg)
+			p.setConfiguration(&cfg)
+			api.On("GetTeamByName", "appteam").Return(&model.Team{Id: "appteam-id", Name: "appteam"}, nil).Maybe()
+			api.On("GetChannelByName", "appteam-id", "mattermost-audit-requests", true).
+				Return(pluginChannel("auditch", "mattermost-audit-requests"), nil).Maybe()
+			api.On("GetUsers", mock.Anything).Return([]*model.User{sysadmin("admin1")}, nil).Maybe()
+			api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&model.Channel{Id: "dm1"}, nil).Maybe()
+			api.On("GetConfig").Return(&model.Config{}).Maybe()
+
+			var channels []string
+			api.On("CreatePost", mock.AnythingOfType("*model.Post")).Return(func(post *model.Post) (*model.Post, *model.AppError) {
+				channels = append(channels, post.ChannelId)
+				return &model.Post{Id: model.NewId(), ChannelId: post.ChannelId}, nil
+			})
+
+			msg, err := p.submitBugReportRequest("u_req", "bug", "channel", "prefix ops-", "", "Buttons do nothing on mobile")
+			require.NoError(t, err)
+			require.NotContains(t, msg, "audit channel")
+			require.NotContains(t, channels, "auditch", "the report carries the reporter's own words")
+		})
+	}
+}
+
 func TestSubmitBugReportRequest_Refusals(t *testing.T) {
 	p, _, _ := bugReportPlugin(t)
 	_, err := p.submitBugReportRequest("u_req", "nope", "general", "", "", "x")
