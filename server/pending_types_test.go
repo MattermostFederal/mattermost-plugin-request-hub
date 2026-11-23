@@ -64,21 +64,24 @@ func TestPendingKeysForEveryType(t *testing.T) {
 
 func TestDuplicateRequestErrorForEveryType(t *testing.T) {
 	for kind, tc := range map[string]struct{ key, want string }{
-		pendingKindChannel:     {"team1/team-x", "you already have a pending request for ~team-x in this team"},
-		pendingKindAdmin:       {"ch1/a", "you already have a pending Channel Admin request for these people in this channel"},
-		pendingKindTeam:        {"ops", "you already have a pending request for a team named ops"},
-		pendingKindTeamAdmin:   {"t1/a", "you already have a pending Team Admin request for these people in this team"},
-		pendingKindTeamMember:  {"t1/a", "you already have a pending request to add these people to this team"},
-		pendingKindTeamGuest:   {"t1/guest@example.com", "you already have a pending request to invite guest@example.com to this team"},
-		pendingKindBot:         {"svcbot", "you already have a pending request for bot @svcbot"},
-		pendingKindWebhook:     {"outgoing/ch1/alerts", "you already have a pending outgoing webhook request with this name in this channel"},
-		pendingKindAuditExport: {"csv/////", "you already have a pending request for this audit export"},
+		pendingKindChannel:         {"team1/team-x", "you already have a pending request for ~team-x in this team"},
+		pendingKindAdmin:           {"ch1/a", "you already have a pending Channel Admin request for these people in this channel"},
+		pendingKindTeam:            {"ops", "you already have a pending request for a team named ops"},
+		pendingKindTeamAdmin:       {"t1/a", "you already have a pending Team Admin request for these people in this team"},
+		pendingKindTeamMember:      {"t1/a", "you already have a pending request to add these people to this team"},
+		pendingKindTeamGuest:       {"t1/guest@example.com", "you already have a pending request to invite guest@example.com to this team"},
+		pendingKindBot:             {"svcbot", "you already have a pending request for bot @svcbot"},
+		pendingKindWebhook:         {"outgoing/ch1/alerts", "you already have a pending outgoing webhook request with this name in this channel"},
+		pendingKindAuditExport:     {"csv/////", "you already have a pending request for this audit export"},
+		pendingKindBugReport:       {"id1", "you already have a pending bug or feedback report like this"},
+		pendingKindBotTransfer:     {"botid", "there's already a pending transfer/retire ticket for this bot"},
+		pendingKindWebhookTransfer: {"incoming/hook1", "there's already a pending transfer/retire ticket for this webhook"},
 	} {
 		t.Run(kind, func(t *testing.T) {
 			require.EqualError(t, duplicateRequestError(kind, tc.key), tc.want)
 		})
 	}
-	require.Len(t, pendingKinds, 9, "every request type has a duplicate message above")
+	require.Len(t, pendingKinds, 12, "every request type has a duplicate message above")
 }
 
 func TestPendingRequestExistsUnknownKind(t *testing.T) {

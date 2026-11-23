@@ -137,7 +137,8 @@ test.describe('submit', () => {
 
         const ticket = await hub.findDM(requester.username, `@${username}`);
         expect(ticket.message).toContain('Your bot account request has been submitted for approval.');
-        expect(actionIds(ticket)).toEqual([]);
+        expect(ticket.message).toContain('Use Withdraw if you no longer need this request.');
+        expect(actionIds(ticket)).toEqual(['withdraw']);
 
         expect(await storedBotRequest(hub, s.requestId)).toMatchObject({requester_id: requester.id, username, request_token: true});
         expect(await pendingBotIds(hub, requester.id)).toEqual([s.requestId]);

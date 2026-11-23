@@ -58,6 +58,7 @@
                 <tr><td><a href="#list-approvals"><code>/mattermost-request-hub list approvals</code></a></td><td>For approvers: lists the pending requests you can approve, with their IDs.</td></tr>
                 <tr><td><a href="#approve"><code>/mattermost-request-hub approve &lt;request ID&gt;</code></a></td><td>For approvers: approves a request of any type, as its Approve button would.</td></tr>
                 <tr><td><a href="#deny"><code>/mattermost-request-hub deny &lt;request ID&gt;</code></a></td><td>For approvers: denies a request of any type, as its Deny button would.</td></tr>
+                <tr><td><a href="#withdraw"><code>/mattermost-request-hub withdraw &lt;request ID&gt;</code></a></td><td>Withdraws one of your pending requests (same as the Withdraw button on your ticket DM). Allowed until a final approve or deny closes it, including after a security step on bot/webhook requests.</td></tr>
                 <tr><td><a href="#audit"><code>/mattermost-request-hub audit &lt;request ID&gt;|recent|export</code></a></td><td>For System Admins: shows everything that happened to a request, lists the latest requests, or links to download the whole audit history. Security approvers can ask for a copy with <code>export</code>.</td></tr>
                 <tr><td><a href="#exercise"><code>/mattermost-request-hub exercise populate|teardown|status</code></a></td><td>For System Admins, when exercise mode is on: seeds, removes or reports marked exercise data in this team.</td></tr>
                 <tr><td><a href="#team"><code>/mattermost-request-hub team</code></a></td><td>Opens the Request a Team form, or with arguments requests a new team without it.</td></tr>
@@ -67,6 +68,7 @@
                 <tr><td><a href="#bot"><code>/mattermost-request-hub bot</code></a></td><td>Opens the Request a Bot form, or with a username and display name requests the bot without it.</td></tr>
                 <tr><td><a href="#webhook-incoming"><code>/mattermost-request-hub webhook-incoming</code></a></td><td>Opens the incoming webhook form, or with a channel and display name requests the webhook without it.</td></tr>
                 <tr><td><a href="#webhook-outgoing"><code>/mattermost-request-hub webhook-outgoing</code></a></td><td>Opens the outgoing webhook form, or with a channel, display name and callback URL requests the webhook without it.</td></tr>
+                <tr><td><a href="#bug"><code>/mattermost-request-hub bug</code></a></td><td>Opens the Report a Bug or Feedback form. Reports go to the audit channel for System Admins to acknowledge (not approve/deny). <code>feedback</code> is an alias.</td></tr>
             </tbody>
         </table>
 
@@ -168,7 +170,8 @@
         <h2 id="prefixes"><code>/mattermost-request-hub prefixes</code></h2>
         <p>
             Lists every prefix your admin configured, with its description and, where there is one, its suffix
-            rule. Use these exactly with <code>/mattermost-request-hub channel</code>.
+            rule. A prefix that always creates public or private channels is marked <em>(always public)</em> or
+            <em>(always private)</em>. Use these exactly with <code>/mattermost-request-hub channel</code>.
         </p>
 
         <h2 id="list"><code>/mattermost-request-hub list</code></h2>
@@ -223,6 +226,17 @@
         <h2 id="deny"><code>/mattermost-request-hub deny</code></h2>
 <pre><code>/mattermost-request-hub deny &lt;request ID&gt;</code></pre>
         <p>Denies a request of any type, as its Deny button would. It works the same way as <code>approve</code>.</p>
+
+        <h2 id="withdraw"><code>/mattermost-request-hub withdraw</code></h2>
+<pre><code>/mattermost-request-hub withdraw &lt;request ID&gt;</code></pre>
+        <p>
+            Withdraws a request you submitted that is still pending. The request ID is on your ticket DM and in
+            <code>list</code>. Only you can withdraw your own request. Approvers are told in the approval channel
+            (or their approval DMs), your ticket card updates, and the audit trail records the withdrawal.
+            You can still withdraw after a security approver has signed off on a bot or webhook request, as long as
+            the final system step has not completed. The same Withdraw button appears on your ticket DM when the
+            request is submitted.
+        </p>
 
         <h3 id="decision-errors">When <code>approve</code> or <code>deny</code> refuses</h3>
         <table class="field-table">
@@ -450,6 +464,17 @@
         <h3 id="webhook-outgoing"><code>/mattermost-request-hub webhook-outgoing</code></h3>
 <pre><code>/mattermost-request-hub webhook-outgoing ~channel &lt;Display name&gt; --callback &lt;url&gt; [--description &lt;text&gt;]</code></pre>
         <p>Requests an outgoing webhook for that channel. See <a href="webhook.html">Webhooks</a>.</p>
+
+        <h2 id="bug"><code>/mattermost-request-hub bug</code></h2>
+<pre><code>/mattermost-request-hub bug
+/mattermost-request-hub feedback</code></pre>
+        <p>
+            Opens the Report a Bug or Feedback form. Anyone can file a short report about Request Hub itself
+            (not a channel, bot, or webhook ticket). The report posts into the audit channel for System Admins
+            to acknowledge: there is no approve or deny. You can link one of your own related request IDs
+            (System Admins may link anyone's). The same form is available from the Request Hub channel-header
+            button. <code>feedback</code> is an alias for <code>bug</code>.
+        </p>
 
         <p>For example:</p>
 <pre><code>/mattermost-request-hub team Field Support --description Support for field teams --invite-only

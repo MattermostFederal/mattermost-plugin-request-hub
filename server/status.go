@@ -42,7 +42,8 @@ type requestSummary struct {
 var allPendingKinds = []string{
 	pendingKindChannel, pendingKindAdmin, pendingKindTeam, pendingKindTeamAdmin,
 	pendingKindTeamMember, pendingKindTeamGuest, pendingKindBot, pendingKindWebhook,
-	pendingKindAuditExport,
+	pendingKindBotTransfer, pendingKindWebhookTransfer,
+	pendingKindAuditExport, pendingKindBugReport,
 }
 
 // pendingKindRequestType returns the request type (requestType*) of a
@@ -258,7 +259,7 @@ func (p *Plugin) canDecide(user *model.User, rec storedRequest) bool {
 		return p.canApproveAdminRequest(user, req.ChannelID)
 	case *teamCreationRequest, *teamAdminRequest:
 		return p.canApproveTeamRequest(user)
-	case *botRequest, *webhookRequest:
+	case *botRequest, *webhookRequest, *botTransferRequest, *webhookTransferRequest:
 		canSec, canSys := p.twoStepPools(user, "request status")
 		return canSec || canSys
 	default:
@@ -275,6 +276,10 @@ func (p *Plugin) canApproveNow(user *model.User, rec storedRequest, canSec, canS
 	case *botRequest:
 		state = req.twoStepState
 	case *webhookRequest:
+		state = req.twoStepState
+	case *botTransferRequest:
+		state = req.twoStepState
+	case *webhookTransferRequest:
 		state = req.twoStepState
 	default:
 		return p.canDecide(user, rec)
@@ -304,8 +309,14 @@ func (p *Plugin) summarize(config *configuration, kind string, rec storedRequest
 		s.Summary = fmt.Sprintf("Bot **@%s**%s", escapeMarkdown(req.Username), awaitingStep(req.twoStepState))
 	case *webhookRequest:
 		s.Summary = fmt.Sprintf("%s webhook **%s** in %s%s", capitalize(req.WebhookType), escapeMarkdown(req.DisplayName), p.channelLabel(req.ChannelID), awaitingStep(req.twoStepState))
+	case *botTransferRequest:
+		s.Summary = fmt.Sprintf("Bot %s **@%s**%s", strings.ToLower(transferActionLabel(req.Action)), escapeMarkdown(req.BotUsername), awaitingStep(req.twoStepState))
+	case *webhookTransferRequest:
+		s.Summary = fmt.Sprintf("%s webhook %s **%s**%s", capitalize(req.WebhookType), strings.ToLower(webhookTransferActionLabel(req.Action)), escapeMarkdown(req.DisplayName), awaitingStep(req.twoStepState))
 	case *auditExportRequest:
 		s.Summary = fmt.Sprintf("Audit export (%s): %s", strings.ToUpper(req.Filter.Format), p.describeExportFilter(req.Filter))
+	case *bugReportRequest:
+		s.Summary = fmt.Sprintf("%s report about %s", bugReportCategoryLabel(req.Category), bugReportAboutLabel(req.AboutKind))
 	}
 	s.Expired = requestExpired(s.CreatedAt, config.ExpiryDays(), model.GetMillis())
 	if days := config.ExpiryDays(); days > 0 && s.CreatedAt > 0 {

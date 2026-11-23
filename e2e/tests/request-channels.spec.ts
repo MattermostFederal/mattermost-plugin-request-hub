@@ -1,6 +1,7 @@
 import {expect, test} from '../helpers/fixtures';
-import {ADMIN, PLUGIN_ID, REQUEST_CHANNELS, atLeast, uid} from '../helpers/requesthub';
+import {ADMIN, PLUGIN_ID, REQUEST_CHANNELS, atLeast, uid, type RequestHub} from '../helpers/requesthub';
 import {complianceHash} from '../helpers/bots';
+import {createTeam} from '../helpers/channel';
 
 const TOKEN_LIFETIME_MONTHS = 1;
 
@@ -81,4 +82,42 @@ test('an approved bot token expires after the configured lifetime', async ({hub}
         // The requester's token DM gives the date.
         await hub.findDM(requester.username, 'The token expires on');
     });
+});
+
+// channelRequestsName polls for a team's Channel Requests channel and
+// returns its display name.
+async function channelRequestsName(hub: RequestHub, teamId: string) {
+    const admin = await hub.client(ADMIN);
+    return admin.getChannelByName(teamId, REQUEST_CHANNELS.channel).then((c) => c.display_name, () => '');
+}
+
+test('per-team Channel Requests channels carry their team name; the root keeps the plain name', async ({hub}) => {
+    const admin = await hub.client(ADMIN);
+    const team = await createTeam(hub, [hub.userIds[ADMIN]]);
+
+    // A System Admin joining the team makes the plugin create its channel.
+    await expect.poll(() => channelRequestsName(hub, team.id), {timeout: 30_000}).toBe(`Mattermost: Channel Requests (${team.displayName})`);
+    expect((await admin.getChannelByName(hub.teamId, REQUEST_CHANNELS.channel)).display_name).toBe('Mattermost: Channel Requests');
+});
+
+test('setting a new Approval team creates every shared channel there and swaps the names', async ({hub}) => {
+    const admin = await hub.client(ADMIN);
+    const team = await createTeam(hub, [hub.userIds[ADMIN]]);
+    const home = await admin.getTeam(hub.teamId);
+    await expect.poll(() => channelRequestsName(hub, team.id), {timeout: 30_000}).toBe(`Mattermost: Channel Requests (${team.displayName})`);
+
+    await hub.withPluginConfig({approvalteam: team.name}, async () => {
+        for (const name of Object.values(REQUEST_CHANNELS)) {
+            await expect.poll(
+                () => admin.getChannelByName(team.id, name).then((c) => c.type, () => ''),
+                {message: `~${name} in the new Approval team`, timeout: 30_000},
+            ).toBe('P');
+        }
+        await expect.poll(() => channelRequestsName(hub, team.id), {timeout: 30_000}).toBe('Mattermost: Channel Requests');
+        await expect.poll(() => channelRequestsName(hub, hub.teamId), {timeout: 30_000}).toBe(`Mattermost: Channel Requests (${home.display_name})`);
+    });
+
+    // Back to the original Approval team: the names swap back.
+    await expect.poll(() => channelRequestsName(hub, hub.teamId), {timeout: 30_000}).toBe('Mattermost: Channel Requests');
+    await expect.poll(() => channelRequestsName(hub, team.id), {timeout: 30_000}).toBe(`Mattermost: Channel Requests (${team.displayName})`);
 });

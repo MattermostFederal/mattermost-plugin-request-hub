@@ -49,11 +49,14 @@ const (
 	eventApproved            = "approved"
 	eventApprovedPartial     = "approved_partial"
 	eventDenied              = "denied"
+	eventWithdrawn           = "withdrawn"
+	eventAcknowledged        = "acknowledged"
 	eventExpired             = "expired"
 	eventApproveFailed       = "approve_failed"
 	eventLost                = "lost"
 	eventUndelivered         = "undelivered"
 	eventClosedAfterTeardown = "closed_after_teardown"
+	eventReconciled          = "reconciled"
 	eventDecisionRefused     = "decision_refused"
 	eventMessageRelayed      = "message_relayed"
 	eventMessageDropped      = "message_dropped"
@@ -68,13 +71,15 @@ const (
 
 // History statuses: where a request ended up, or pending while it is open.
 const (
-	historyPending  = "pending"
-	historyApproved = "approved"
-	historyDenied   = "denied"
-	historyExpired  = "expired"
-	historyFailed   = "failed"
-	historyLost     = "lost"
-	historyClosed   = "closed"
+	historyPending      = "pending"
+	historyApproved     = "approved"
+	historyDenied       = "denied"
+	historyWithdrawn    = "withdrawn"
+	historyAcknowledged = "acknowledged"
+	historyExpired      = "expired"
+	historyFailed       = "failed"
+	historyLost         = "lost"
+	historyClosed       = "closed"
 )
 
 // auditNever marks an event that is never posted to the audit channel.
@@ -104,11 +109,14 @@ var auditEventSpecs = map[string]auditEventSpec{
 	eventApproved:            {status: historyApproved, card: auditApproved, level: auditLevelDecisions},
 	eventApprovedPartial:     {status: historyApproved, card: auditPartial, level: auditLevelDecisions},
 	eventDenied:              {status: historyDenied, card: auditDenied, level: auditLevelDecisions},
+	eventWithdrawn:           {status: historyWithdrawn, card: auditWithdrawn, level: auditLevelDecisions},
+	eventAcknowledged:        {status: historyAcknowledged, card: auditAcknowledged, level: auditLevelDecisions},
 	eventExpired:             {status: historyExpired, card: auditExpired, level: auditLevelDecisions},
 	eventApproveFailed:       {card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventLost:                {status: historyLost, card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventUndelivered:         {status: historyFailed, card: auditFailed, level: auditLevelLifecycle, failed: true},
 	eventClosedAfterTeardown: {status: historyClosed, card: auditNote, level: auditLevelLifecycle},
+	eventReconciled:          {status: historyClosed, card: auditNote, level: auditLevelDecisions},
 	eventDecisionRefused:     {card: auditRefused, level: auditLevelAll, failed: true, existingOnly: true},
 	eventMessageRelayed:      {card: auditMessage, level: auditLevelAll},
 	eventMessageDropped:      {card: auditRefused, level: auditLevelAll, failed: true},
@@ -171,6 +179,12 @@ type requestHistory struct {
 	Events      []auditEvent    `json:"events"`
 }
 
+// auditRedactor is a request that keeps secrets out of the copy recorded
+// with its audit events.
+type auditRedactor interface {
+	auditSnapshot() any
+}
+
 // recordEvent records e in the request history and the server audit log,
 // and posts it to the audit channel when AuditChannelDetail asks for it.
 // It never fails the action being audited: a history that can't be saved
@@ -182,6 +196,9 @@ func (p *Plugin) recordEvent(e auditEntry) {
 	}
 	if e.At == 0 {
 		e.At = model.GetMillis()
+	}
+	if r, ok := e.Snapshot.(auditRedactor); ok {
+		e.Snapshot = r.auditSnapshot()
 	}
 	ev := auditEvent{
 		At:        e.At,
@@ -493,8 +510,14 @@ func kindLabel(kind string) string {
 		return "bot account"
 	case pendingKindWebhook:
 		return "webhook"
+	case pendingKindBotTransfer:
+		return "bot transfer/retire"
+	case pendingKindWebhookTransfer:
+		return "webhook transfer/retire"
 	case pendingKindAuditExport:
 		return "audit export"
+	case pendingKindBugReport:
+		return "bug/feedback report"
 	default:
 		return kind
 	}

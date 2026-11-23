@@ -8,12 +8,15 @@ import (
 
 func TestRequestEnabled(t *testing.T) {
 	c := &configuration{
-		AllowChannelRequests:      true,
-		AllowChannelAdminRequests: true,
-		AllowTeamRequests:         false,
-		AllowTeamAdminRequests:    false,
-		AllowBotTokenRequests:     true,
-		AllowWebhookRequests:      true,
+		AllowChannelRequests:         true,
+		AllowChannelAdminRequests:    true,
+		AllowTeamRequests:            false,
+		AllowTeamAdminRequests:       false,
+		AllowBotTokenRequests:        true,
+		AllowWebhookRequests:         true,
+		AllowBugReportRequests:       true,
+		AllowBotTransferRequests:     true,
+		AllowWebhookTransferRequests: false,
 	}
 
 	require.True(t, c.RequestEnabled(requestTypeChannel))
@@ -22,6 +25,9 @@ func TestRequestEnabled(t *testing.T) {
 	require.False(t, c.RequestEnabled(requestTypeTeamAdmin))
 	require.True(t, c.RequestEnabled(requestTypeBot))
 	require.True(t, c.RequestEnabled(requestTypeWebhook))
+	require.True(t, c.RequestEnabled(requestTypeBugReport))
+	require.True(t, c.RequestEnabled(requestTypeBotTransfer))
+	require.False(t, c.RequestEnabled(requestTypeWebhookTransfer))
 
 	// An unknown type is never enabled — a new entry point can't bypass the
 	// gate before its toggle is wired up.

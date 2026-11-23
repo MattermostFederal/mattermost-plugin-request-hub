@@ -25,6 +25,12 @@ export const OPEN_AUDIT_HISTORY_MODAL = `${manifest.id}_open_audit_history_modal
 export const CLOSE_AUDIT_HISTORY_MODAL = `${manifest.id}_close_audit_history_modal`;
 export const OPEN_AUDIT_EXPORT_REQUEST_MODAL = `${manifest.id}_open_audit_export_request_modal`;
 export const CLOSE_AUDIT_EXPORT_REQUEST_MODAL = `${manifest.id}_close_audit_export_request_modal`;
+export const OPEN_BUG_REPORT_MODAL = `${manifest.id}_open_bug_report_modal`;
+export const CLOSE_BUG_REPORT_MODAL = `${manifest.id}_close_bug_report_modal`;
+export const OPEN_BOT_TRANSFER_MODAL = `${manifest.id}_open_bot_transfer_modal`;
+export const CLOSE_BOT_TRANSFER_MODAL = `${manifest.id}_close_bot_transfer_modal`;
+export const OPEN_WEBHOOK_TRANSFER_MODAL = `${manifest.id}_open_webhook_transfer_modal`;
+export const CLOSE_WEBHOOK_TRANSFER_MODAL = `${manifest.id}_close_webhook_transfer_modal`;
 
 export const openRequestModal = (): Action => ({type: OPEN_REQUEST_MODAL});
 export const closeRequestModal = (): Action => ({type: CLOSE_REQUEST_MODAL});
@@ -56,6 +62,13 @@ export const openAuditHistoryModal = (): Action => ({type: OPEN_AUDIT_HISTORY_MO
 export const closeAuditHistoryModal = (): Action => ({type: CLOSE_AUDIT_HISTORY_MODAL});
 export const openAuditExportRequestModal = (): Action => ({type: OPEN_AUDIT_EXPORT_REQUEST_MODAL});
 export const closeAuditExportRequestModal = (): Action => ({type: CLOSE_AUDIT_EXPORT_REQUEST_MODAL});
+export const openBugReportModal = (): Action => ({type: OPEN_BUG_REPORT_MODAL});
+export const closeBugReportModal = (): Action => ({type: CLOSE_BUG_REPORT_MODAL});
+
+export const openBotTransferModal = (): Action => ({type: OPEN_BOT_TRANSFER_MODAL});
+export const closeBotTransferModal = (): Action => ({type: CLOSE_BOT_TRANSFER_MODAL});
+export const openWebhookTransferModal = (): Action => ({type: OPEN_WEBHOOK_TRANSFER_MODAL});
+export const closeWebhookTransferModal = (): Action => ({type: CLOSE_WEBHOOK_TRANSFER_MODAL});
 
 export type PluginState = {
     modalOpen: boolean;
@@ -77,6 +90,9 @@ export type PluginState = {
     // approvers use to ask for a copy of it.
     auditHistoryModalOpen: boolean;
     auditExportRequestModalOpen: boolean;
+    bugReportModalOpen: boolean;
+    botTransferModalOpen: boolean;
+    webhookTransferModalOpen: boolean;
 };
 
 // GlobalState is a minimal shape of the parts of the Redux store this plugin reads. Plugin state is
@@ -172,6 +188,21 @@ export const isAuditExportRequestModalOpen = (state: GlobalState): boolean => {
     return Boolean(pluginState?.auditExportRequestModalOpen);
 };
 
+export const isBugReportModalOpen = (state: GlobalState): boolean => {
+    const pluginState = state[`plugins-${manifest.id}`] as PluginState | undefined;
+    return Boolean(pluginState?.bugReportModalOpen);
+};
+
+export const isBotTransferModalOpen = (state: GlobalState): boolean => {
+    const pluginState = state[`plugins-${manifest.id}`] as PluginState | undefined;
+    return Boolean(pluginState?.botTransferModalOpen);
+};
+
+export const isWebhookTransferModalOpen = (state: GlobalState): boolean => {
+    const pluginState = state[`plugins-${manifest.id}`] as PluginState | undefined;
+    return Boolean(pluginState?.webhookTransferModalOpen);
+};
+
 // isCurrentUserTeamAdmin returns true when the logged-in user is already a
 // Team Admin (or System Admin) in the given team. Used to hide the
 // "Request Team Admin" menu item for users who already have that role.
@@ -247,6 +278,9 @@ const initialState: PluginState = {
     hubModalOpen: false,
     auditHistoryModalOpen: false,
     auditExportRequestModalOpen: false,
+    bugReportModalOpen: false,
+    botTransferModalOpen: false,
+    webhookTransferModalOpen: false,
 };
 
 export default function reducer(state: PluginState = initialState, action: Action): PluginState {
@@ -299,6 +333,18 @@ export default function reducer(state: PluginState = initialState, action: Actio
         return {...state, auditExportRequestModalOpen: true};
     case CLOSE_AUDIT_EXPORT_REQUEST_MODAL:
         return {...state, auditExportRequestModalOpen: false};
+    case OPEN_BUG_REPORT_MODAL:
+        return {...state, bugReportModalOpen: true};
+    case CLOSE_BUG_REPORT_MODAL:
+        return {...state, bugReportModalOpen: false};
+    case OPEN_BOT_TRANSFER_MODAL:
+        return {...state, botTransferModalOpen: true};
+    case CLOSE_BOT_TRANSFER_MODAL:
+        return {...state, botTransferModalOpen: false};
+    case OPEN_WEBHOOK_TRANSFER_MODAL:
+        return {...state, webhookTransferModalOpen: true};
+    case CLOSE_WEBHOOK_TRANSFER_MODAL:
+        return {...state, webhookTransferModalOpen: false};
     default:
         return state;
     }

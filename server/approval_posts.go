@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
 )
 
@@ -90,11 +91,28 @@ func (p *Plugin) isRequestCard(postID, approvalPostID, requestID string) (bool, 
 	if postIDs != nil {
 		return slices.Contains(postIDs, postID), nil
 	}
-	post, appErr := p.API.GetPost(postID)
-	if appErr != nil || post == nil || post.UserId != p.botUserID {
+	post := p.loadApprovalCardPost(postID)
+	if post == nil {
 		return false, nil
 	}
 	return postRequestID(post) == requestID, nil
+}
+
+// isApprovalCard reports whether post is one of the bot's own cards.
+// Anything else — a user's post, a quote of a card — is never acted on or
+// rewritten, however convincing its buttons look.
+func (p *Plugin) isApprovalCard(post *model.Post) bool {
+	return post != nil && post.UserId == p.botUserID
+}
+
+// loadApprovalCardPost returns postID when it is one of the bot's cards,
+// and nil when it is not or cannot be read.
+func (p *Plugin) loadApprovalCardPost(postID string) *model.Post {
+	post, appErr := p.API.GetPost(postID)
+	if appErr != nil || !p.isApprovalCard(post) {
+		return nil
+	}
+	return post
 }
 
 // cardRefusal returns the private reply to an Approve or Deny click that

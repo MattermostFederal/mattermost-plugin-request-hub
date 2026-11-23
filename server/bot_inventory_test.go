@@ -26,6 +26,7 @@ func inventoryPlugin(t *testing.T) (*Plugin, *plugintest.API, map[string][]byte)
 			BotUserID: "b1", RequestID: "r1", Username: "alpha", RequesterID: "u_req", CreatedAt: 100, RequestedAt: 50, ApprovedBy: "admin1",
 			Purpose: "=posts alerts", PrivilegeLevel: privilegePost, DataIngestion: "webhooks", HostingEnv: "mattermost-prod",
 			HomeTeamID: "t1", HomeChannelID: "c1", Compliance: compliance,
+			HasToken: true, HasIncomingWebhook: true,
 		},
 		{
 			BotUserID: "b2", RequestID: "r2", Username: "beta", RequesterID: "u_other", CreatedAt: 200, HostingEnv: "mattermost-dev",
@@ -61,6 +62,7 @@ func TestBuildBotInventory_LiveOwnerOverridesIndex(t *testing.T) {
 		BotUserID: "b1", RequestID: "r1", Username: "alpha", RequesterID: "u_req", OwnerUserID: "u_req", CreatedAt: 100, HostingEnv: "mattermost-prod",
 	})
 	api.ExpectedCalls = nil
+	stubLogLevels(api)
 	api.On("KVList", 0, botIndexPageSize).Return([]string{kvBotIndexPrefix + "b1"}, nil).Maybe()
 	api.On("KVList", 1, botIndexPageSize).Return(nil, nil).Maybe()
 	api.On("KVGet", kvBotIndexPrefix+"b1").Return(store[kvBotIndexPrefix+"b1"], nil).Maybe()
@@ -90,6 +92,7 @@ func TestBuildBotInventory(t *testing.T) {
 		HomeTeamID: "t1", HomeTeamName: "Ops", HomeChannelID: "c1", HomeChannelName: "Alerts",
 		Purpose: "=posts alerts", PrivilegeLevel: privilegePost, DataIngestion: "webhooks", HostingEnv: "mattermost-prod",
 		RequesterID: "u_req", RequesterUsername: "req", OwnerID: "u_req", OwnerUsername: "req",
+		HasToken: true, HasIncomingWebhook: true, WebhookOwner: "@alpha-renamed (bot owned by @req)",
 		RequestID: "r1", RequestedAt: 50, ApprovedAt: 100,
 		ApprovedByID: "admin1", ApprovedByUsername: "admin",
 		ComplianceAccepted: true, ComplianceAcceptedAt: 5, ComplianceTextSHA256: "abc123",
@@ -143,6 +146,7 @@ func TestBuildBotInventory_UnknownBotState(t *testing.T) {
 
 func TestBuildBotInventory_IndexUnreadable(t *testing.T) {
 	api := &plugintest.API{}
+	stubLogs(api)
 	p := newTestPlugin(api)
 	api.On("KVList", 0, botIndexPageSize).Return(nil, testAppErr("kv down"))
 
@@ -188,11 +192,15 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		require.Equal(t, "Ops", rows[1][col["home_team_name"]])
 		require.Equal(t, "u_req", rows[1][col["owner_id"]])
 		require.Equal(t, "req", rows[1][col["owner_username"]])
+		require.Equal(t, "true", rows[1][col["has_token"]])
+		require.Equal(t, "true", rows[1][col["has_incoming_webhook"]])
+		require.Equal(t, "'@alpha-renamed (bot owned by @req)", rows[1][col["webhook_owner"]], "@ cells are formula-neutralised")
 		require.Equal(t, "1970-01-01T00:00:00Z", rows[1][col["approved_at_utc"]])
 		require.Equal(t, "true", rows[1][col["compliance_accepted"]])
 		require.Equal(t, "deactivated", rows[2][col["bot_status"]])
 		require.Equal(t, "u_other", rows[2][col["owner_id"]])
 		require.Equal(t, "other", rows[2][col["owner_username"]])
+		require.Equal(t, "", rows[2][col["webhook_owner"]])
 		require.Equal(t, "", rows[2][col["compliance_accepted_at_utc"]])
 		require.Equal(t, "true", rows[3][col["rh_managed"]])
 		require.Equal(t, "u_owner", rows[3][col["owner_id"]])
@@ -212,6 +220,9 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		require.Contains(t, s, "statement sha256 abc123")
 		require.Contains(t, s, "(not recorded) Tj", "b2 has no compliance record")
 		require.Contains(t, s, "(u_owner) Tj", "b3's owner is listed by ID when the user is gone")
+		require.Contains(t, s, "bot access token, incoming webhook")
+		// PDF content streams escape parentheses as \( \).
+		require.Contains(t, s, `@alpha-renamed \(bot owned by @req\)`)
 	})
 	t.Run("pdf with nothing to list", func(t *testing.T) {
 		export, err := p.buildAuditExport(auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "lab"})

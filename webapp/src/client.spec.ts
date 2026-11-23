@@ -8,6 +8,7 @@ import {
     fetchSidebarCategories,
     submitAdminRequest,
     submitBotRequest,
+    submitBotTransferRequest,
     submitChannelRequest,
     submitIncomingWebhookRequest,
     submitOutgoingWebhookRequest,
@@ -15,6 +16,7 @@ import {
     submitTeamCreationRequest,
     submitTeamGuestRequest,
     submitTeamMemberRequest,
+    submitWebhookTransferRequest,
 } from './client';
 import type {ChannelRequestPayload} from './client';
 
@@ -129,6 +131,8 @@ test.describe('fetchPrefixes', () => {
     ['submitBotRequest', () => submitBotRequest({username: 'helper-bot', display_name: 'Helper', purpose: 'CI', integration_endpoint: 'https://ci.example/hooks/mm', hosting_env: 'ci_cd', home_team_id: 'team1', home_channel_id: 'chan1'}), 'submit_bot_request'],
     ['submitIncomingWebhookRequest', () => submitIncomingWebhookRequest({channel_id: 'chan1', display_name: 'Alerts'}), 'submit_incoming_webhook_request'],
     ['submitOutgoingWebhookRequest', () => submitOutgoingWebhookRequest({channel_id: 'chan1', display_name: 'Relay', callback_url: 'https://example.com/hook'}), 'submit_outgoing_webhook_request'],
+    ['submitBotTransferRequest', () => submitBotTransferRequest({bot_user_id: 'b1', action: 'transfer', new_owner_user_id: 'u2'}), 'submit_bot_transfer_request'],
+    ['submitWebhookTransferRequest', () => submitWebhookTransferRequest({hook_id: 'h1', action: 'reassign', new_owner_user_id: 'u2'}), 'submit_webhook_transfer_request'],
 ] as const).forEach(([name, submit, path]) => {
     test.describe(name, () => {
         test('posts JSON with the CSRF token', async () => {
@@ -213,10 +217,13 @@ test.describe('fetchEnabledRequestTypes', () => {
         teamGuest: false,
         bot: true,
         webhook: true,
+        bugReport: true,
+        botTransfer: true,
+        webhookTransfer: true,
     };
 
     test('maps the config fields', async () => {
-        mockFetch(200, {channel: true, channel_admin: false, team: true, team_admin: false, team_member: true, team_guest: true, bot: false, webhook: true});
+        mockFetch(200, {channel: true, channel_admin: false, team: true, team_admin: false, team_member: true, team_guest: true, bot: false, webhook: true, bug_report: true, bot_transfer: true, webhook_transfer: false});
         expect(await fetchEnabledRequestTypes()).toEqual({
             channel: true,
             channelAdmin: false,
@@ -226,6 +233,9 @@ test.describe('fetchEnabledRequestTypes', () => {
             teamGuest: true,
             bot: false,
             webhook: true,
+            bugReport: true,
+            botTransfer: true,
+            webhookTransfer: false,
         });
         expect(calls[0].url).toBe(`/plugins/${manifest.id}/api/v1/config`);
         expect(calls[0].init?.method).toBe('GET');

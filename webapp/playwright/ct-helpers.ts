@@ -18,6 +18,9 @@ export const ALL_ON = {
     team_guest: true,
     bot: true,
     webhook: true,
+    bug_report: true,
+    bot_transfer: true,
+    webhook_transfer: true,
 };
 
 // routeConfig answers /config with ALL_ON plus any overrides, and starts

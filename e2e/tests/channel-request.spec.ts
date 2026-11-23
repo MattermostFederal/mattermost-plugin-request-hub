@@ -16,7 +16,7 @@ import {
     type ChannelRequestBody,
 } from '../helpers/channel';
 import {expect, test} from '../helpers/fixtures';
-import {ADMIN, PLUGIN_ID, SLASH_COMMAND, cardRequestId, uid, type RequestHub, type TestUser} from '../helpers/requesthub';
+import {ADMIN, HUB_BOT, PLUGIN_ID, SLASH_COMMAND, cardRequestId, uid, type RequestHub, type TestUser} from '../helpers/requesthub';
 import {login, openChannel} from '../helpers/ui';
 
 test('plugin is running', async ({hub}) => {
@@ -347,8 +347,8 @@ test.describe('approval', () => {
         expect(await pendingIds(hub, 'channel', requester.id)).toEqual([requestId]);
 
         const dm = await hub.findDM(requester.username, displayName);
-        expect(dm.message).toBe('Your channel request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers.');
-        expect(cardActions(dm)).toEqual([]);
+        expect(dm.message).toBe('Your channel request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers. Use Withdraw if you no longer need this request.');
+        expect(cardActions(dm)).toEqual(['withdraw']);
 
         expect(await click(hub, ADMIN, card, 'approve')).toEqual({reply: ''});
 
@@ -664,4 +664,60 @@ test('channel header menu "Request a Channel" opens the modal and submits', asyn
     const card = await hub.findCard(displayName);
     const record = (await hub.kv<StoredChannelRequest>(`request_${cardRequestId(card)}`))!;
     expect(record).toMatchObject({requester_id: requester.id, name: `team-${displayName.toLowerCase().replace(/ /g, '-')}`, purpose: 'From the modal', channel_type: 'P'});
+});
+
+test.describe('plugin bot and channel defaults per prefix', () => {
+    test('the plugin bot joins every channel created from a request', async ({hub}) => {
+        const requester = await hub.createUser();
+        const {card, record} = await pendingRequest(hub, requester);
+        expect(await click(hub, ADMIN, card, 'approve')).toEqual({reply: ''});
+
+        const admin = await hub.client(ADMIN);
+        const channel = await admin.getChannelByName(hub.teamId, record.name);
+        const bot = await admin.getUserByUsername(HUB_BOT);
+        expect(await admin.getChannelMember(channel.id, bot.id)).toMatchObject({user_id: bot.id});
+    });
+
+    test('a prefix forces visibility, fills the purpose, sets the header and adds default members', async ({hub}) => {
+        const requester = await hub.createUser();
+        const onTeam = await hub.createUser();
+        const offTeam = await hub.createUser({inTeam: false});
+        const defaults = {
+            'proj-': {channel_type: 'P', purpose: 'Project work', header: 'Runbook: see the wiki', members: [onTeam.username, offTeam.username]},
+        };
+        await hub.withPluginConfig({channelprefixdefaults: JSON.stringify(defaults)}, async () => {
+            const listed = await hub.pluginFetch<Array<{prefix: string; channel_type?: string; default_purpose?: string}>>(requester.username, '/api/v1/prefixes');
+            expect(listed.find((p) => p.prefix === 'proj-')).toMatchObject({channel_type: 'P', default_purpose: 'Project work'});
+            expect(await hub.slash(requester.username, 'prefixes')).toContain('(always private)');
+
+            // Asked for a public channel with no purpose.
+            const {card, record} = await pendingRequest(hub, requester, {prefix: 'proj-', channel_type: 'O'});
+            expect(record.channel_type).toBe('P');
+            expect(record.purpose).toBe('Project work');
+            expect(cardField(card, 'Visibility')).toBe('Private');
+            const text = (card.props.attachments as Array<{text: string}>)[0].text;
+            expect(text).toContain(`**Prefix defaults:** Approve also sets the channel header and adds @${onTeam.username}, @${offTeam.username} if they're on the team.`);
+
+            expect(await click(hub, ADMIN, card, 'approve')).toEqual({reply: ''});
+
+            const admin = await hub.client(ADMIN);
+            const channel = await admin.getChannelByName(hub.teamId, record.name);
+            expect(channel).toMatchObject({type: 'P', purpose: 'Project work', header: 'Runbook: see the wiki'});
+            expect((await admin.getChannelMember(channel.id, onTeam.id)).scheme_admin).toBe(false);
+            await expect(admin.getChannelMember(channel.id, offTeam.id)).rejects.toMatchObject({status_code: 404});
+
+            const welcome = await postsMentioning(hub, channel.id, 'Welcome');
+            expect(welcome.map((p) => p.message)).toEqual([
+                `Welcome — this channel was requested by @${requester.username} and approved by @${ADMIN}. Adjust the header + purpose to fit.\nAdded: @${onTeam.username}\nDefault members not added: @${offTeam.username} (not on this team)`,
+            ]);
+        });
+    });
+
+    test('a purpose the requester gives wins over the default', async ({hub}) => {
+        const requester = await hub.createUser();
+        await hub.withPluginConfig({channelprefixdefaults: JSON.stringify({'proj-': {purpose: 'Project work'}})}, async () => {
+            const {record} = await pendingRequest(hub, requester, {prefix: 'proj-', purpose: 'Mine', channel_type: 'O'});
+            expect(record).toMatchObject({purpose: 'Mine', channel_type: 'O'});
+        });
+    });
 });

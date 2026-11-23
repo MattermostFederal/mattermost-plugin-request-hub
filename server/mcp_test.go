@@ -127,6 +127,7 @@ func stubActivation(t *testing.T, api *plugintest.API, p *Plugin, config *config
 	api.On("EnsureBotUser", mock.Anything).Return("bot-id", nil)
 	api.On("GetBundlePath").Return("", testAppErr("no bundle")).Maybe()
 	api.On("RegisterCommand", mock.Anything).Return(commandErr)
+	api.On("KVList", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVGet", mock.Anything).Return(nil, nil).Maybe()
 	api.On("KVSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	api.On("GetTeams").Return([]*model.Team{}, nil).Maybe()

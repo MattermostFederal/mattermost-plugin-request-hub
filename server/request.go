@@ -99,6 +99,10 @@ type channelRequest struct {
 	// match exists for a user, a custom category with this name is created.
 	CategoryName string `json:"category_name,omitempty"`
 
+	// defaultsSkipped lists default members of the channel's prefix who
+	// couldn't be added at approval, for the welcome message. Not stored.
+	defaultsSkipped []skippedDefaultMember
+
 	// Ticket messaging fields — set after the approval post and DM are created.
 	// Used by the MessageHasBeenPosted hook to route thread replies in both directions.
 	ApprovalPostID    string `json:"approval_post_id,omitempty"`
@@ -492,6 +496,9 @@ func (p *Plugin) submitRequest(in requestInput) (submitted string, submitErr err
 		CategoryName:   strings.TrimSpace(in.CategoryName),
 		CreatedAt:      model.GetMillis(),
 	}
+	// The prefix's defaults may force the visibility or fill a blank
+	// purpose; apply them now so the approval card shows the real channel.
+	config.applyPrefixDefaultsAtSubmit(req)
 
 	entry := newPendingEntry(req)
 	sa.built(req, requester)
@@ -554,6 +561,7 @@ func (p *Plugin) sendTicketCreatedDM(req *channelRequest, requester *model.User)
 		req.RequesterID,
 		p.approvalAttachment(req, requester),
 		ticketSubmittedIntro("channel request"),
+		req.ID,
 	)
 }
 
@@ -576,6 +584,9 @@ func (p *Plugin) postWelcomeMessage(channel *model.Channel, req *channelRequest,
 	if admins := p.mentionList(req.AdminMemberIDs); admins != "" {
 		body += "\nChannel admins: " + admins
 	}
+	if skipped := skippedDefaultMembersLine(req.defaultsSkipped); skipped != "" {
+		body += "\n" + skipped
+	}
 
 	if _, appErr := p.API.CreatePost(&model.Post{
 		UserId:    p.botUserID,
@@ -592,6 +603,8 @@ type auditOutcome int
 const (
 	auditApproved     auditOutcome = iota // green ✅
 	auditDenied                           // red ❌
+	auditWithdrawn                        // gray: requester cancelled before final decision
+	auditAcknowledged                     // green: SysAdmin ack of a bug/feedback report
 	auditExpired                          // gray: closed unreviewed after the expiry period
 	auditSubmitted                        // amber: a new request
 	auditStepApproved                     // green: one step of two approved
@@ -642,6 +655,10 @@ func auditCardStyle(kind auditOutcome) (color, title string) {
 		return colorApproved, "✅ Approved"
 	case auditDenied:
 		return colorDenied, "❌ Denied"
+	case auditWithdrawn:
+		return colorWithdrawn, "↩️ Withdrawn"
+	case auditAcknowledged:
+		return colorApproved, "✅ Acknowledged"
 	case auditExpired:
 		return colorExpired, "⌛ Expired"
 	case auditSubmitted:
@@ -693,16 +710,28 @@ func (p *Plugin) postPermalink(postID string) string {
 // created channel. Add-and-promote failures on individual users are logged but don't fail
 // the overall operation — a partially-populated channel is better than nothing.
 func (p *Plugin) createChannelForRequest(req *channelRequest) (*model.Channel, error) {
+	// The prefix's defaults, read now: the setting may have changed since
+	// the request was made.
+	defaults, _ := p.getConfiguration().defaultsForChannelName(req.Name)
 	channel, appErr := p.API.CreateChannel(&model.Channel{
 		TeamId:      req.TeamID,
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
 		Type:        model.ChannelType(req.ChannelType),
 		Purpose:     req.Purpose,
+		Header:      defaults.Header,
 		CreatorId:   req.RequesterID,
 	})
 	if appErr != nil {
 		return nil, errors.Wrap(appErr, "failed to create channel")
+	}
+
+	// The plugin bot joins every channel it creates, so it can post the
+	// welcome message and later notices as a member. Best-effort: a channel
+	// without the bot still beats a failed approval.
+	if err := p.joinBotToCreatedChannel(req.TeamID, channel.Id); err != nil {
+		p.API.LogWarn("failed to add the plugin bot to created channel",
+			"channel_id", channel.Id, "error", err.Error())
 	}
 
 	// Union of everyone who should be a member: requester + regular + admin sets.
@@ -716,6 +745,22 @@ func (p *Plugin) createChannelForRequest(req *channelRequest) (*model.Channel, e
 	for _, uid := range adminIDs {
 		if uid != "" {
 			adminSet[uid] = true
+		}
+	}
+
+	// The prefix's default members join as plain members, if they are
+	// active and on the team. They aren't nominees, so a default member
+	// who left the team never blocks the approval.
+	var defaultIDs []string
+	defaultIDs, req.defaultsSkipped = p.resolveDefaultMembers(defaults.Members, req.TeamID)
+	for _, skipped := range req.defaultsSkipped {
+		p.API.LogWarn("default member from the channel's prefix defaults was not added",
+			"channel_id", channel.Id, "username", skipped.Username, "reason", skipped.Reason)
+	}
+	for _, id := range defaultIDs {
+		// The requester is already listed as the requester.
+		if id != req.RequesterID && !slices.Contains(req.MemberIDs, id) {
+			req.MemberIDs = append(req.MemberIDs, id)
 		}
 	}
 
@@ -753,6 +798,21 @@ func (p *Plugin) createChannelForRequest(req *channelRequest) (*model.Channel, e
 	req.AdminMemberIDs = filterIDs(req.AdminMemberIDs, promotedOK)
 
 	return channel, nil
+}
+
+// joinBotToCreatedChannel puts the plugin bot on the channel's team and in
+// the channel.
+func (p *Plugin) joinBotToCreatedChannel(teamID, channelID string) error {
+	if p.botUserID == "" {
+		return errors.New("plugin bot is not set up")
+	}
+	if err := p.ensureTeamMember(teamID, p.botUserID); err != nil {
+		return errors.Wrap(err, "add bot to team")
+	}
+	if _, appErr := p.API.AddChannelMember(channelID, p.botUserID); appErr != nil {
+		return errors.Wrap(appErr, "add bot to channel")
+	}
+	return nil
 }
 
 // filterIDs returns the elements of ids present in keep, preserving order.
@@ -927,6 +987,11 @@ func (p *Plugin) approvalAttachment(req *channelRequest, requester *model.User) 
 	if len(req.AdminMemberIDs) > 0 {
 		details = append(details, fmt.Sprintf("**Channel Admins to add:** %s", p.mentionList(req.AdminMemberIDs)))
 	}
+	if d, ok := p.getConfiguration().defaultsForChannelName(req.Name); ok {
+		if summary := prefixDefaultsSummary(d); summary != "" {
+			details = append(details, "**Prefix defaults:** "+summary)
+		}
+	}
 
 	title := "Channel creation request"
 	if teamName != "" && teamName != "(unknown team)" {
@@ -1066,6 +1131,10 @@ func (p *Plugin) placeChannelInCategory(userID, teamID, channelID, categoryName 
 func (p *Plugin) mentionList(userIDs []string) string {
 	mentions := make([]string, 0, len(userIDs))
 	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
 		if user, appErr := p.API.GetUser(id); appErr == nil {
 			mentions = append(mentions, "@"+user.Username)
 		}

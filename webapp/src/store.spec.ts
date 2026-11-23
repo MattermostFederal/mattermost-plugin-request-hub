@@ -15,8 +15,10 @@ import reducer, {
     getCurrentTeamDisplayName,
     getCurrentTeamId,
     isBotRequestModalOpen,
+    isBotTransferModalOpen,
     isCurrentUserChannelAdmin,
     isCurrentUserTeamAdmin,
+    isWebhookTransferModalOpen,
     isHubModalOpen,
     isIncomingWebhookModalOpen,
     isOutgoingWebhookModalOpen,
@@ -28,6 +30,7 @@ import reducer, {
     openAdminRequestModal,
     openRequestModal,
     closeBotRequestModal,
+    closeBotTransferModal,
     closeHubModal,
     closeIncomingWebhookModal,
     closeOutgoingWebhookModal,
@@ -35,7 +38,9 @@ import reducer, {
     closeTeamCreationModal,
     closeTeamGuestRequestModal,
     closeTeamMemberRequestModal,
+    closeWebhookTransferModal,
     openBotRequestModal,
+    openBotTransferModal,
     openHubModal,
     openIncomingWebhookModal,
     openOutgoingWebhookModal,
@@ -43,6 +48,7 @@ import reducer, {
     openTeamCreationModal,
     openTeamGuestRequestModal,
     openTeamMemberRequestModal,
+    openWebhookTransferModal,
 } from './store';
 import type {GlobalState} from './store';
 
@@ -202,6 +208,8 @@ test.describe('request type modals', () => {
         ['incoming webhook', 'incomingWebhookModalOpen', openIncomingWebhookModal, closeIncomingWebhookModal, isIncomingWebhookModalOpen],
         ['outgoing webhook', 'outgoingWebhookModalOpen', openOutgoingWebhookModal, closeOutgoingWebhookModal, isOutgoingWebhookModalOpen],
         ['hub', 'hubModalOpen', openHubModal, closeHubModal, isHubModalOpen],
+        ['bot transfer', 'botTransferModalOpen', openBotTransferModal, closeBotTransferModal, isBotTransferModalOpen],
+        ['webhook transfer', 'webhookTransferModalOpen', openWebhookTransferModal, closeWebhookTransferModal, isWebhookTransferModalOpen],
     ] as const;
 
     for (const [name, key, open, close, isOpen] of modals) {

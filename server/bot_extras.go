@@ -148,6 +148,9 @@ func (p *Plugin) sendBotExtrasReply(req *botRequest, tokenValue string, tokenExp
 		}
 		lines = append(lines, fmt.Sprintf("📤 **Outgoing webhook** *%s* is now active.", name))
 	}
+	if incomingWebhookURL != "" || outgoingWebhookCreated {
+		lines = append(lines, fmt.Sprintf("Webhook owner: %s", p.botWebhookOwnerLabel(req)))
+	}
 	for _, e := range partialErrors {
 		lines = append(lines, fmt.Sprintf("⚠️ %s", e))
 	}

@@ -70,7 +70,7 @@ test.describe('submit', () => {
         expect(await pendingIds(hub, 'admin', requester.id)).toEqual([requestId]);
 
         const dm = await hub.findDM(requester.username, channel.name);
-        expect(dm.message).toBe('Your Channel Admin request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers.');
+        expect(dm.message).toBe('Your Channel Admin request has been submitted for approval. Reply to this thread to add context — your reply will be forwarded to the reviewers. Use Withdraw if you no longer need this request.');
 
         expect(await click(hub, ADMIN, card, 'approve')).toEqual({reply: ''});
         expect(await isChannelAdmin(hub, channel.id, requester.id)).toBe(true);

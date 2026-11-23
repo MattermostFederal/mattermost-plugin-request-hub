@@ -167,6 +167,7 @@ func (p *Plugin) sendTeamCreationTicketCreatedDM(req *teamCreationRequest, reque
 		req.RequesterID,
 		p.teamCreationApprovalAttachment(req, requester),
 		ticketSubmittedIntro("team creation request"),
+		req.ID,
 	)
 }
 

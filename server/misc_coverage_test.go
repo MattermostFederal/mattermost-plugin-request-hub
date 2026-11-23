@@ -543,10 +543,10 @@ func TestPostTicketCreatedDM_FailuresReturnNoIDs(t *testing.T) {
 	t.Run("missing requester or card", func(t *testing.T) {
 		api := &plugintest.API{}
 		p := newTestPlugin(api)
-		root, ch := p.postTicketCreatedDM("", card, "")
+		root, ch := p.postTicketCreatedDM("", card, "", "")
 		require.Empty(t, root)
 		require.Empty(t, ch)
-		root, ch = p.postTicketCreatedDM("u1", nil, "")
+		root, ch = p.postTicketCreatedDM("u1", nil, "", "")
 		require.Empty(t, root)
 		require.Empty(t, ch)
 		api.AssertNotCalled(t, "GetDirectChannel", mock.Anything, mock.Anything)
@@ -557,7 +557,7 @@ func TestPostTicketCreatedDM_FailuresReturnNoIDs(t *testing.T) {
 		stubLogLevels(api)
 		p := newTestPlugin(api)
 		api.On("GetDirectChannel", "u1", "bot-user-id").Return(nil, testAppErr("down"))
-		root, ch := p.postTicketCreatedDM("u1", card, "")
+		root, ch := p.postTicketCreatedDM("u1", card, "", "")
 		require.Empty(t, root)
 		require.Empty(t, ch)
 		api.AssertNotCalled(t, "CreatePost", mock.Anything)
@@ -574,7 +574,7 @@ func TestPostTicketCreatedDM_FailuresReturnNoIDs(t *testing.T) {
 			return strings.HasPrefix(post.Message, "Your request has been submitted for approval.") &&
 				len(att) == 1 && att[0].Color == colorPending
 		})).Return(nil, testAppErr("down"))
-		root, ch := p.postTicketCreatedDM("u1", card, "")
+		root, ch := p.postTicketCreatedDM("u1", card, "", "")
 		require.Empty(t, root)
 		require.Empty(t, ch)
 	})

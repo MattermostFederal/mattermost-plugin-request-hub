@@ -416,4 +416,34 @@ test.describe('MemberPicker', () => {
             expect(changes).toEqual([]);
         });
     });
+
+    test.describe('single mode', () => {
+        test('rejects comma-separated Enter input', async ({mount, page}) => {
+            await routeUsers(page, []);
+            const changes: string[] = [];
+            await mount(<MemberPicker
+                teamId='team1'
+                single={true}
+                value=''
+                onChange={(v) => changes.push(v)}
+                        />);
+            await input(page).fill('alice, bob');
+            await input(page).press('Enter');
+            await expect(pill(page, 'alice')).toBeHidden();
+            await expect(pill(page, 'bob')).toBeHidden();
+            expect(changes).toEqual([]);
+        });
+
+        test('keeps only the first username from a multi controlled value', async ({mount, page}) => {
+            await routeUsers(page, []);
+            await mount(<MemberPicker
+                teamId='team1'
+                single={true}
+                value='alice, bob'
+                onChange={() => undefined}
+                        />);
+            await expect(pill(page, 'alice')).toBeVisible();
+            await expect(pill(page, 'bob')).toBeHidden();
+        });
+    });
 });

@@ -147,6 +147,7 @@ func (p *Plugin) sendTeamAdminTicketCreatedDM(req *teamAdminRequest, requester *
 		req.RequesterID,
 		p.teamAdminApprovalAttachment(req, requester, team),
 		ticketSubmittedIntro("Team Admin request"),
+		req.ID,
 	)
 }
 

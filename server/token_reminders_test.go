@@ -18,7 +18,8 @@ import (
 // to do.
 func stubTokenReminderJob(api *plugintest.API) {
 	isJobKey := mock.MatchedBy(func(key string) bool {
-		return strings.HasSuffix(key, tokenReminderJobKey) || strings.HasSuffix(key, twoStepChannelReconcileJobKey)
+		return strings.HasSuffix(key, tokenReminderJobKey) ||
+			strings.HasSuffix(key, twoStepChannelReconcileJobKey)
 	})
 	api.On("KVSetWithOptions", isJobKey, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	api.On("KVSet", isJobKey, mock.Anything).Return(nil).Maybe()
