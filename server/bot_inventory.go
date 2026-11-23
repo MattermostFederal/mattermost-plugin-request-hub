@@ -55,30 +55,17 @@ var (
 		"Approver ID(s)",
 		"T&Cs acceptance",
 	}
-	// securityFieldNotes is the left-hand explanation for each Security row
-	// (what that row means). Empty when the field name is enough.
-	securityFieldNotes = map[string]string{
-		"Request ID":                    "Request Hub request ID for this bot",
-		"Bot name":                      "Mattermost bot username",
-		"Bot ID":                        "Mattermost bot user ID",
-		"Mattermost team":               "Home team display name",
-		"Channel":                       "Home channel (handle), marked (home)",
-		"Purpose":                       "What the requester declared the bot is for",
-		"Authentication method":         "How the bot authenticates (token and/or webhooks)",
-		"Privilege level":               "Declared Mattermost privilege for the bot",
-		"Data ingestion / capabilities": "What data the bot posts or reads",
-		"Integration endpoint":          "Declared HTTPS integration URL",
-		"Hosting env":                   "Where the integration that drives this bot runs",
-		"Data transit security":         "Whether the declared endpoint is HTTPS",
-		"Activity logs":                 "Fleet flag (true/false); use a forensic export for one bot's posts",
-		"Requester name":                "Username of who requested the bot",
-		"Requester ID":                  "User ID of who requested the bot",
-		"Owner name":                    "Current owner username (defaults to requester; may differ after transfer)",
-		"Owner ID":                      "Current owner user ID",
-		"Approver name(s)":              "Username(s) of who approved the bot",
-		"Approver ID(s)":                "User ID(s) of who approved the bot",
-		"T&Cs acceptance":               "Compliance statement hash and acceptance time",
-	}
+
+	// Inventory CSV/JSON/PDF layout: column = Security sheet (one bot per
+	// column); row = one bot per row (fields across).
+	inventoryLayoutColumn = "column"
+	inventoryLayoutRow    = "row"
+
+	// Soft-wrap long cells in column-layout CSV so a long purpose doesn't
+	// stretch one bot column across the sheet when opened in Excel.
+	inventoryCSVWrapWidth = 36
+	// Cap bot columns per PDF table page so wrapped cells stay readable.
+	inventoryPDFBotsPerPage = 4
 )
 
 // inventoryRow is one bot in the inventory.
@@ -253,16 +240,17 @@ func (p *Plugin) buildInventoryExport(f auditExportFilter, filename string) (*au
 	if err != nil {
 		return nil, err
 	}
-	out := &auditExport{count: len(rows), detail: map[string]any{"verbose": f.Verbose}}
+	layout := inventoryLayout(f)
+	out := &auditExport{count: len(rows), detail: map[string]any{"verbose": f.Verbose, "layout": layout}}
 	switch f.Format {
 	case "json":
-		data, err := inventoryJSON(rows, f.Verbose)
+		data, err := inventoryJSON(rows, f.Verbose, layout)
 		if err != nil {
 			return nil, err
 		}
 		out.data, out.filename, out.contentType = data, filename+".json", "application/json"
 	case "csv":
-		data, err := inventoryCSV(rows, f.Verbose)
+		data, err := inventoryCSV(rows, f.Verbose, layout)
 		if err != nil {
 			return nil, err
 		}
@@ -282,30 +270,87 @@ func securityColumns(verbose bool) []string {
 	return append(out, securityVerboseColumns...)
 }
 
-// inventoryCSV writes the Security spreadsheet layout:
-//
-//	row 0:   Field | What this row is | <bot username> | <bot username> | ...
-//	row 1+:  field name | explanation   | value          | value          | ...
-//
-// One bot per column (oldest first). Field names and explanations stay in
-// the first two columns; adding a bot adds a column, never a row of bots.
-func inventoryCSV(rows []inventoryRow, verbose bool) ([]byte, error) {
+// inventoryLayout is f's layout, defaulting to column (Security sheet).
+func inventoryLayout(f auditExportFilter) string {
+	switch strings.ToLower(strings.TrimSpace(f.Layout)) {
+	case inventoryLayoutRow:
+		return inventoryLayoutRow
+	default:
+		return inventoryLayoutColumn
+	}
+}
+
+func inventoryBotLabel(r inventoryRow) string {
+	if r.BotUsername != "" {
+		return r.BotUsername
+	}
+	return r.BotID
+}
+
+// inventoryCSV writes the Security fields in f's layout:
+//   - column (default): Field | bot | bot | …  (one bot per column)
+//   - row: header = field names; one bot per data row
+func inventoryCSV(rows []inventoryRow, verbose bool, layout string) ([]byte, error) {
+	if layout == inventoryLayoutRow {
+		return inventoryCSVByRow(rows, verbose)
+	}
+	return inventoryCSVByColumn(rows, verbose)
+}
+
+func inventoryCSVByColumn(rows []inventoryRow, verbose bool) ([]byte, error) {
 	var buf bytes.Buffer
 	cw := csv.NewWriter(&buf)
-	header := make([]string, 0, 2+len(rows))
-	header = append(header, "Field", "What this row is")
+	header := make([]string, 0, 1+len(rows))
+	header = append(header, "Field")
 	for _, r := range rows {
-		name := r.BotUsername
-		if name == "" {
-			name = r.BotID
-		}
-		header = append(header, name)
+		header = append(header, wrapInventoryCSVCell(inventoryBotLabel(r), inventoryCSVWrapWidth))
 	}
 	_ = cw.Write(csvRecord(header...))
 	for _, col := range securityColumns(verbose) {
-		record := make([]string, 0, 2+len(rows))
-		record = append(record, col, securityFieldNotes[col])
+		record := make([]string, 0, 1+len(rows))
+		record = append(record, wrapInventoryCSVCell(col, inventoryCSVWrapWidth))
 		for _, r := range rows {
+			record = append(record, wrapInventoryCSVCell(securityCell(r, col), inventoryCSVWrapWidth))
+		}
+		_ = cw.Write(csvRecord(record...))
+	}
+	cw.Flush()
+	return buf.Bytes(), cw.Error()
+}
+
+// wrapInventoryCSVCell inserts newlines so spreadsheet apps wrap long
+// values instead of widening a single bot column.
+func wrapInventoryCSVCell(s string, width int) string {
+	s = strings.TrimSpace(s)
+	if width <= 0 || len(s) <= width {
+		return s
+	}
+	var b strings.Builder
+	for len(s) > 0 {
+		if len(s) <= width {
+			b.WriteString(s)
+			break
+		}
+		chunk := s[:width]
+		cut := strings.LastIndexAny(chunk, " \t-/_,;")
+		if cut < width/3 {
+			cut = width
+		}
+		b.WriteString(strings.TrimRight(s[:cut], " \t"))
+		b.WriteByte('\n')
+		s = strings.TrimLeft(s[cut:], " \t")
+	}
+	return b.String()
+}
+
+func inventoryCSVByRow(rows []inventoryRow, verbose bool) ([]byte, error) {
+	cols := securityColumns(verbose)
+	var buf bytes.Buffer
+	cw := csv.NewWriter(&buf)
+	_ = cw.Write(csvRecord(cols...))
+	for _, r := range rows {
+		record := make([]string, 0, len(cols))
+		for _, col := range cols {
 			record = append(record, securityCell(r, col))
 		}
 		_ = cw.Write(csvRecord(record...))
@@ -314,19 +359,34 @@ func inventoryCSV(rows []inventoryRow, verbose bool) ([]byte, error) {
 	return buf.Bytes(), cw.Error()
 }
 
-// inventoryJSON encodes one object per bot with Security column keys.
-func inventoryJSON(rows []inventoryRow, verbose bool) ([]byte, error) {
+// inventoryJSON encodes the Security fields in f's layout (same shape as CSV).
+func inventoryJSON(rows []inventoryRow, verbose bool, layout string) ([]byte, error) {
 	cols := securityColumns(verbose)
-	out := make([]map[string]string, 0, len(rows))
-	for _, r := range rows {
-		obj := make(map[string]string, len(cols))
-		for _, col := range cols {
-			obj[col] = securityCell(r, col)
+	var payload any
+	if layout == inventoryLayoutRow {
+		out := make([]map[string]string, 0, len(rows))
+		for _, r := range rows {
+			obj := make(map[string]string, len(cols))
+			for _, col := range cols {
+				obj[col] = securityCell(r, col)
+			}
+			out = append(out, obj)
 		}
-		out = append(out, obj)
+		payload = out
+	} else {
+		out := make([]map[string]string, 0, len(cols))
+		for _, col := range cols {
+			obj := make(map[string]string, 1+len(rows))
+			obj["Field"] = col
+			for _, r := range rows {
+				obj[inventoryBotLabel(r)] = securityCell(r, col)
+			}
+			out = append(out, obj)
+		}
+		payload = out
 	}
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(out); err != nil {
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -438,21 +498,31 @@ func inventoryTCsAcceptance(r inventoryRow) string {
 	return "sha256:" + r.ComplianceTextSHA256 + " @ " + at
 }
 
-// inventoryPDF lays the inventory out for reading: a title, what it
-// covers, and one block per bot using the Security field names.
+// inventoryPDF lays the inventory out for reading in f's layout.
 func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time.Time) []byte {
+	layout := inventoryLayout(f)
 	doc := newPDF("Request Hub bot inventory", now)
 	doc.text("Request Hub bot inventory", 18, true)
 	doc.space(4)
 	doc.text(fmt.Sprintf("Generated %s. %s. %d %s.", formatAuditTime(now.UnixMilli()), strings.TrimSuffix(p.describeExportFilter(f), "."),
 		len(rows), plural(len(rows), "bot", "bots")), 10, false)
 	doc.space(4)
-	doc.text("Fields follow the Security spreadsheet. CSV puts one bot per column; this PDF lists one bot per block. "+
-		"Purpose, hosting and the integration endpoint are what the requester declared. Privilege and data ingestion are the plugin's fixed policy for newer bots, and what the requester declared for older ones. None of them limit what the bot's token can do. "+
-		"Bot status and home names are as of this export. Bots made outside Request Hub, and bots it created before it kept a bot index, are not listed.", 9, false)
+	if layout == inventoryLayoutColumn {
+		doc.text("Column layout: field names down the left, one bot per column. Long values wrap inside each cell so a long purpose does not widen a column. "+
+			"Purpose, hosting and the integration endpoint are what the requester declared. Privilege and data ingestion are the plugin's fixed policy for newer bots, and what the requester declared for older ones.", 9, false)
+	} else {
+		doc.text("Row layout: one bot per block with Security field names. "+
+			"Purpose, hosting and the integration endpoint are what the requester declared. Privilege and data ingestion are the plugin's fixed policy for newer bots, and what the requester declared for older ones.", 9, false)
+	}
+	doc.text("Bot status and home names are as of this export. Bots made outside Request Hub, and bots it created before it kept a bot index, are not listed.", 9, false)
 	if len(rows) == 0 {
 		doc.space(12)
 		doc.text("No bots match.", 11, false)
+		return doc.bytes()
+	}
+	if layout == inventoryLayoutColumn {
+		inventoryPDFByColumn(doc, rows, f.Verbose)
+		return doc.bytes()
 	}
 	for _, r := range rows {
 		doc.space(10)
@@ -470,6 +540,42 @@ func (p *Plugin) inventoryPDF(f auditExportFilter, rows []inventoryRow, now time
 		doc.field("Status", r.BotStatus, 9)
 	}
 	return doc.bytes()
+}
+
+// inventoryPDFByColumn draws a wrapped table: Field | bot | bot | …
+// Bots are chunked across pages so each cell keeps a readable width.
+func inventoryPDFByColumn(doc *pdfDoc, rows []inventoryRow, verbose bool) {
+	const size = 8.0
+	fields := securityColumns(verbose)
+	for start := 0; start < len(rows); start += inventoryPDFBotsPerPage {
+		end := start + inventoryPDFBotsPerPage
+		if end > len(rows) {
+			end = len(rows)
+		}
+		chunk := rows[start:end]
+		cols := 1 + len(chunk)
+		colW := pdfTextWidth / float64(cols)
+		if start > 0 || len(rows) > inventoryPDFBotsPerPage {
+			doc.space(10)
+			doc.text(fmt.Sprintf("Bots %d–%d of %d", start+1, end, len(rows)), 10, true)
+		}
+		headers := make([]string, 0, cols)
+		headers = append(headers, "Field")
+		for _, r := range chunk {
+			headers = append(headers, inventoryBotLabel(r))
+		}
+		doc.space(6)
+		doc.tableRow(headers, colW, size, true)
+		doc.rule()
+		for _, field := range fields {
+			cells := make([]string, 0, cols)
+			cells = append(cells, field)
+			for _, r := range chunk {
+				cells = append(cells, orBlank(securityCell(r, field), "—"))
+			}
+			doc.tableRow(cells, colW, size, false)
+		}
+	}
 }
 
 func orBlank(s, fallback string) string {

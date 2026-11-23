@@ -76,8 +76,10 @@ test.describe('RequestAuditExportModal', () => {
 
         await page.getByLabel('Request type (optional)').selectOption('bot');
         await page.getByLabel('Bot inventory').check();
-        await expect(page.getByLabel('CSV (one bot per column)')).toBeChecked();
+        await expect(page.getByLabel('CSV', {exact: true})).toBeChecked();
+        await expect(page.getByLabel(/Columns — one bot per column/)).toBeChecked();
         await page.getByLabel('PDF (for reading)').check();
+        await page.getByLabel(/Rows — one bot per row/).check();
         await expect(page.getByLabel('Request type (optional)')).toHaveCount(0);
         await expect(page.getByLabel('Approved from (optional)')).toBeVisible();
         await page.getByLabel('Hosting environment (optional)').selectOption('cloud_or_k8s');
@@ -85,7 +87,7 @@ test.describe('RequestAuditExportModal', () => {
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('ok', {exact: true})).toBeVisible();
-        expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'cloud_or_k8s', reason: 'fleet review'});
+        expect(body).toEqual({type: 'bot_inventory', format: 'pdf', env: 'cloud_or_k8s', layout: 'row', reason: 'fleet review'});
     });
 
     test('asks for one bot\'s forensics, which needs the bot and both dates', async ({mount, page}) => {
@@ -134,13 +136,13 @@ test.describe('RequestAuditExportModal', () => {
         await mount(<StoreHarness pluginState={open}><RequestAuditExportModal/></StoreHarness>);
 
         await page.getByLabel('Bot inventory').check();
-        await page.getByLabel('JSON (one object per bot)').check();
+        await page.getByLabel('JSON', {exact: true}).check();
         await page.getByLabel('Hosting environment (optional)').fill(' lab ');
         await page.getByLabel('Reason').fill('why');
         await page.getByRole('button', {name: 'Submit request'}).click();
 
         await expect(page.getByText('ok', {exact: true})).toBeVisible();
-        expect(body).toEqual({type: 'bot_inventory', format: 'json', env: 'lab', reason: 'why'});
+        expect(body).toEqual({type: 'bot_inventory', format: 'json', env: 'lab', layout: 'column', reason: 'why'});
     });
 
     test('refuses dates out of order before sending', async ({mount, page}) => {

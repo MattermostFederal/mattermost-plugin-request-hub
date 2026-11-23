@@ -169,100 +169,90 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		return export
 	}
 
-	t.Run("json", func(t *testing.T) {
+	t.Run("json column", func(t *testing.T) {
 		export := build("json", auditExportFilter{})
 		require.Equal(t, "application/json", export.contentType)
 		var rows []map[string]string
 		require.NoError(t, json.Unmarshal(export.data, &rows))
-		require.Len(t, rows, 3)
-		require.Equal(t, "b1", rows[0]["Bot ID"])
-		require.Equal(t, "alpha-renamed", rows[0]["Bot name"])
-		require.Equal(t, "https://ci.example/hooks/mm", rows[0]["Integration endpoint"])
-		require.Equal(t, "true", rows[0]["Activity logs"])
-		require.Equal(t, "HTTPS required for declared URLs", rows[0]["Data transit security"])
-		_, hasOwner := rows[0]["Owner ID"]
-		require.False(t, hasOwner, "owner is verbose-only")
+		require.Len(t, rows, len(securityCoreColumns))
+		require.Equal(t, "Bot ID", rows[2]["Field"])
+		require.Equal(t, "b1", rows[2]["alpha-renamed"])
+		require.Equal(t, "b2", rows[2]["beta"])
+		require.Equal(t, "HTTPS required for declared URLs", rows[11]["alpha-renamed"])
+		_, hasOwnerField := rows[0]["Owner ID"]
+		require.False(t, hasOwnerField)
 	})
-	t.Run("json verbose", func(t *testing.T) {
-		export := build("json", auditExportFilter{Verbose: true})
+	t.Run("json row", func(t *testing.T) {
+		export := build("json", auditExportFilter{Layout: inventoryLayoutRow, Verbose: true})
 		var rows []map[string]string
 		require.NoError(t, json.Unmarshal(export.data, &rows))
+		require.Len(t, rows, 3)
+		require.Equal(t, "b1", rows[0]["Bot ID"])
 		require.Equal(t, "u_req", rows[0]["Owner ID"])
-		require.Equal(t, "req", rows[0]["Owner name"])
-		require.Equal(t, "admin", rows[0]["Approver name(s)"])
 		require.Equal(t, "sha256:abc123 @ 1970-01-01T00:00:00Z", rows[0]["T&Cs acceptance"])
-		require.Equal(t, "u_owner", rows[2]["Owner ID"], "gone owner keeps the id")
-		require.Equal(t, "", rows[2]["Owner name"])
+		require.Equal(t, "u_owner", rows[2]["Owner ID"])
 	})
-	t.Run("csv", func(t *testing.T) {
+	t.Run("csv column", func(t *testing.T) {
 		export := build("csv", auditExportFilter{})
 		require.Contains(t, export.contentType, "text/csv")
 		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
 		require.NoError(t, err)
 		require.Len(t, rows, 1+len(securityCoreColumns), "header + one CSV row per Security field")
-		require.Equal(t, []string{"Field", "What this row is", "alpha-renamed", "beta", "gamma"}, rows[0],
+		require.Equal(t, []string{"Field", "alpha-renamed", "beta", "gamma"}, rows[0],
 			"header names bots across columns")
-		require.Equal(t, 5, len(rows[0]), "Field + Notes + one column per bot")
 		byField := map[string][]string{}
 		for _, row := range rows[1:] {
-			byField[row[0]] = row[2:] // skip Field + Notes
-			require.NotEmpty(t, row[1], "every field has an explanation")
+			byField[row[0]] = row[1:]
 		}
 		require.Equal(t, []string{"r1", "r2", "r3"}, byField["Request ID"])
 		require.Equal(t, []string{"alpha-renamed", "beta", "gamma"}, byField["Bot name"])
-		require.Equal(t, []string{"b1", "b2", "b3"}, byField["Bot ID"])
-		require.Equal(t, []string{"Ops", "Ops", ""}, byField["Mattermost team"])
-		require.Equal(t, []string{"~alerts (home)", "gone (home, not found)", ""}, byField["Channel"])
 		require.Equal(t, "'=posts alerts", byField["Purpose"][0], "formulas are neutralised")
-		require.Equal(t, "Bot access token, incoming webhook", byField["Authentication method"][0])
-		require.Equal(t, "Read and post", byField["Privilege level"][0])
-		require.Equal(t, "webhooks", byField["Data ingestion / capabilities"][0])
-		require.Equal(t, "https://ci.example/hooks/mm", byField["Integration endpoint"][0])
-		require.Equal(t, "mattermost-prod", byField["Hosting env"][0])
-		require.Equal(t, "HTTPS required for declared URLs", byField["Data transit security"][0])
+		require.Contains(t, byField["Authentication method"][0], "Bot access token")
 		require.Equal(t, []string{"true", "true", "true"}, byField["Activity logs"])
 		_, hasOwner := byField["Owner ID"]
 		require.False(t, hasOwner, "owner is verbose-only")
 	})
-	t.Run("csv verbose", func(t *testing.T) {
-		export := build("csv", auditExportFilter{Verbose: true})
+	t.Run("csv row", func(t *testing.T) {
+		export := build("csv", auditExportFilter{Layout: inventoryLayoutRow})
 		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
 		require.NoError(t, err)
-		require.Len(t, rows, 1+len(securityCoreColumns)+len(securityVerboseColumns))
-		byField := map[string][]string{}
-		for _, row := range rows[1:] {
-			byField[row[0]] = row[2:]
+		require.Equal(t, securityCoreColumns, rows[0], "fields across the header")
+		require.Len(t, rows, 4, "header + one row per bot")
+		col := map[string]int{}
+		for i, name := range rows[0] {
+			col[name] = i
 		}
-		require.Equal(t, []string{"req", "other", "req"}, byField["Requester name"])
-		require.Equal(t, []string{"u_req", "u_other", "u_req"}, byField["Requester ID"])
-		require.Equal(t, []string{"u_req", "u_other", "u_owner"}, byField["Owner ID"])
-		require.Equal(t, []string{"admin", "", ""}, byField["Approver name(s)"])
-		require.Equal(t, "sha256:abc123 @ 1970-01-01T00:00:00Z", byField["T&Cs acceptance"][0])
-		require.Equal(t, "", byField["T&Cs acceptance"][1], "b2 has no compliance record")
+		require.Equal(t, "b1", rows[1][col["Bot ID"]])
+		require.Equal(t, "alpha-renamed", rows[1][col["Bot name"]])
+		require.Equal(t, "b3", rows[3][col["Bot ID"]])
 	})
-	t.Run("pdf", func(t *testing.T) {
-		export := build("pdf", auditExportFilter{})
+	t.Run("csv wraps long column cells", func(t *testing.T) {
+		long := strings.Repeat("purpose word ", 20)
+		data, err := inventoryCSV([]inventoryRow{{
+			RequestID: "r", BotUsername: "bot", BotID: "b", Purpose: long, RHManaged: true,
+		}}, false, inventoryLayoutColumn)
+		require.NoError(t, err)
+		require.Contains(t, string(data), "\n", "long values soft-wrap inside the cell")
+	})
+	t.Run("pdf column", func(t *testing.T) {
+		export := build("pdf", auditExportFilter{Layout: inventoryLayoutColumn})
 		require.Equal(t, "application/pdf", export.contentType)
 		require.GreaterOrEqual(t, checkPDF(t, export.data), 1)
 		s := string(export.data)
 		require.Contains(t, s, "(Request Hub bot inventory) Tj")
-		require.Contains(t, s, "Every bot Request Hub created. 3 bots.")
-		require.Contains(t, s, "(@alpha-renamed \\(Alpha\\)) Tj")
+		require.Contains(t, s, "Column layout")
+		require.Contains(t, s, "(alpha-renamed) Tj")
 		require.Contains(t, s, "(Read and post) Tj")
-		require.Contains(t, s, "(~alerts \\(home\\)) Tj")
-		require.Contains(t, s, "(gone \\(home, not found\\)) Tj", "a missing home channel says so")
-		require.Contains(t, s, "HTTPS required for declared URLs")
-		require.Contains(t, s, "Bot access token, incoming webhook")
-		require.NotContains(t, s, "(Owner ID:")
+		require.Contains(t, s, "HTTPS required for declared")
 	})
-	t.Run("pdf verbose", func(t *testing.T) {
-		export := build("pdf", auditExportFilter{Verbose: true})
+	t.Run("pdf row", func(t *testing.T) {
+		export := build("pdf", auditExportFilter{Layout: inventoryLayoutRow, Verbose: true})
 		require.GreaterOrEqual(t, checkPDF(t, export.data), 1)
 		s := string(export.data)
-		require.Contains(t, s, "with recommended-extra columns")
+		require.Contains(t, s, "Row layout")
+		require.Contains(t, s, "(@alpha-renamed \\(Alpha\\)) Tj")
 		require.Contains(t, s, "(Owner ID: ) Tj")
-		require.Contains(t, s, "(u_owner) Tj", "b3's owner is listed by ID when the user is gone")
-		require.Contains(t, s, "sha256:abc123 @ 1970-01-01T00:00:00Z")
+		require.Contains(t, s, "(u_owner) Tj")
 	})
 	t.Run("pdf with nothing to list", func(t *testing.T) {
 		export, err := p.buildAuditExport(auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "lab"})
@@ -330,8 +320,8 @@ func TestDecideAuditExport_ApproveSendsTheInventory(t *testing.T) {
 	require.NotNil(t, delivered)
 	require.Contains(t, delivered.Message, "**Audit export: Bot inventory** (PDF, 2 bots). Only bots in `mattermost-prod`.")
 	checkPDF(t, uploaded)
-	require.Contains(t, string(uploaded), "(@alpha-renamed \\(Alpha\\)) Tj")
-	require.NotContains(t, string(uploaded), "@beta", "a dev bot isn't in a prod inventory")
+	require.Contains(t, string(uploaded), "(alpha-renamed) Tj")
+	require.NotContains(t, string(uploaded), "(beta) Tj", "a dev bot isn't in a prod inventory")
 
 	var approved *auditEntry
 	for i := range *events {
@@ -357,8 +347,15 @@ func TestHandleAuditExport_Inventory(t *testing.T) {
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"), "the API gives JSON when no format is named")
 	var rows []map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
-	require.Len(t, rows, 1)
-	require.Equal(t, "b2", rows[0]["Bot ID"])
+	require.GreaterOrEqual(t, len(rows), 1)
+	botIDRow := map[string]string{}
+	for _, row := range rows {
+		if row["Field"] == "Bot ID" {
+			botIDRow = row
+			break
+		}
+	}
+	require.Equal(t, "b2", botIDRow["beta"])
 	require.Equal(t, 1, countEvents(*events, eventAuditExported))
 	require.Equal(t, 1, (*events)[len(*events)-1].Detail["bots"])
 

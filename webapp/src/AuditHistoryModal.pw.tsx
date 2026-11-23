@@ -55,9 +55,12 @@ test.describe('AuditHistoryModal', () => {
         await expect(page.getByRole('row').nth(1)).toContainText('@alice');
         await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveAttribute('href', `${EXPORT}?format=csv`);
         await expect(page.getByRole('link', {name: 'Download JSON'})).toHaveAttribute('href', `${EXPORT}?format=json`);
-        await expect(page.getByRole('link', {name: 'Download inventory PDF'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=pdf`);
-        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv`);
-        await expect(page.getByRole('link', {name: 'Download inventory JSON'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=json`);
+        await expect(page.getByRole('button', {name: 'Columns (one bot per column)'})).toBeVisible();
+        await expect(page.getByRole('link', {name: 'Download inventory PDF'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=pdf&layout=column`);
+        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv&layout=column`);
+        await expect(page.getByRole('link', {name: 'Download inventory JSON'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=json&layout=column`);
+        await page.getByRole('button', {name: 'Rows (one bot per row)'}).click();
+        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv&layout=row`);
     });
 
     test('offers a request instead of downloads while direct export is off', async ({mount, page}) => {
@@ -87,8 +90,8 @@ test.describe('AuditHistoryModal', () => {
         await expect.poll(() => queries.at(-1)?.get('status')).toBe('approved');
         // Bot-type view drops the event CSV; only inventory downloads remain.
         await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveCount(0);
-        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv`);
-        await expect(page.getByText('Bot inventory (one bot per column):')).toBeVisible();
+        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv&layout=column`);
+        await expect(page.getByText('Bot inventory layout:')).toBeVisible();
     });
 
     test('loads more pages', async ({mount, page}) => {

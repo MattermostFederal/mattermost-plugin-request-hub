@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 
 import {auditExportURL, fetchAuditAccess, fetchAuditHistory, fetchAuditRequests} from './client';
-import type {AuditExportFormat, AuditEvent, AuditHistory, AuditRequestSummary} from './client';
+import type {AuditExportFormat, AuditEvent, AuditHistory, AuditRequestSummary, InventoryLayout} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditHistoryModal, isAuditHistoryModalOpen, openAuditExportRequestModal} from './store';
 
@@ -87,7 +87,7 @@ const actorOf = (ev: AuditEvent) => {
 
 type DownloadLinksProps = {
     label: string;
-    filter?: {type?: string; request?: string; kind?: string};
+    filter?: {type?: string; request?: string; kind?: string; layout?: InventoryLayout};
     formats?: AuditExportFormat[];
 
     // noun goes in each link's name, as in "Download inventory PDF".
@@ -157,6 +157,10 @@ export const AuditHistoryModal = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [detail, setDetail] = useState<Detail | null>(null);
+
+    // inventoryLayout chooses Security sheet orientation for bot inventory
+    // downloads (CSV, PDF, and JSON).
+    const [inventoryLayout, setInventoryLayout] = useState<InventoryLayout>('column');
 
     // Download links show only while direct export is on; otherwise the
     // window offers a request for an export, for another System Admin to
@@ -379,9 +383,24 @@ export const AuditHistoryModal = () => {
                                             filter={kind ? {kind} : {}}
                                         />
                                     )}
+                                    <span style={{display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+                                        <span style={mutedStyle}>{'Bot inventory layout:'}</span>
+                                        <button
+                                            type='button'
+                                            className={`btn btn-sm ${inventoryLayout === 'column' ? 'btn-primary' : 'btn-tertiary'}`}
+                                            aria-pressed={inventoryLayout === 'column'}
+                                            onClick={() => setInventoryLayout('column')}
+                                        >{'Columns (one bot per column)'}</button>
+                                        <button
+                                            type='button'
+                                            className={`btn btn-sm ${inventoryLayout === 'row' ? 'btn-primary' : 'btn-tertiary'}`}
+                                            aria-pressed={inventoryLayout === 'row'}
+                                            onClick={() => setInventoryLayout('row')}
+                                        >{'Rows (one bot per row)'}</button>
+                                    </span>
                                     <DownloadLinks
-                                        label={kind === 'bot' ? 'Bot inventory (one bot per column):' : 'Every bot Request Hub created:'}
-                                        filter={{type: 'bot_inventory'}}
+                                        label='Every bot Request Hub created:'
+                                        filter={{type: 'bot_inventory', layout: inventoryLayout}}
                                         formats={['csv', 'pdf', 'json']}
                                         noun='inventory'
                                     />

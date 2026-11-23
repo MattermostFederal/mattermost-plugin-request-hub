@@ -3,7 +3,7 @@ import {useDispatch, useSelector} from 'react-redux';
 
 import {KIND_OPTIONS} from './AuditHistoryModal';
 import {fetchBotForm, submitAuditExportRequest} from './client';
-import type {AuditExportFormat} from './client';
+import type {AuditExportFormat, InventoryLayout} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditExportRequestModal, isAuditExportRequestModalOpen} from './store';
 
@@ -60,7 +60,7 @@ export const EXPORT_TYPES: ExportType[] = [
     {
         value: 'bot_inventory',
         label: 'Bot inventory',
-        formats: [['csv', 'CSV (one bot per column)'], ['pdf', 'PDF (for reading)'], ['json', 'JSON (one object per bot)']],
+        formats: [['csv', 'CSV'], ['pdf', 'PDF (for reading)'], ['json', 'JSON']],
         narrow: 'env',
         dates: 'Approved',
     },
@@ -94,6 +94,7 @@ export const RequestAuditExportModal = () => {
     const [envs, setEnvs] = useState<Array<{value: string; label: string}>>([]);
     const [requester, setRequester] = useState('');
     const [verbose, setVerbose] = useState(false);
+    const [layout, setLayout] = useState<InventoryLayout>('column');
     const [since, setSince] = useState('');
     const [until, setUntil] = useState('');
     const [reason, setReason] = useState('');
@@ -109,6 +110,7 @@ export const RequestAuditExportModal = () => {
         setBot('');
         setRequester('');
         setVerbose(false);
+        setLayout('column');
         setSince('');
         setUntil('');
         setReason('');
@@ -169,6 +171,7 @@ export const RequestAuditExportModal = () => {
                 bot: byBot ? bot.trim().replace(/^@/, '') : undefined,
                 requester: byBot ? undefined : requester.trim().replace(/^@/, '') || undefined,
                 verbose: currentType.narrow === 'env' && verbose ? true : undefined,
+                layout: currentType.narrow === 'env' ? layout : undefined,
                 since: dayStart(since),
                 until: dayEnd(until),
                 reason: reason.trim(),
@@ -306,6 +309,29 @@ export const RequestAuditExportModal = () => {
                                         />
                                     )}
                                 </div>
+                                <fieldset style={fieldStyle}>
+                                    <legend style={legendStyle}>{'Layout'}</legend>
+                                    <label style={{marginRight: 16, fontWeight: 'normal'}}>
+                                        <input
+                                            type='radio'
+                                            name='rae-layout'
+                                            checked={layout === 'column'}
+                                            onChange={() => setLayout('column')}
+                                            disabled={submitting}
+                                        />
+                                        {' Columns — one bot per column (Security sheet; long values wrap)'}
+                                    </label>
+                                    <label style={{fontWeight: 'normal'}}>
+                                        <input
+                                            type='radio'
+                                            name='rae-layout'
+                                            checked={layout === 'row'}
+                                            onChange={() => setLayout('row')}
+                                            disabled={submitting}
+                                        />
+                                        {' Rows — one bot per row'}
+                                    </label>
+                                </fieldset>
                                 <div style={fieldStyle}>
                                     <label
                                         htmlFor='rae-verbose'
