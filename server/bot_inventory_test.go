@@ -199,11 +199,14 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		require.Contains(t, export.contentType, "text/csv")
 		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
 		require.NoError(t, err)
-		require.Len(t, rows, len(securityCoreColumns), "one CSV row per Security field")
-		require.Equal(t, 4, len(rows[0]), "field name + one column per bot")
+		require.Len(t, rows, 1+len(securityCoreColumns), "header + one CSV row per Security field")
+		require.Equal(t, []string{"Field", "What this row is", "alpha-renamed", "beta", "gamma"}, rows[0],
+			"header names bots across columns")
+		require.Equal(t, 5, len(rows[0]), "Field + Notes + one column per bot")
 		byField := map[string][]string{}
-		for _, row := range rows {
-			byField[row[0]] = row[1:]
+		for _, row := range rows[1:] {
+			byField[row[0]] = row[2:] // skip Field + Notes
+			require.NotEmpty(t, row[1], "every field has an explanation")
 		}
 		require.Equal(t, []string{"r1", "r2", "r3"}, byField["Request ID"])
 		require.Equal(t, []string{"alpha-renamed", "beta", "gamma"}, byField["Bot name"])
@@ -225,10 +228,10 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		export := build("csv", auditExportFilter{Verbose: true})
 		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
 		require.NoError(t, err)
-		require.Len(t, rows, len(securityCoreColumns)+len(securityVerboseColumns))
+		require.Len(t, rows, 1+len(securityCoreColumns)+len(securityVerboseColumns))
 		byField := map[string][]string{}
-		for _, row := range rows {
-			byField[row[0]] = row[1:]
+		for _, row := range rows[1:] {
+			byField[row[0]] = row[2:]
 		}
 		require.Equal(t, []string{"req", "other", "req"}, byField["Requester name"])
 		require.Equal(t, []string{"u_req", "u_other", "u_req"}, byField["Requester ID"])

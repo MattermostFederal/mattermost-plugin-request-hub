@@ -55,6 +55,30 @@ var (
 		"Approver ID(s)",
 		"T&Cs acceptance",
 	}
+	// securityFieldNotes is the left-hand explanation for each Security row
+	// (what that row means). Empty when the field name is enough.
+	securityFieldNotes = map[string]string{
+		"Request ID":                    "Request Hub request ID for this bot",
+		"Bot name":                      "Mattermost bot username",
+		"Bot ID":                        "Mattermost bot user ID",
+		"Mattermost team":               "Home team display name",
+		"Channel":                       "Home channel (handle), marked (home)",
+		"Purpose":                       "What the requester declared the bot is for",
+		"Authentication method":         "How the bot authenticates (token and/or webhooks)",
+		"Privilege level":               "Declared Mattermost privilege for the bot",
+		"Data ingestion / capabilities": "What data the bot posts or reads",
+		"Integration endpoint":          "Declared HTTPS integration URL",
+		"Hosting env":                   "Where the integration that drives this bot runs",
+		"Data transit security":         "Whether the declared endpoint is HTTPS",
+		"Activity logs":                 "Fleet flag (true/false); use a forensic export for one bot's posts",
+		"Requester name":                "Username of who requested the bot",
+		"Requester ID":                  "User ID of who requested the bot",
+		"Owner name":                    "Current owner username (defaults to requester; may differ after transfer)",
+		"Owner ID":                      "Current owner user ID",
+		"Approver name(s)":              "Username(s) of who approved the bot",
+		"Approver ID(s)":                "User ID(s) of who approved the bot",
+		"T&Cs acceptance":               "Compliance statement hash and acceptance time",
+	}
 )
 
 // inventoryRow is one bot in the inventory.
@@ -258,14 +282,29 @@ func securityColumns(verbose bool) []string {
 	return append(out, securityVerboseColumns...)
 }
 
-// inventoryCSV writes the Security spreadsheet: field names down the first
-// column, one bot per following column (oldest first).
+// inventoryCSV writes the Security spreadsheet layout:
+//
+//	row 0:   Field | What this row is | <bot username> | <bot username> | ...
+//	row 1+:  field name | explanation   | value          | value          | ...
+//
+// One bot per column (oldest first). Field names and explanations stay in
+// the first two columns; adding a bot adds a column, never a row of bots.
 func inventoryCSV(rows []inventoryRow, verbose bool) ([]byte, error) {
 	var buf bytes.Buffer
 	cw := csv.NewWriter(&buf)
+	header := make([]string, 0, 2+len(rows))
+	header = append(header, "Field", "What this row is")
+	for _, r := range rows {
+		name := r.BotUsername
+		if name == "" {
+			name = r.BotID
+		}
+		header = append(header, name)
+	}
+	_ = cw.Write(csvRecord(header...))
 	for _, col := range securityColumns(verbose) {
-		record := make([]string, 0, 1+len(rows))
-		record = append(record, col)
+		record := make([]string, 0, 2+len(rows))
+		record = append(record, col, securityFieldNotes[col])
 		for _, r := range rows {
 			record = append(record, securityCell(r, col))
 		}

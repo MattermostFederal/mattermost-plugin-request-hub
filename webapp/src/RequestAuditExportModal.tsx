@@ -60,7 +60,7 @@ export const EXPORT_TYPES: ExportType[] = [
     {
         value: 'bot_inventory',
         label: 'Bot inventory',
-        formats: [['pdf', 'PDF (for reading)'], ['csv', 'CSV (one column per bot)'], ['json', 'JSON (one object per bot)']],
+        formats: [['csv', 'CSV (Security sheet: fields as rows, one bot per column)'], ['pdf', 'PDF (for reading)'], ['json', 'JSON (one object per bot)']],
         narrow: 'env',
         dates: 'Approved',
     },
