@@ -341,7 +341,7 @@ func TestHandleListSidebarCategories_MemberGetsCategories(t *testing.T) {
 	api.On("GetTeamMember", "t1", "u1").Return(&model.TeamMember{TeamId: "t1", UserId: "u1"}, nil)
 	api.On("GetChannelSidebarCategories", "u1", "t1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{Id: "c1", DisplayName: "Work", Type: model.SidebarCategoryCustom},
+			Id: "c1", DisplayName: "Work", Type: model.SidebarCategoryCustom,
 		}},
 	}, nil)
 

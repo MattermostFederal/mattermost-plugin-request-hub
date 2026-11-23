@@ -190,13 +190,13 @@ func TestAddChannelToPermissionsCategory_LookupFailureStops(t *testing.T) {
 func TestAddChannelToPermissionsCategory_RenamesLegacyCategory(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{})
 	legacy := &model.SidebarCategoryWithChannels{
-		SidebarCategory: model.SidebarCategory{Id: "cat1", DisplayName: "Mattermost: Permissions"},
-		Channels:        []string{"c1"},
+		Id: "cat1", DisplayName: "Mattermost: Permissions",
+		Channels: []string{"c1"},
 	}
 	api.On("GetChannelSidebarCategories", "u1", "t1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{
 			nil,
-			{SidebarCategory: model.SidebarCategory{DisplayName: "Favorites"}},
+			{DisplayName: "Favorites"},
 			legacy,
 		},
 	}, nil)
@@ -216,8 +216,8 @@ func TestAddChannelToPermissionsCategory_PrependsMissingChannel(t *testing.T) {
 	p, api := logOnlyPlugin(&configuration{})
 	api.On("GetChannelSidebarCategories", "u1", "t1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: sidebarCategoryName},
-			Channels:        []string{"c0"},
+			DisplayName: sidebarCategoryName,
+			Channels:    []string{"c0"},
 		}},
 	}, nil)
 	api.On("UpdateChannelSidebarCategories", "u1", "t1", mock.MatchedBy(func(cats []*model.SidebarCategoryWithChannels) bool {
@@ -616,8 +616,8 @@ func TestPlaceChannelMembersInManagedCategory_ReturnsCountSoFarOnError(t *testin
 	api.On("GetUsersInChannel", "c1", "username", 1, 200).Return(nil, testAppErr("down"))
 	api.On("GetChannelSidebarCategories", "u1", "t1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: sidebarCategoryName},
-			Channels:        []string{"c1"},
+			DisplayName: sidebarCategoryName,
+			Channels:    []string{"c1"},
 		}},
 	}, nil)
 

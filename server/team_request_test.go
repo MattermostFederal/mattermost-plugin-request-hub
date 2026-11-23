@@ -64,8 +64,8 @@ func TestSubmitTeamCreationRequest_StoresAndPostsRequest(t *testing.T) {
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetChannelSidebarCategories", "sys1", "appteam-id").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"teams-ch"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"teams-ch"},
 		}},
 	}, nil).Maybe()
 
@@ -159,8 +159,8 @@ func TestPostTeamCreationApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *t
 	api.On("AddChannelMember", "teams-ch", "appta").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "appta", "appteam-id").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"teams-ch"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"teams-ch"},
 		}},
 	}, nil)
 	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead"}, nil)

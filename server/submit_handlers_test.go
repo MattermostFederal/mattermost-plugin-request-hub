@@ -531,7 +531,7 @@ func TestHandleListSidebarCategories_SkipsEmptyEntries(t *testing.T) {
 	api.On("GetChannelSidebarCategories", "u1", "t1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{
 			nil,
-			{SidebarCategory: model.SidebarCategory{Id: "c1", DisplayName: "Work", Type: model.SidebarCategoryCustom}},
+			{Id: "c1", DisplayName: "Work", Type: model.SidebarCategoryCustom},
 		},
 	}, nil)
 

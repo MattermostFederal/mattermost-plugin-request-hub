@@ -241,7 +241,7 @@ func TestTwoStepActionHandlers_LostFinalClaimRepliesPrivately(t *testing.T) {
 			kvPrefix: kvBotRequestPrefix,
 			record: &botRequest{
 				ID: "r1", RequesterID: "u_req", Username: "svcbot", ApprovalPostID: "post1",
-				twoStepState: twoStepState{SecurityApproverID: "sec1", SecurityApprovedAt: 1},
+				SecurityApproverID: "sec1", SecurityApprovedAt: 1,
 			},
 			handler: func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleBotAction },
 			stub: func(api *plugintest.API) {
@@ -253,7 +253,7 @@ func TestTwoStepActionHandlers_LostFinalClaimRepliesPrivately(t *testing.T) {
 			kvPrefix: kvWebhookRequestPrefix,
 			record: &webhookRequest{
 				ID: "r1", RequesterID: "u_req", WebhookType: "incoming", ChannelID: "ch1", ApprovalPostID: "post1",
-				twoStepState: twoStepState{SecurityApproverID: "sec1", SecurityApprovedAt: 1},
+				SecurityApproverID: "sec1", SecurityApprovedAt: 1,
 			},
 			handler: func(p *Plugin) func(http.ResponseWriter, *http.Request, bool) { return p.handleWebhookAction },
 			stub: func(api *plugintest.API) {

@@ -1114,13 +1114,11 @@ func (p *Plugin) placeChannelInCategory(userID, teamID, channelID, categoryName 
 	}
 
 	if _, createErr := p.API.CreateChannelSidebarCategory(userID, teamID, &model.SidebarCategoryWithChannels{
-		SidebarCategory: model.SidebarCategory{
-			UserId:      userID,
-			TeamId:      teamID,
-			DisplayName: categoryName,
-			Type:        model.SidebarCategoryCustom,
-		},
-		Channels: []string{channelID},
+		UserId:      userID,
+		TeamId:      teamID,
+		DisplayName: categoryName,
+		Type:        model.SidebarCategoryCustom,
+		Channels:    []string{channelID},
 	}); createErr != nil {
 		return errors.New(createErr.Error())
 	}

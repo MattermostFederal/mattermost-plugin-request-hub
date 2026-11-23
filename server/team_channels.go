@@ -235,13 +235,11 @@ func (p *Plugin) addChannelToPermissionsCategory(userID, teamID, channelID strin
 
 	// Category doesn't exist yet — create it.
 	if _, createErr := p.API.CreateChannelSidebarCategory(userID, teamID, &model.SidebarCategoryWithChannels{
-		SidebarCategory: model.SidebarCategory{
-			UserId:      userID,
-			TeamId:      teamID,
-			DisplayName: sidebarCategoryName,
-			Type:        model.SidebarCategoryCustom,
-		},
-		Channels: []string{channelID},
+		UserId:      userID,
+		TeamId:      teamID,
+		DisplayName: sidebarCategoryName,
+		Type:        model.SidebarCategoryCustom,
+		Channels:    []string{channelID},
 	}); createErr != nil {
 		p.API.LogWarn("sidebar: failed to create category",
 			"user_id", userID, "team_id", teamID, "error", createErr.Error())

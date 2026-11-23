@@ -281,11 +281,11 @@ func (p *Plugin) createWebhookForRequest(req *webhookRequest, adminUserID string
 // hookIDFromPublicURL extracts the hook id from a SiteURL/hooks/<id> string.
 func hookIDFromPublicURL(publicURL string) string {
 	const marker = "/hooks/"
-	i := strings.LastIndex(publicURL, marker)
-	if i < 0 {
+	_, id, found := strings.CutLast(publicURL, marker)
+	if !found {
 		return ""
 	}
-	id := strings.TrimSpace(publicURL[i+len(marker):])
+	id = strings.TrimSpace(id)
 	if id == "" || strings.ContainsAny(id, "/?#") {
 		return ""
 	}

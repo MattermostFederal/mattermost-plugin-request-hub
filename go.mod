@@ -1,6 +1,6 @@
 module github.com/MattermostFederal/mattermost-plugin-request-hub
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/mattermost/mattermost-plugin-agents/v2 v2.13.0
