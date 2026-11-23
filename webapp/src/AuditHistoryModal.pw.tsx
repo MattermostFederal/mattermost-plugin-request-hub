@@ -85,7 +85,10 @@ test.describe('AuditHistoryModal', () => {
         await expect.poll(() => queries.at(-1)?.get('kind')).toBe('bot');
         await page.getByLabel('Status').selectOption('approved');
         await expect.poll(() => queries.at(-1)?.get('status')).toBe('approved');
-        await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveAttribute('href', `${EXPORT}?format=csv&kind=bot`);
+        // Bot-type view drops the event CSV; only inventory downloads remain.
+        await expect(page.getByRole('link', {name: 'Download CSV'})).toHaveCount(0);
+        await expect(page.getByRole('link', {name: 'Download inventory CSV'})).toHaveAttribute('href', `${EXPORT}?type=bot_inventory&format=csv`);
+        await expect(page.getByText('Bot inventory (one bot per column):')).toBeVisible();
     });
 
     test('loads more pages', async ({mount, page}) => {

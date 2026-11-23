@@ -76,7 +76,7 @@ test.describe('RequestAuditExportModal', () => {
 
         await page.getByLabel('Request type (optional)').selectOption('bot');
         await page.getByLabel('Bot inventory').check();
-        await expect(page.getByLabel('CSV (Security sheet: fields as rows, one bot per column)')).toBeChecked();
+        await expect(page.getByLabel('CSV (one bot per column)')).toBeChecked();
         await page.getByLabel('PDF (for reading)').check();
         await expect(page.getByLabel('Request type (optional)')).toHaveCount(0);
         await expect(page.getByLabel('Approved from (optional)')).toBeVisible();

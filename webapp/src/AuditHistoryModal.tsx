@@ -370,14 +370,19 @@ export const AuditHistoryModal = () => {
                         <div style={{marginTop: 12}}>
                             {directExport === true ? (
                                 <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                                    {/* Bot account view is the Security fleet extract only —
+                                        the event CSV (one row per event) is not offered here
+                                        so it isn't mistaken for the inventory. */}
+                                    {kind === 'bot' ? null : (
+                                        <DownloadLinks
+                                            label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
+                                            filter={kind ? {kind} : {}}
+                                        />
+                                    )}
                                     <DownloadLinks
-                                        label={kind ? 'Every request of this type, every event:' : 'Whole audit history, every event:'}
-                                        filter={kind ? {kind} : {}}
-                                    />
-                                    <DownloadLinks
-                                        label='Every bot Request Hub created:'
+                                        label={kind === 'bot' ? 'Bot inventory (one bot per column):' : 'Every bot Request Hub created:'}
                                         filter={{type: 'bot_inventory'}}
-                                        formats={['pdf', 'csv', 'json']}
+                                        formats={['csv', 'pdf', 'json']}
                                         noun='inventory'
                                     />
                                 </div>
