@@ -565,7 +565,7 @@ func TestHandleWebhookAction_UndeliverableURLClearsCards(t *testing.T) {
 
 	req := &webhookRequest{
 		ID: "r1", RequesterID: "u_req", WebhookType: webhookTypeIncoming, ChannelID: "ch1", DisplayName: "Alerts",
-		ApprovalPostID: "post1", twoStepState: twoStepState{SecurityApproverID: "sec1", SecurityApprovedAt: 1},
+		ApprovalPostID: "post1", SecurityApproverID: "sec1", SecurityApprovedAt: 1,
 	}
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -629,7 +629,7 @@ func TestTwoStepActionHandlers_LostRequestClearsCards(t *testing.T) {
 
 		req := &webhookRequest{
 			ID: "r1", RequesterID: "u_req", WebhookType: webhookTypeIncoming, ChannelID: "ch1", DisplayName: "Alerts",
-			ApprovalPostID: "post1", twoStepState: twoStepState{SecurityApproverID: "sec1", SecurityApprovedAt: 1},
+			ApprovalPostID: "post1", SecurityApproverID: "sec1", SecurityApprovedAt: 1,
 		}
 		raw, err := json.Marshal(req)
 		require.NoError(t, err)

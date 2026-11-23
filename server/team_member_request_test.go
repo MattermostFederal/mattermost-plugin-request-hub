@@ -39,8 +39,8 @@ func TestSubmitTeamMemberRequest_QueuesForApproval(t *testing.T) {
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetChannelSidebarCategories", "sys1", "appteam-id").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"team-req-ch"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"team-req-ch"},
 		}},
 	}, nil).Maybe()
 

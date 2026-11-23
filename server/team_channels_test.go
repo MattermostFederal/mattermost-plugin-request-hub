@@ -143,8 +143,8 @@ func TestEnsureAllTeamApprovalChannels_SeedsApprovalTeamAdminsIntoRootChannel(t 
 	api.On("AddChannelMember", "ch-root", "u_tadmin").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-root"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"ch-root"},
 		}},
 	}, nil)
 
@@ -210,8 +210,8 @@ func TestEnsureTeamApprovalChannel_CreatesAndSeeds(t *testing.T) {
 	// "Mattermost: Request Hub" even when the channel is already listed.
 	api.On("GetChannelSidebarCategories", "u_admin", "team1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{Id: "cat1", DisplayName: "Mattermost Requests"},
-			Channels:        []string{"new-ch"},
+			Id: "cat1", DisplayName: "Mattermost Requests",
+			Channels: []string{"new-ch"},
 		}},
 	}, nil)
 	api.On("UpdateChannelSidebarCategories", "u_admin", "team1", mock.MatchedBy(func(cats []*model.SidebarCategoryWithChannels) bool {
@@ -417,8 +417,8 @@ func TestUserHasJoinedTeam_AddsTeamAdminToApprovalChannel(t *testing.T) {
 	// Already in managed category — no update needed.
 	api.On("GetChannelSidebarCategories", "u_ta", "team1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-team1"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"ch-team1"},
 		}},
 	}, nil)
 
@@ -502,8 +502,8 @@ func TestSyncPrimaryTeamAdminVisibility_SeedsAllPrimaryChannels(t *testing.T) {
 	}
 	api.On("GetChannelSidebarCategories", "u_tadmin", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-root", "ch-team", "ch-audit"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"ch-root", "ch-team", "ch-audit"},
 		}},
 	}, nil).Maybe()
 	// forceTicketChannelCategory for team-requests walks System Admins.
@@ -785,8 +785,8 @@ func TestUserHasJoinedTeam_SeedsPrimaryTicketChannelsWhenApprovalTeamAdmin(t *te
 	}
 	api.On("GetChannelSidebarCategories", "u_ta", "team-hq").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-root", "ch-team", "ch-audit"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"ch-root", "ch-team", "ch-audit"},
 		}},
 	}, nil).Maybe()
 	api.On("GetUsers", mock.Anything).Return([]*model.User{}, nil).Maybe()

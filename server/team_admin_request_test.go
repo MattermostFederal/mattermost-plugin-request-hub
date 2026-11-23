@@ -72,8 +72,8 @@ func TestSubmitTeamAdminRequest_StoresAndPostsRequest(t *testing.T) {
 	api.On("GetUser", "sys1").Return(&model.User{Id: "sys1", Username: "root"}, nil)
 	api.On("GetChannelSidebarCategories", "sys1", "appteam-id").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"team-req-ch"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"team-req-ch"},
 		}},
 	}, nil).Maybe()
 
@@ -142,8 +142,8 @@ func TestPromoteTeamAdmins_ReseedsPerTeamApprovalChannel(t *testing.T) {
 	api.On("GetChannelMembers", "ch-req", 0, 100).Return(model.ChannelMembers{}, nil).Maybe()
 	api.On("GetChannelSidebarCategories", "u1", "team1").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"ch-req"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"ch-req"},
 		}},
 	}, nil)
 	api.On("GetUsersInChannel", "ch-req", "username", 0, 200).Return([]*model.User{{Id: "u1"}}, nil).Maybe()
@@ -190,8 +190,8 @@ func TestPostTeamAdminApprovalRequest_SeedsApprovalTeamAdminsWhenEnabled(t *test
 	api.On("AddChannelMember", "teams-ch", "appta").Return(&model.ChannelMember{}, nil)
 	api.On("GetChannelSidebarCategories", "appta", "appteam-id").Return(&model.OrderedSidebarCategories{
 		Categories: []*model.SidebarCategoryWithChannels{{
-			SidebarCategory: model.SidebarCategory{DisplayName: "Mattermost: Request Hub"},
-			Channels:        []string{"teams-ch"},
+			DisplayName: "Mattermost: Request Hub",
+			Channels:    []string{"teams-ch"},
 		}},
 	}, nil)
 	api.On("GetUser", "appta").Return(&model.User{Id: "appta", Username: "lead"}, nil)

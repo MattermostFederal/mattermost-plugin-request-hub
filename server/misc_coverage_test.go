@@ -161,8 +161,8 @@ func TestPlaceChannelInCategory_Outcomes(t *testing.T) {
 	work := func(channels ...string) *model.OrderedSidebarCategories {
 		return &model.OrderedSidebarCategories{Categories: []*model.SidebarCategoryWithChannels{
 			nil,
-			{SidebarCategory: model.SidebarCategory{DisplayName: "Other"}},
-			{SidebarCategory: model.SidebarCategory{Id: "cat1", DisplayName: "WORK"}, Channels: channels},
+			{DisplayName: "Other"},
+			{Id: "cat1", DisplayName: "WORK", Channels: channels},
 		}}
 	}
 
