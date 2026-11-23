@@ -686,6 +686,9 @@ export type AuditExportRequestPayload = {
     // bot is a bot's username, for bot_forensic.
     bot?: string;
     requester?: string;
+
+    // verbose adds recommended-extra Security columns on bot_inventory.
+    verbose?: boolean;
     since?: number;
     until?: number;
     reason: string;
