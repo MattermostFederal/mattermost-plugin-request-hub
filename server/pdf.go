@@ -93,6 +93,39 @@ func (d *pdfDoc) rule() {
 	d.y -= 2
 }
 
+// tableRow writes cells across the page, each wrapped to colW so a long
+// value grows the row height instead of the column width.
+func (d *pdfDoc) tableRow(cells []string, colW, size float64, bold bool) {
+	if len(cells) == 0 {
+		return
+	}
+	wrapped := make([][][]byte, len(cells))
+	maxLines := 1
+	for i, cell := range cells {
+		lines := wrapPDF(pdfEncode(cell), size, bold, colW-4, colW-4)
+		if len(lines) == 0 {
+			lines = [][]byte{nil}
+		}
+		wrapped[i] = lines
+		if len(lines) > maxLines {
+			maxLines = len(lines)
+		}
+	}
+	rowH := float64(maxLines) * size * pdfLeading
+	d.ensure(rowH + 2)
+	top := d.y
+	for line := 0; line < maxLines; line++ {
+		d.y = top - float64(line+1)*size*pdfLeading
+		for i, lines := range wrapped {
+			if line >= len(lines) {
+				continue
+			}
+			d.draw(pdfMargin+float64(i)*colW+2, d.y, lines[line], size, bold)
+		}
+	}
+	d.y = top - rowH - 2
+}
+
 func (d *pdfDoc) line(x float64, encoded []byte, size float64, bold bool) {
 	d.ensure(size * pdfLeading)
 	d.y -= size * pdfLeading

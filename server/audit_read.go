@@ -141,14 +141,14 @@ func flagDay(flags map[string][]string, flag string) (int64, error) {
 	return t.UnixMilli(), nil
 }
 
-const auditExportArgsHint = "[type] [format] [--request ID] [--kind kind] [--env name] [--bot @name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--reason text]"
+const auditExportArgsHint = "[type] [format] [--request ID] [--kind kind] [--env name] [--bot @name] [--requester @name] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--verbose] [--layout column|row] [--reason text]"
 
 // parseAuditExportArgs reads `audit export` arguments: an export type and
 // a format in either order, then filters. The format is left empty when
 // not given.
 func (p *Plugin) parseAuditExportArgs(params []commandArg) (auditExportFilter, string, error) {
 	var f auditExportFilter
-	positional, flags, err := readArgs(params, "--request", "--kind", "--env", "--bot", "--requester", "--since", "--until", "--reason")
+	positional, flags, err := readArgs(params, "--request", "--kind", "--env", "--bot", "--requester", "--since", "--until", "--verbose", "--layout", "--reason")
 	if err != nil {
 		return f, "", err
 	}
@@ -200,6 +200,12 @@ func (p *Plugin) parseAuditExportArgs(params []commandArg) (auditExportFilter, s
 	}
 	if f.Until > 0 {
 		f.Until += (24 * time.Hour).Milliseconds() - 1
+	}
+	if f.Verbose, err = flagBool(flags, "--verbose"); err != nil {
+		return f, "", err
+	}
+	if f.Layout, err = flagOne(flags, "--layout"); err != nil {
+		return f, "", err
 	}
 	reason, err := flagText(flags, "--reason", "a reason")
 	if err != nil {
@@ -457,6 +463,10 @@ type auditExportFilter struct {
 	Kind      string `json:"kind,omitempty"`
 	// HostingEnv narrows the bot inventory to one hosting environment.
 	HostingEnv string `json:"env,omitempty"`
+	// Verbose adds recommended-extra Security columns on the bot inventory.
+	Verbose bool `json:"verbose,omitempty"`
+	// Layout is column (default, one bot per column) or row (one bot per row).
+	Layout string `json:"layout,omitempty"`
 	// BotID is the bot user a forensic export traces.
 	BotID     string `json:"bot_id,omitempty"`
 	Requester string `json:"requester,omitempty"` // a user ID
@@ -502,6 +512,12 @@ func (f auditExportFilter) query() string {
 	add("env", f.HostingEnv)
 	add("bot", f.BotID)
 	add("requester", f.Requester)
+	if f.Verbose {
+		add("verbose", "1")
+	}
+	if layout := inventoryLayout(f); f.exportType() == exportBotInventory && (f.Layout != "" || layout != inventoryLayoutColumn) {
+		add("layout", layout)
+	}
 	if f.Since > 0 {
 		add("since", strconv.FormatInt(f.Since, 10))
 	}
@@ -513,7 +529,7 @@ func (f auditExportFilter) query() string {
 
 // detail is the filter as audit event detail.
 func (f auditExportFilter) detail() map[string]any {
-	return map[string]any{"type": f.exportType(), "format": f.Format, "request": f.RequestID, "kind": f.Kind, "env": f.HostingEnv, "bot_id": f.BotID, "requester": f.Requester, "since": f.Since, "until": f.Until}
+	return map[string]any{"type": f.exportType(), "format": f.Format, "request": f.RequestID, "kind": f.Kind, "env": f.HostingEnv, "bot_id": f.BotID, "requester": f.Requester, "verbose": f.Verbose, "layout": f.Layout, "since": f.Since, "until": f.Until}
 }
 
 // auditExport is a built export file.
@@ -680,7 +696,11 @@ func capHistoriesEvents(in []requestHistory, f auditExportFilter, maxEvents int)
 
 // parseExportFilter reads an export filter from query parameters.
 func parseExportFilter(q url.Values) (auditExportFilter, error) {
-	f := auditExportFilter{Type: q.Get("type"), Format: q.Get("format"), RequestID: q.Get("request"), Kind: q.Get("kind"), HostingEnv: q.Get("env"), BotID: q.Get("bot"), Requester: q.Get("requester")}
+	f := auditExportFilter{Type: q.Get("type"), Format: q.Get("format"), RequestID: q.Get("request"), Kind: q.Get("kind"), HostingEnv: q.Get("env"), BotID: q.Get("bot"), Requester: q.Get("requester"), Layout: q.Get("layout")}
+	switch strings.ToLower(strings.TrimSpace(q.Get("verbose"))) {
+	case "1", "true", "yes":
+		f.Verbose = true
+	}
 	// The API has always given JSON when no format is named.
 	if et, ok := findExportType(f.exportType()); ok && f.Format == "" && slices.Contains(et.Formats, "json") {
 		f.Format = "json"

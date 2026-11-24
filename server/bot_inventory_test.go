@@ -25,7 +25,7 @@ func inventoryPlugin(t *testing.T) (*Plugin, *plugintest.API, map[string][]byte)
 		{
 			BotUserID: "b1", RequestID: "r1", Username: "alpha", RequesterID: "u_req", CreatedAt: 100, RequestedAt: 50, ApprovedBy: "admin1",
 			Purpose: "=posts alerts", PrivilegeLevel: privilegePost, DataIngestion: "webhooks", HostingEnv: "mattermost-prod",
-			HomeTeamID: "t1", HomeChannelID: "c1", Compliance: compliance,
+			IntegrationURL: "https://ci.example/hooks/mm", HomeTeamID: "t1", HomeChannelID: "c1", Compliance: compliance,
 			HasToken: true, HasIncomingWebhook: true,
 		},
 		{
@@ -40,7 +40,7 @@ func inventoryPlugin(t *testing.T) (*Plugin, *plugintest.API, map[string][]byte)
 	api.On("GetBot", "b2", true).Return(&model.Bot{UserId: "b2", Username: "beta", DeleteAt: 9, OwnerId: "u_other"}, nil).Maybe()
 	api.On("GetBot", "b3", true).Return(nil, model.NewAppError("GetBot", "not_found", nil, "", http.StatusNotFound)).Maybe()
 	api.On("GetTeam", "t1").Return(&model.Team{Id: "t1", DisplayName: "Ops"}, nil).Maybe()
-	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1", DisplayName: "Alerts"}, nil).Maybe()
+	api.On("GetChannel", "c1").Return(&model.Channel{Id: "c1", Name: "alerts", DisplayName: "Alerts"}, nil).Maybe()
 	api.On("GetChannel", "gone").Return(nil, testAppErr("not found")).Maybe()
 	api.On("GetUser", "u_req").Return(&model.User{Id: "u_req", Username: "req"}, nil).Maybe()
 	api.On("GetUser", "u_other").Return(&model.User{Id: "u_other", Username: "other"}, nil).Maybe()
@@ -89,8 +89,9 @@ func TestBuildBotInventory(t *testing.T) {
 	require.Equal(t, []string{"b1", "b2", "b3"}, botIDs(rows), "oldest first")
 	require.Equal(t, inventoryRow{
 		BotID: "b1", BotUsername: "alpha-renamed", BotDisplayName: "Alpha", BotStatus: botStatusActive, BotActive: true,
-		HomeTeamID: "t1", HomeTeamName: "Ops", HomeChannelID: "c1", HomeChannelName: "Alerts",
+		HomeTeamID: "t1", HomeTeamName: "Ops", HomeChannelID: "c1", HomeChannelName: "Alerts", HomeChannelHandle: "alerts",
 		Purpose: "=posts alerts", PrivilegeLevel: privilegePost, DataIngestion: "webhooks", HostingEnv: "mattermost-prod",
+		IntegrationURL: "https://ci.example/hooks/mm",
 		RequesterID: "u_req", RequesterUsername: "req", OwnerID: "u_req", OwnerUsername: "req",
 		HasToken: true, HasIncomingWebhook: true, WebhookOwner: "@alpha-renamed (bot owned by @req)",
 		RequestID: "r1", RequestedAt: 50, ApprovedAt: 100,
@@ -101,6 +102,7 @@ func TestBuildBotInventory(t *testing.T) {
 	require.Equal(t, botStatusDeactivated, rows[1].BotStatus)
 	require.False(t, rows[1].BotActive)
 	require.Empty(t, rows[1].HomeChannelName, "a home channel that's gone has no name")
+	require.Empty(t, rows[1].HomeChannelHandle)
 	require.False(t, rows[1].ComplianceAccepted)
 	require.Equal(t, "u_other", rows[1].OwnerID, "index with no owner falls back to requester")
 	require.Equal(t, "other", rows[1].OwnerUsername)
@@ -167,62 +169,93 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		return export
 	}
 
-	t.Run("json", func(t *testing.T) {
+	t.Run("json column", func(t *testing.T) {
 		export := build("json", auditExportFilter{})
 		require.Equal(t, "application/json", export.contentType)
-		var rows []map[string]any
+		var rows []map[string]string
+		require.NoError(t, json.Unmarshal(export.data, &rows))
+		require.Len(t, rows, len(securityCoreColumns))
+		byField := map[string]map[string]string{}
+		for _, row := range rows {
+			byField[row["Field"]] = row
+		}
+		require.Equal(t, "b1", byField["Bot ID"]["alpha-renamed"])
+		require.Equal(t, "b2", byField["Bot ID"]["beta"])
+		require.Equal(t, "req", byField["Requester"]["alpha-renamed"])
+		require.Equal(t, "yes", byField["Approved"]["alpha-renamed"])
+		require.Equal(t, "HTTPS required for declared URLs", byField["Data transit security"]["alpha-renamed"])
+	})
+	t.Run("json row", func(t *testing.T) {
+		export := build("json", auditExportFilter{Layout: inventoryLayoutRow, Verbose: true})
+		var rows []map[string]string
 		require.NoError(t, json.Unmarshal(export.data, &rows))
 		require.Len(t, rows, 3)
-		require.Equal(t, "b1", rows[0]["bot_id"])
-		require.Equal(t, true, rows[0]["rh_managed"])
-		require.Equal(t, "abc123", rows[0]["compliance_text_sha256"])
+		require.Equal(t, "b1", rows[0]["Bot ID"])
+		require.Equal(t, "u_req", rows[0]["Owner ID"])
+		require.Equal(t, "sha256:abc123 @ 1970-01-01T00:00:00Z", rows[0]["T&Cs acceptance"])
+		require.Equal(t, "u_owner", rows[2]["Owner ID"])
 	})
-	t.Run("csv", func(t *testing.T) {
+	t.Run("csv column", func(t *testing.T) {
 		export := build("csv", auditExportFilter{})
 		require.Contains(t, export.contentType, "text/csv")
 		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
 		require.NoError(t, err)
-		require.Len(t, rows, 4)
+		require.Len(t, rows, 1+len(securityCoreColumns), "header + one CSV row per Security field")
+		require.Equal(t, []string{"Field", "alpha-renamed", "beta", "gamma"}, rows[0],
+			"header names bots across columns")
+		byField := map[string][]string{}
+		for _, row := range rows[1:] {
+			byField[row[0]] = row[1:]
+		}
+		require.Equal(t, []string{"r1", "r2", "r3"}, byField["Request ID"])
+		require.Equal(t, []string{"alpha-renamed", "beta", "gamma"}, byField["Bot name"])
+		require.Equal(t, "'=posts alerts", byField["Purpose"][0], "formulas are neutralised")
+		require.Contains(t, byField["Authentication method"][0], "Bot access token")
+		require.Equal(t, []string{"true", "true", "true"}, byField["Activity logs"])
+		_, hasOwner := byField["Owner ID"]
+		require.False(t, hasOwner, "owner is verbose-only")
+	})
+	t.Run("csv row", func(t *testing.T) {
+		export := build("csv", auditExportFilter{Layout: inventoryLayoutRow})
+		rows, err := csv.NewReader(bytes.NewReader(export.data)).ReadAll()
+		require.NoError(t, err)
+		require.Equal(t, securityCoreColumns, rows[0], "fields across the header")
+		require.Len(t, rows, 4, "header + one row per bot")
 		col := map[string]int{}
 		for i, name := range rows[0] {
 			col[name] = i
 		}
-		require.Equal(t, "b1", rows[1][col["bot_id"]])
-		require.Equal(t, "'=posts alerts", rows[1][col["purpose"]], "formulas are neutralised")
-		require.Equal(t, "Ops", rows[1][col["home_team_name"]])
-		require.Equal(t, "u_req", rows[1][col["owner_id"]])
-		require.Equal(t, "req", rows[1][col["owner_username"]])
-		require.Equal(t, "true", rows[1][col["has_token"]])
-		require.Equal(t, "true", rows[1][col["has_incoming_webhook"]])
-		require.Equal(t, "'@alpha-renamed (bot owned by @req)", rows[1][col["webhook_owner"]], "@ cells are formula-neutralised")
-		require.Equal(t, "1970-01-01T00:00:00Z", rows[1][col["approved_at_utc"]])
-		require.Equal(t, "true", rows[1][col["compliance_accepted"]])
-		require.Equal(t, "deactivated", rows[2][col["bot_status"]])
-		require.Equal(t, "u_other", rows[2][col["owner_id"]])
-		require.Equal(t, "other", rows[2][col["owner_username"]])
-		require.Equal(t, "", rows[2][col["webhook_owner"]])
-		require.Equal(t, "", rows[2][col["compliance_accepted_at_utc"]])
-		require.Equal(t, "true", rows[3][col["rh_managed"]])
-		require.Equal(t, "u_owner", rows[3][col["owner_id"]])
-		require.Equal(t, "", rows[3][col["owner_username"]], "gone owner keeps the id")
+		require.Equal(t, "b1", rows[1][col["Bot ID"]])
+		require.Equal(t, "alpha-renamed", rows[1][col["Bot name"]])
+		require.Equal(t, "b3", rows[3][col["Bot ID"]])
 	})
-	t.Run("pdf", func(t *testing.T) {
-		export := build("pdf", auditExportFilter{})
+	t.Run("csv wraps long column cells", func(t *testing.T) {
+		long := strings.Repeat("purpose word ", 20)
+		data, err := inventoryCSV([]inventoryRow{{
+			RequestID: "r", BotUsername: "bot", BotID: "b", Purpose: long, RHManaged: true,
+		}}, false, inventoryLayoutColumn)
+		require.NoError(t, err)
+		require.Contains(t, string(data), "\n", "long values soft-wrap inside the cell")
+	})
+	t.Run("pdf column", func(t *testing.T) {
+		export := build("pdf", auditExportFilter{Layout: inventoryLayoutColumn})
 		require.Equal(t, "application/pdf", export.contentType)
-		require.Equal(t, 1, checkPDF(t, export.data))
+		require.GreaterOrEqual(t, checkPDF(t, export.data), 1)
 		s := string(export.data)
 		require.Contains(t, s, "(Request Hub bot inventory) Tj")
-		require.Contains(t, s, "Every bot Request Hub created. 3 bots.")
-		require.Contains(t, s, "(@alpha-renamed \\(Alpha\\)) Tj")
+		require.Contains(t, s, "Column layout")
+		require.Contains(t, s, "(alpha-renamed) Tj")
 		require.Contains(t, s, "(Read and post) Tj")
-		require.Contains(t, s, "(Ops \\(t1\\) / Alerts \\(c1\\)) Tj")
-		require.Contains(t, s, "/ gone \\(not found\\)) Tj", "a missing home channel says so")
-		require.Contains(t, s, "statement sha256 abc123")
-		require.Contains(t, s, "(not recorded) Tj", "b2 has no compliance record")
-		require.Contains(t, s, "(u_owner) Tj", "b3's owner is listed by ID when the user is gone")
-		require.Contains(t, s, "bot access token, incoming webhook")
-		// PDF content streams escape parentheses as \( \).
-		require.Contains(t, s, `@alpha-renamed \(bot owned by @req\)`)
+		require.Contains(t, s, "HTTPS required for declared")
+	})
+	t.Run("pdf row", func(t *testing.T) {
+		export := build("pdf", auditExportFilter{Layout: inventoryLayoutRow, Verbose: true})
+		require.GreaterOrEqual(t, checkPDF(t, export.data), 1)
+		s := string(export.data)
+		require.Contains(t, s, "Row layout")
+		require.Contains(t, s, "(@alpha-renamed \\(Alpha\\)) Tj")
+		require.Contains(t, s, "(Owner ID: ) Tj")
+		require.Contains(t, s, "(u_owner) Tj")
 	})
 	t.Run("pdf with nothing to list", func(t *testing.T) {
 		export, err := p.buildAuditExport(auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "lab"})
@@ -239,16 +272,20 @@ func TestCheckExportScope(t *testing.T) {
 		return f
 	}
 	require.NoError(t, checkExportFilter(inv(auditExportFilter{HostingEnv: "prod", Since: 1, Until: 2})))
+	require.NoError(t, checkExportFilter(inv(auditExportFilter{Verbose: true})))
 	require.ErrorContains(t, checkExportFilter(inv(auditExportFilter{Kind: pendingKindBot})), "can't be narrowed by request or request type")
 	require.ErrorContains(t, checkExportFilter(inv(auditExportFilter{RequestID: model.NewId()})), "can't be narrowed by request or request type")
 	require.ErrorContains(t, checkExportFilter(inv(auditExportFilter{HostingEnv: strings.Repeat("e", maxHostingEnvLen+1)})), "environment")
 	require.ErrorContains(t, checkExportFilter(auditExportFilter{Format: "csv", HostingEnv: "prod"}), "only the bot inventory can be narrowed by environment")
+	require.ErrorContains(t, checkExportFilter(auditExportFilter{Format: "csv", Verbose: true}), "only the bot inventory has a verbose mode")
 	require.ErrorContains(t, checkExportFilter(auditExportFilter{Type: exportBotInventory, Format: "xml"}), "pick PDF, CSV or JSON for bot inventory")
 }
 
 func TestDescribeExportFilter_Inventory(t *testing.T) {
 	p, _, _ := inventoryPlugin(t)
 	require.Equal(t, "Every bot Request Hub created", p.describeExportFilter(auditExportFilter{Type: exportBotInventory}))
+	require.Equal(t, "Every bot Request Hub created, with recommended-extra columns",
+		p.describeExportFilter(auditExportFilter{Type: exportBotInventory, Verbose: true}))
 	require.Equal(t, "Only bots in `prod`, requested by @req, approved since January 1, 1970",
 		p.describeExportFilter(auditExportFilter{Type: exportBotInventory, HostingEnv: "prod", Requester: "u_req", Since: 1}))
 	require.Equal(t, "Only active since January 1, 1970", p.describeExportFilter(auditExportFilter{Since: 1}))
@@ -258,6 +295,8 @@ func TestPendingKey_IncludesEnvironment(t *testing.T) {
 	a := &auditExportRequest{Filter: auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "dev"}}
 	b := &auditExportRequest{Filter: auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "prod"}}
 	require.NotEqual(t, a.pendingKey(), b.pendingKey())
+	verbose := &auditExportRequest{Filter: auditExportFilter{Type: exportBotInventory, Format: "pdf", HostingEnv: "prod", Verbose: true}}
+	require.NotEqual(t, b.pendingKey(), verbose.pendingKey())
 }
 
 func TestDecideAuditExport_ApproveSendsTheInventory(t *testing.T) {
@@ -284,8 +323,8 @@ func TestDecideAuditExport_ApproveSendsTheInventory(t *testing.T) {
 	require.NotNil(t, delivered)
 	require.Contains(t, delivered.Message, "**Audit export: Bot inventory** (PDF, 2 bots). Only bots in `mattermost-prod`.")
 	checkPDF(t, uploaded)
-	require.Contains(t, string(uploaded), "(@alpha-renamed \\(Alpha\\)) Tj")
-	require.NotContains(t, string(uploaded), "@beta", "a dev bot isn't in a prod inventory")
+	require.Contains(t, string(uploaded), "(alpha-renamed) Tj")
+	require.NotContains(t, string(uploaded), "(beta) Tj", "a dev bot isn't in a prod inventory")
 
 	var approved *auditEntry
 	for i := range *events {
@@ -309,9 +348,17 @@ func TestHandleAuditExport_Inventory(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"), "the API gives JSON when no format is named")
-	var rows []inventoryRow
+	var rows []map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
-	require.Equal(t, []string{"b2"}, botIDs(rows))
+	require.GreaterOrEqual(t, len(rows), 1)
+	botIDRow := map[string]string{}
+	for _, row := range rows {
+		if row["Field"] == "Bot ID" {
+			botIDRow = row
+			break
+		}
+	}
+	require.Equal(t, "b2", botIDRow["beta"])
 	require.Equal(t, 1, countEvents(*events, eventAuditExported))
 	require.Equal(t, 1, (*events)[len(*events)-1].Detail["bots"])
 

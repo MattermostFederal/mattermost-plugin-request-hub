@@ -3,7 +3,7 @@ import {useDispatch, useSelector} from 'react-redux';
 
 import {KIND_OPTIONS} from './AuditHistoryModal';
 import {fetchBotForm, submitAuditExportRequest} from './client';
-import type {AuditExportFormat} from './client';
+import type {AuditExportFormat, InventoryLayout} from './client';
 import {useDialogFocusTrap} from './dialogA11y';
 import {closeAuditExportRequestModal, isAuditExportRequestModalOpen} from './store';
 
@@ -60,7 +60,7 @@ export const EXPORT_TYPES: ExportType[] = [
     {
         value: 'bot_inventory',
         label: 'Bot inventory',
-        formats: [['pdf', 'PDF (for reading)'], ['csv', 'CSV (one row per bot)'], ['json', 'JSON (one object per bot)']],
+        formats: [['csv', 'CSV'], ['pdf', 'PDF (for reading)'], ['json', 'JSON']],
         narrow: 'env',
         dates: 'Approved',
     },
@@ -93,6 +93,8 @@ export const RequestAuditExportModal = () => {
     const [bot, setBot] = useState('');
     const [envs, setEnvs] = useState<Array<{value: string; label: string}>>([]);
     const [requester, setRequester] = useState('');
+    const [verbose, setVerbose] = useState(false);
+    const [layout, setLayout] = useState<InventoryLayout>('column');
     const [since, setSince] = useState('');
     const [until, setUntil] = useState('');
     const [reason, setReason] = useState('');
@@ -107,6 +109,8 @@ export const RequestAuditExportModal = () => {
         setEnv('');
         setBot('');
         setRequester('');
+        setVerbose(false);
+        setLayout('column');
         setSince('');
         setUntil('');
         setReason('');
@@ -166,6 +170,8 @@ export const RequestAuditExportModal = () => {
                 env: currentType.narrow === 'env' ? env.trim() || undefined : undefined,
                 bot: byBot ? bot.trim().replace(/^@/, '') : undefined,
                 requester: byBot ? undefined : requester.trim().replace(/^@/, '') || undefined,
+                verbose: currentType.narrow === 'env' && verbose ? true : undefined,
+                layout: currentType.narrow === 'env' ? layout : undefined,
                 since: dayStart(since),
                 until: dayEnd(until),
                 reason: reason.trim(),
@@ -273,35 +279,75 @@ export const RequestAuditExportModal = () => {
                             </div>
                         ) : null}
                         {currentType.narrow === 'env' ? (
-                            <div style={fieldStyle}>
-                                <label htmlFor='rae-env'>{'Hosting environment (optional)'}</label>
-                                {envs.length > 0 ? (
-                                    <select
-                                        id='rae-env'
-                                        className='form-control'
-                                        value={env}
-                                        onChange={(e) => setEnv(e.target.value)}
-                                        disabled={submitting}
+                            <>
+                                <div style={fieldStyle}>
+                                    <label htmlFor='rae-env'>{'Hosting environment (optional)'}</label>
+                                    {envs.length > 0 ? (
+                                        <select
+                                            id='rae-env'
+                                            className='form-control'
+                                            value={env}
+                                            onChange={(e) => setEnv(e.target.value)}
+                                            disabled={submitting}
+                                        >
+                                            <option value=''>{'All environments'}</option>
+                                            {envs.map((opt) => (
+                                                <option
+                                                    key={opt.value}
+                                                    value={opt.value}
+                                                >{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    ) : (
+                                        <input
+                                            id='rae-env'
+                                            className='form-control'
+                                            placeholder='All environments'
+                                            value={env}
+                                            onChange={(e) => setEnv(e.target.value)}
+                                            disabled={submitting}
+                                        />
+                                    )}
+                                </div>
+                                <fieldset style={fieldStyle}>
+                                    <legend style={legendStyle}>{'Layout'}</legend>
+                                    <label style={{marginRight: 16, fontWeight: 'normal'}}>
+                                        <input
+                                            type='radio'
+                                            name='rae-layout'
+                                            checked={layout === 'column'}
+                                            onChange={() => setLayout('column')}
+                                            disabled={submitting}
+                                        />
+                                        {' Columns — one bot per column (Security sheet; long values wrap)'}
+                                    </label>
+                                    <label style={{fontWeight: 'normal'}}>
+                                        <input
+                                            type='radio'
+                                            name='rae-layout'
+                                            checked={layout === 'row'}
+                                            onChange={() => setLayout('row')}
+                                            disabled={submitting}
+                                        />
+                                        {' Rows — one bot per row'}
+                                    </label>
+                                </fieldset>
+                                <div style={fieldStyle}>
+                                    <label
+                                        htmlFor='rae-verbose'
+                                        style={{fontWeight: 'normal'}}
                                     >
-                                        <option value=''>{'All environments'}</option>
-                                        {envs.map((opt) => (
-                                            <option
-                                                key={opt.value}
-                                                value={opt.value}
-                                            >{opt.label}</option>
-                                        ))}
-                                    </select>
-                                ) : (
-                                    <input
-                                        id='rae-env'
-                                        className='form-control'
-                                        placeholder='All environments'
-                                        value={env}
-                                        onChange={(e) => setEnv(e.target.value)}
-                                        disabled={submitting}
-                                    />
-                                )}
-                            </div>
+                                        <input
+                                            id='rae-verbose'
+                                            type='checkbox'
+                                            checked={verbose}
+                                            onChange={(e) => setVerbose(e.target.checked)}
+                                            disabled={submitting}
+                                        />
+                                        {' Include recommended-extra columns (requester, owner, approver, T&Cs)'}
+                                    </label>
+                                </div>
+                            </>
                         ) : null}
                         {currentType.narrow === 'request' ? (<div style={fieldStyle}>
                             <label htmlFor='rae-kind'>{'Request type (optional)'}</label>

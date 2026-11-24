@@ -40,7 +40,11 @@ func (r *auditExportRequest) pendingFields() (string, string, *int64) {
 // pendingKey refuses a second pending request for the same export.
 func (r *auditExportRequest) pendingKey() string {
 	f := r.Filter
-	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/%s/%d/%d", f.exportType(), f.Format, f.RequestID, f.Kind, f.HostingEnv, f.BotID, f.Requester, f.Since, f.Until)
+	verbose := "0"
+	if f.Verbose {
+		verbose = "1"
+	}
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/%s/%s/%s/%d/%d", f.exportType(), f.Format, f.RequestID, f.Kind, f.HostingEnv, f.BotID, f.Requester, verbose, inventoryLayout(f), f.Since, f.Until)
 }
 
 const (
@@ -103,7 +107,7 @@ func checkExportFilter(f auditExportFilter) error {
 func checkExportScope(f auditExportFilter) error {
 	switch f.exportType() {
 	case exportBotForensic:
-		if f.Kind != "" || f.RequestID != "" || f.HostingEnv != "" || f.Requester != "" {
+		if f.Kind != "" || f.RequestID != "" || f.HostingEnv != "" || f.Requester != "" || f.Verbose || f.Layout != "" {
 			return errors.New("a bot forensic export is narrowed only by the bot and dates")
 		}
 		if f.BotID == "" {
@@ -123,6 +127,9 @@ func checkExportScope(f auditExportFilter) error {
 		if f.Kind != "" || f.RequestID != "" {
 			return errors.New("the bot inventory can't be narrowed by request or request type; use the environment, requester or dates")
 		}
+		if err := checkInventoryLayout(f.Layout); err != nil {
+			return err
+		}
 		return checkTextLen("environment", f.HostingEnv, maxHostingEnvLen)
 	default:
 		if f.HostingEnv != "" {
@@ -131,7 +138,22 @@ func checkExportScope(f auditExportFilter) error {
 		if f.BotID != "" {
 			return errors.New("only a bot forensic export names a bot")
 		}
+		if f.Verbose {
+			return errors.New("only the bot inventory has a verbose mode")
+		}
+		if f.Layout != "" {
+			return errors.New("only the bot inventory has a row/column layout")
+		}
 		return nil
+	}
+}
+
+func checkInventoryLayout(layout string) error {
+	switch strings.ToLower(strings.TrimSpace(layout)) {
+	case "", inventoryLayoutColumn, inventoryLayoutRow:
+		return nil
+	default:
+		return errors.New("layout is `column` (one bot per column) or `row` (one bot per row)")
 	}
 }
 
@@ -196,8 +218,20 @@ func (p *Plugin) describeExportFilter(f auditExportFilter) string {
 	case f.Until > 0:
 		parts = append(parts, when+" until "+day(f.Until))
 	}
-	if len(parts) == 0 {
+	baseEmpty := len(parts) == 0
+	if inventory && f.Verbose {
+		parts = append(parts, "with recommended-extra columns")
+	}
+	if inventory && inventoryLayout(f) == inventoryLayoutRow {
+		parts = append(parts, "one bot per row")
+	} else if inventory && strings.TrimSpace(f.Layout) != "" {
+		parts = append(parts, "one bot per column")
+	}
+	if baseEmpty {
 		if inventory {
+			if f.Verbose {
+				return "Every bot Request Hub created, with recommended-extra columns"
+			}
 			return "Every bot Request Hub created"
 		}
 		return "The whole audit history"
@@ -544,6 +578,8 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		Env       string `json:"env"`
 		Bot       string `json:"bot"`       // a bot username, for bot_forensic
 		Requester string `json:"requester"` // a username, optional
+		Verbose   bool   `json:"verbose"`
+		Layout    string `json:"layout"`
 		Since     int64  `json:"since"`
 		Until     int64  `json:"until"`
 		Reason    string `json:"reason"`
@@ -552,7 +588,7 @@ func (p *Plugin) handleSubmitAuditExportWebapp(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	f := auditExportFilter{Type: payload.Type, Format: payload.Format, Kind: payload.Kind, HostingEnv: strings.TrimSpace(payload.Env), Since: payload.Since, Until: payload.Until}
+	f := auditExportFilter{Type: payload.Type, Format: payload.Format, Kind: payload.Kind, HostingEnv: strings.TrimSpace(payload.Env), Verbose: payload.Verbose, Layout: strings.TrimSpace(payload.Layout), Since: payload.Since, Until: payload.Until}
 	botID, botErr := p.resolveExportBot(payload.Bot)
 	if botErr != nil {
 		writeJSON(w, map[string]string{"error": botErr.Error()})

@@ -673,8 +673,23 @@ export type AuditExportFormat = 'csv' | 'json' | 'pdf';
 // histories by default, narrowed to one request or one kind when given, or
 // another type such as bot_inventory. It works only while direct export is
 // on.
-export function auditExportURL(format: AuditExportFormat, filter: {type?: string; request?: string; kind?: string} = {}): string {
-    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({type: filter.type, format, request: filter.request, kind: filter.kind})}`;
+export type InventoryLayout = 'column' | 'row';
+
+export function auditExportURL(format: AuditExportFormat, filter: {
+    type?: string;
+    request?: string;
+    kind?: string;
+    layout?: InventoryLayout;
+    verbose?: boolean;
+} = {}): string {
+    return `/plugins/${manifest.id}/api/v1/audit/export${auditQuery({
+        type: filter.type,
+        format,
+        request: filter.request,
+        kind: filter.kind,
+        layout: filter.layout,
+        verbose: filter.verbose ? '1' : undefined,
+    })}`;
 }
 
 export type AuditExportRequestPayload = {
@@ -686,6 +701,12 @@ export type AuditExportRequestPayload = {
     // bot is a bot's username, for bot_forensic.
     bot?: string;
     requester?: string;
+
+    // verbose adds recommended-extra Security columns on bot_inventory.
+    verbose?: boolean;
+
+    // layout: column = one bot per column (default); row = one bot per row.
+    layout?: InventoryLayout;
     since?: number;
     until?: number;
     reason: string;

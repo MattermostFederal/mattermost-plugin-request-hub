@@ -254,7 +254,7 @@ While **Allow direct audit export** is on, System Admins can download exports fr
 | Parameter | Values |
 |-----------|--------|
 | `type` | `full_histories` (default), `bot_inventory` or `bot_forensic` |
-| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `json`, `csv` or `pdf`, one entry per bot. For `bot_forensic`: `json` only. |
+| `format` | `json` (default). For `full_histories`: `json` gives one object per request, with its events, and `csv` one row per event, with the ticket thread message text and the event's other details (as JSON) in their own columns. For `bot_inventory`: `csv` is the Security sheet (field rows, one bot per column); `json`/`pdf` also available. For `bot_forensic`: `json` only. |
 | `request` | One request ID (`full_histories` only) |
 | `kind` | One request kind: `channel`, `admin` (Channel Admin), `team`, `team_admin`, `team_member`, `team_guest`, `bot`, `webhook`, `audit_export` (`full_histories` only) |
 | `env` | One hosting code: `ci_cd`, `on_prem_server`, `cloud_or_k8s`, `workstation`, `external_saas` or `other`. A bot requested before these codes keeps the environment it was requested with (such as `mattermost-prod`), which also works here. (`bot_inventory` only) |
