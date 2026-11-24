@@ -175,12 +175,15 @@ func TestBuildInventoryExport_Formats(t *testing.T) {
 		var rows []map[string]string
 		require.NoError(t, json.Unmarshal(export.data, &rows))
 		require.Len(t, rows, len(securityCoreColumns))
-		require.Equal(t, "Bot ID", rows[2]["Field"])
-		require.Equal(t, "b1", rows[2]["alpha-renamed"])
-		require.Equal(t, "b2", rows[2]["beta"])
-		require.Equal(t, "HTTPS required for declared URLs", rows[11]["alpha-renamed"])
-		_, hasOwnerField := rows[0]["Owner ID"]
-		require.False(t, hasOwnerField)
+		byField := map[string]map[string]string{}
+		for _, row := range rows {
+			byField[row["Field"]] = row
+		}
+		require.Equal(t, "b1", byField["Bot ID"]["alpha-renamed"])
+		require.Equal(t, "b2", byField["Bot ID"]["beta"])
+		require.Equal(t, "req", byField["Requester"]["alpha-renamed"])
+		require.Equal(t, "yes", byField["Approved"]["alpha-renamed"])
+		require.Equal(t, "HTTPS required for declared URLs", byField["Data transit security"]["alpha-renamed"])
 	})
 	t.Run("json row", func(t *testing.T) {
 		export := build("json", auditExportFilter{Layout: inventoryLayoutRow, Verbose: true})

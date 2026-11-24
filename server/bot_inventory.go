@@ -32,9 +32,11 @@ const (
 // docs/status-requests/03-implementation-progress.md.
 var (
 	securityCoreColumns = []string{
-		"Request ID",
+		"Requester",
 		"Bot name",
+		"Request ID",
 		"Bot ID",
+		"Approved",
 		"Mattermost team",
 		"Channel",
 		"Purpose",
@@ -394,12 +396,19 @@ func inventoryJSON(rows []inventoryRow, verbose bool, layout string) ([]byte, er
 
 func securityCell(r inventoryRow, col string) string {
 	switch col {
-	case "Request ID":
-		return r.RequestID
+	case "Requester":
+		if r.RequesterUsername != "" {
+			return r.RequesterUsername
+		}
+		return r.RequesterID
 	case "Bot name":
 		return r.BotUsername
+	case "Request ID":
+		return r.RequestID
 	case "Bot ID":
 		return r.BotID
+	case "Approved":
+		return inventoryApprovedCell(r)
 	case "Mattermost team":
 		return r.HomeTeamName
 	case "Channel":
@@ -437,6 +446,18 @@ func securityCell(r inventoryRow, col string) string {
 	default:
 		return ""
 	}
+}
+
+// inventoryApprovedCell is yes when Request Hub recorded an approval for
+// this bot (every indexed bot was approved to be created).
+func inventoryApprovedCell(r inventoryRow) string {
+	if r.ApprovedByID != "" || r.ApprovedAt > 0 {
+		return "yes"
+	}
+	if r.RHManaged {
+		return "yes"
+	}
+	return "no"
 }
 
 func inventoryChannelCell(r inventoryRow) string {
